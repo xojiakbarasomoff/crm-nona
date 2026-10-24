@@ -2,14 +2,15 @@
 # Local PITR drill: base backup + WAL archive → restore to a point in time before an "accident".
 # Usage: bash infra/pitr/drill.sh            (needs Docker; uses its own compose project and volumes)
 set -euo pipefail
+export MSYS_NO_PATHCONV=1   # Git Bash on Windows must not rewrite container paths
 cd "$(dirname "$0")"
 P="docker compose -f docker-compose.pitr.yml"
 PSQL="$P exec -T pg-primary psql -U crm -d crm -v ON_ERROR_STOP=1 -At -c"
 
 echo "== 1. fresh primary with archive_mode=on"
 $P down -v >/dev/null 2>&1 || true
+$P run --rm --no-deps -u root --entrypoint sh pg-primary -c 'chown postgres:postgres /wal-archive /base-backups' >/dev/null
 $P up -d --wait pg-primary >/dev/null
-$P exec -T -u root pg-primary sh -c 'chown postgres:postgres /wal-archive /base-backups'
 $PSQL "SHOW archive_mode" | grep -q on
 
 echo "== 2. schema + base backup"
@@ -23,12 +24,13 @@ TARGET=$($PSQL "SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD
 sleep 2
 $PSQL "INSERT INTO drill (phase) SELECT 'after' FROM generate_series(1, 500)"
 $PSQL "DELETE FROM drill WHERE phase = 'before'"   # the accident to undo
-$PSQL "SELECT pg_switch_wal()" >/dev/null
-for i in $(seq 1 30); do
+NEEDED=$($PSQL "SELECT pg_walfile_name(pg_switch_wal())")
+for i in $(seq 1 60); do
   FAILED=$($PSQL "SELECT failed_count FROM pg_stat_archiver")
-  LAST=$($PSQL "SELECT coalesce(last_archived_wal, '')")
-  [ -n "$LAST" ] && break; sleep 1
+  LAST=$($PSQL "SELECT coalesce(last_archived_wal, '') FROM pg_stat_archiver")
+  [[ -n "$LAST" && ! "$LAST" < "$NEEDED" ]] && break; sleep 1
 done
+echo "needed_wal=$NEEDED"
 echo "target=$TARGET last_archived=$LAST archive_failures=$FAILED"
 
 echo "== 4. restore into a new data directory up to the target time"

@@ -1,0 +1,9 @@
+DELETE 1000
+needed_wal=000000010000000000000004
+target=2026-10-24 09:45:35.340184+00 last_archived=000000010000000000000004 archive_failures=0
+== 4. restore into a new data directory up to the target time
+restored: before=1000 (expected 1000) after=0 (expected 0) restore_seconds=4
+2026-10-24 09:45:42.709 UTC [28] LOG:  recovery stopping before commit of transaction 734, time 2026-10-24 09:45:37.984962+00
+2026-10-24 09:45:42.779 UTC [28] LOG:  archive recovery complete
+2026-10-24 09:45:42.822 UTC [1] LOG:  database system is ready to accept connections
+PITR DRILL: PASSED
