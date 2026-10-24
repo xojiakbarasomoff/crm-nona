@@ -120,7 +120,7 @@ describe('amoCRM as source of truth (AC13, AC14, AC15, AC30)', () => {
     await amoCrmSignal(app, core, lead.amoLeadId!);
     await drain(core);
     const snap = (await amo().getLead(lead.amoLeadId!))!;
-    const stale = { ...snap, statusId: DEMO_STATUS_IDS.NEW, updatedAt: new Date(t1.getTime() - 60_000) };
+    const stale = { ...snap, statusId: DEMO_STATUS_IDS.NEW!, updatedAt: new Date(t1.getTime() - 60_000) };
     const res = await p().$transaction((tx) => core.leads.applyRemoteSnapshot(tx, companyId, stale, { origin: 'amocrm' }));
     expect(res).toMatchObject({ applied: false, reason: 'stale' });
     expect((await p().lead.findUniqueOrThrow({ where: { id: lead.id } })).stage).toBe('CONTACTED');

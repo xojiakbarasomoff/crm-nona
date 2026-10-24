@@ -33,7 +33,7 @@ export class SalesController {
   async exportCsv(@Actor() actor: UserActor, @Query() q: unknown, @Res() res: Response) {
     const csv = await this.core.dashboard.exportLeadsCsv(actor, parse(DashboardQuery, q));
     res.status(200).type('text/csv; charset=utf-8').setHeader('Content-Disposition', 'attachment; filename="leads.csv"');
-    res.send(`﻿${csv}`);
+    res.send(String.fromCharCode(0xfeff) + csv);
   }
 
   @Get('leads')

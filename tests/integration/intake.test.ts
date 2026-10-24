@@ -2,7 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Core } from '../../apps/api/src/core';
-import { DemoMetaDirectClient, signMetaBody } from '@crm/integrations';
+import { type DemoMetaDirectClient, signMetaBody } from '@crm/integrations';
 import { drain, login, makeApp, makeCore, sendChatReply, sendDirect, sendLeadAds, testConfig } from './helpers';
 import { createApp } from '../../apps/api/src/app';
 import { createCore } from '../../apps/api/src/core';

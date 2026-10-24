@@ -1,4 +1,4 @@
-/* eslint-disable no-console */
+ 
 import { randomBytes } from 'node:crypto';
 import { hash } from '@node-rs/argon2';
 import { DEFAULT_MILESTONE_RULES, STAGES } from '@crm/domain';
