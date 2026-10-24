@@ -43,7 +43,7 @@ export interface CoreOverrides {
 
 export function createCore(config: AppConfig, o: CoreOverrides = {}): Core {
   const prisma = o.prisma ?? createPrisma(config.databaseUrl);
-  const redis = o.redis ?? new Redis(config.redisUrl, { maxRetriesPerRequest: 2, enableOfflineQueue: false, lazyConnect: false });
+  const redis = o.redis ?? new Redis(config.redisUrl, { maxRetriesPerRequest: 2 });
   redis.on('error', () => undefined);
   const logger = o.logger ?? createLogger(config.logLevel);
   let oauth: OAuthService | null = null;

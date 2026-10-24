@@ -146,13 +146,14 @@ export class RemindersService {
 
   /** Claims due occurrences with SKIP LOCKED and a lease (worker restart safe, AC25). */
   async claimDue(workerId: string, limit = 50, leaseMs = 120_000): Promise<string[]> {
+    const now = this.d.clock.now();
     const rows = await this.d.prisma.$queryRaw<Array<{ id: string }>>`
       UPDATE reminder_occurrences SET state = 'dispatching', lease_owner = ${workerId},
-             lease_until = now() + (${leaseMs}::int * interval '1 millisecond'), attempts = attempts + 1, updated_at = now()
+             lease_until = ${now}::timestamptz + (${leaseMs}::int * interval '1 millisecond'), attempts = attempts + 1, updated_at = now()
       WHERE id IN (
         SELECT id FROM reminder_occurrences
-        WHERE state IN ('scheduled', 'dispatching', 'snoozed') AND due_at <= now()
-          AND (lease_until IS NULL OR lease_until < now())
+        WHERE state IN ('scheduled', 'dispatching', 'snoozed') AND due_at <= ${now}
+          AND (lease_until IS NULL OR lease_until < ${now})
         ORDER BY due_at
         LIMIT ${limit}
         FOR UPDATE SKIP LOCKED)
