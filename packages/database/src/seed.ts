@@ -22,7 +22,11 @@ const WORK_SCHEDULE = {
   days: Object.fromEntries([1, 2, 3, 4, 5, 6].map((d) => [d, [{ start: '09:00', end: '19:00' }]])),
 };
 
-export async function seed(prisma: PrismaClient, opts: { demoData: boolean; key: Buffer }) {
+/** DEMO_SIMPLE_LOGIN: weak, publicly known password for the three aliased demo accounts (demo mode only). */
+export const DEMO_SIMPLE_PASSWORD = '123123123';
+export const DEMO_SIMPLE_ACCOUNTS = ['admin@demo.local', 'rahbar@demo.local', 'menejer.a@demo.local'];
+
+export async function seed(prisma: PrismaClient, opts: { demoData: boolean; key: Buffer; simpleLogin?: boolean }) {
   const company = await prisma.company.upsert({
     where: { id: DEMO_COMPANY_ID },
     update: {},
@@ -78,6 +82,10 @@ export async function seed(prisma: PrismaClient, opts: { demoData: boolean; key:
     });
     ids[u.email] = row.id;
   }
+  if (opts.simpleLogin) {
+    const simpleHash = await hash(DEMO_SIMPLE_PASSWORD, { algorithm: 2, memoryCost: 19_456, timeCost: 2, parallelism: 1 });
+    await prisma.user.updateMany({ where: { email: { in: DEMO_SIMPLE_ACCOUNTS } }, data: { passwordHash: simpleHash } });
+  }
   await prisma.company.update({ where: { id: company.id }, data: { dutyUserId: ids['rahbar@demo.local'] } });
 
   const pool = await prisma.managerPool.findFirst({ where: { companyId: company.id, isDefault: true } });
@@ -122,7 +130,8 @@ async function main() {
   }
   const prisma = createPrisma();
   try {
-    await seed(prisma, { demoData: mode === 'demo', key: loadEncryptionKey() });
+    const simpleLogin = mode === 'demo' && ['true', '1'].includes(process.env.DEMO_SIMPLE_LOGIN ?? '');
+    await seed(prisma, { demoData: mode === 'demo', key: loadEncryptionKey(), simpleLogin });
     console.log(`Seed done (mode=${mode}). Demo users: admin@demo.local, rahbar@demo.local, menejer.a|b|c@demo.local — password "${DEMO_PASSWORD}" (DEMO ONLY).`);
   } finally {
     await prisma.$disconnect();

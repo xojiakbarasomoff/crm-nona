@@ -37,8 +37,8 @@ function LoginForm() {
     >
       <img className="login-logo" src="/nona-logo-bordo.png" alt="NONA Travel" width={200} height={110} />
       <h1>Tizimga kirish</h1>
-      <Field label="Email">
-        <input type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
+      <Field label="Login yoki email">
+        <input type="text" autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
       </Field>
       <Field label="Parol">
         <input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />

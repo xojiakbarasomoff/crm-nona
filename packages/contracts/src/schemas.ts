@@ -26,7 +26,8 @@ export const ErrorSchema = z
   })
   .openapi('Error');
 
-export const LoginSchema = z.object({ email: z.string().email(), password: z.string().min(1).max(200), totp: z.string().regex(/^\d{6}$/).optional() }).strict().openapi('LoginRequest');
+/** `email` is the login identifier: an email, or (APP_MODE=demo + DEMO_SIMPLE_LOGIN only) a short demo name. */
+export const LoginSchema = z.object({ email: z.string().trim().min(1).max(200), password: z.string().min(1).max(200), totp: z.string().regex(/^\d{6}$/).optional() }).strict().openapi('LoginRequest');
 export const ActivateSchema = z.object({ token: z.string().min(20), password: z.string().min(12).max(200) }).strict();
 export const MfaConfirmSchema = z.object({ code: z.string().regex(/^\d{6}$/) }).strict();
 export const InviteUserSchema = z.object({ email: z.string().email(), fullName: z.string().min(1).max(200), role: z.enum(['ADMIN', 'HEAD', 'MANAGER']), amoUserId: z.string().max(40).nullable() }).strict();

@@ -22,6 +22,8 @@ const schema = z.object({
   SESSION_SECRET: z.string().min(32),
   ENCRYPTION_KEY: z.string().min(40),
   COOKIE_SECURE: z.string().default('true'),
+  /** Demo-only: login by short name (admin/user1/user2), simple passwords, no admin MFA. Rejected outside demo mode. */
+  DEMO_SIMPLE_LOGIN: z.string().default('false'),
   AMO_CLIENT_ID: z.string().default(''),
   AMO_CLIENT_SECRET: z.string().default(''),
   AMO_REDIRECT_URI: z.string().default(''),
@@ -76,6 +78,7 @@ export interface AppConfig {
   sessionSecret: string;
   encryptionKey: string;
   cookieSecure: boolean;
+  demoSimpleLogin: boolean;
   amo: { clientId: string; clientSecret: string; redirectUri: string; allowedDomains: string[]; rps: number };
   amoChats: { channelId: string; secret: string; botName: string };
   directChannelMode: 'native_connector' | 'custom_channel';
@@ -106,6 +109,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const e = schema.parse(env);
   const mode = parseAppMode(e.APP_MODE);
   const cookieSecure = e.COOKIE_SECURE !== 'false';
+  const demoSimpleLogin = e.DEMO_SIMPLE_LOGIN === 'true' || e.DEMO_SIMPLE_LOGIN === '1';
+  if (demoSimpleLogin && mode !== 'demo') throw new Error('DEMO_SIMPLE_LOGIN is only allowed in demo mode');
   if (mode !== 'demo' && !cookieSecure) throw new Error('COOKIE_SECURE=false is only allowed in demo mode');
   if (mode !== 'demo' && e.SESSION_SECRET.startsWith('change-me')) throw new Error('SESSION_SECRET must be set outside demo mode');
   return {
@@ -120,6 +125,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     sessionSecret: e.SESSION_SECRET,
     encryptionKey: e.ENCRYPTION_KEY,
     cookieSecure,
+    demoSimpleLogin,
     amo: { clientId: e.AMO_CLIENT_ID, clientSecret: e.AMO_CLIENT_SECRET, redirectUri: e.AMO_REDIRECT_URI, allowedDomains: e.AMO_ALLOWED_DOMAINS, rps: e.AMO_RATE_LIMIT_RPS },
     amoChats: { channelId: e.AMO_CHAT_CHANNEL_ID, secret: e.AMO_CHAT_SECRET, botName: e.AMO_CHAT_BOT_NAME },
     directChannelMode: e.DIRECT_CHANNEL_MODE,

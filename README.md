@@ -52,7 +52,7 @@ Brauzer: http://localhost:3100. Demo foydalanuvchilar (**faqat demo**), parol `D
 
 Demo oqimini sinash: admin → Integratsiyalar → «DEMO simulyatorlari» (Lead Ads formasi, Direct xabar). Ular haqiqiy webhook yo‘li orqali sun’iy hodisa yuboradi.
 
-Haqiqiy (demo bo‘lmagan) muhit: `APP_MODE=staging|production`, `npm run db:migrate`, `SEED_ALLOW_NON_DEMO=1 npm run db:seed` (faqat kompaniya va qoidalar), so‘ng birinchi admin: `npm run admin:invite -- --email=admin@kompaniya.uz --name="Ism Familiya"` → bir martalik havola, parol va MFA. Demo loginlar (`@demo.local`) bu rejimda ishlamaydi; bazada demo akkaunt bo‘lsa API/worker ishga tushmaydi.
+Haqiqiy (demo bo‘lmagan) muhit: `APP_MODE=staging|production`, `npm run db:migrate`, `SEED_ALLOW_NON_DEMO=1 npm run db:seed` (faqat kompaniya va qoidalar), so‘ng birinchi admin: `npm run admin:invite -- --email=admin@kompaniya.uz --name="Ism Familiya"` → bir martalik havola, parol va MFA. Demo loginlar (`@demo.local`) bu rejimda ishlamaydi (`DEMO_SIMPLE_LOGIN=true` ham faqat `APP_MODE=demo` da ruxsat etilgan, aks holda API ishga tushmaydi; unda `admin`, `user1`, `user2` qisqa loginlari parol `123123123` bilan mavjud demo akkauntlarga ulanadi, admin uchun MFA so‘ralmaydi); bazada demo akkaunt bo‘lsa API/worker ishga tushmaydi.
 
 Docker’da to‘liq stack: `docker compose -f infra/docker-compose.yml --profile app up --build` (oldin `.env` tayyorlang va migratsiyani bajaring).
 

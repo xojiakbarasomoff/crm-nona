@@ -18,6 +18,8 @@ const LOGIN_WINDOW_SEC = 15 * 60;
 const LOGIN_MAX = 10;
 
 export const DEMO_EMAIL_DOMAIN = '@demo.local';
+/** Short demo logins (DEMO_SIMPLE_LOGIN=true, demo mode only) → seeded demo accounts. */
+export const DEMO_LOGIN_ALIASES: Record<string, string> = { admin: 'admin@demo.local', user1: 'rahbar@demo.local', user2: 'menejer.a@demo.local' };
 export const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 const newToken = () => randomBytes(32).toString('base64url');
 
@@ -40,7 +42,9 @@ export class AuthService {
   }
 
   async login(input: { email: string; password: string; totp?: string | null; ip: string | null; userAgent: string | null }) {
-    const email = input.email.trim().toLowerCase();
+    const identifier = input.email.trim().toLowerCase();
+    const simple = this.d.config.demoSimpleLogin && this.d.config.mode === 'demo';
+    const email = simple ? (DEMO_LOGIN_ALIASES[identifier] ?? identifier) : identifier;
     const attempts = await hitCounter(this.d.redis, `login:${email}:${input.ip ?? '-'}`, LOGIN_WINDOW_SEC);
     if (attempts > LOGIN_MAX) throw tooMany();
 
@@ -57,7 +61,7 @@ export class AuthService {
     }
 
     let mfaVerified = false;
-    if (user.role === 'ADMIN' && user.mfaEnabled) {
+    if (user.role === 'ADMIN' && user.mfaEnabled && !simple) {
       if (!input.totp) throw new AppError(401, 'MFA_REQUIRED', 'MFA kodi talab qilinadi');
       const secret = decryptSecret(user.mfaSecretEnc!, this.d.encryptionKey);
       if (!verifyTotp(secret, input.totp, this.d.clock.now().getTime())) throw new AppError(401, 'MFA_INVALID', 'MFA kodi noto‘g‘ri');
@@ -90,7 +94,7 @@ export class AuthService {
     return {
       actor: { type: 'user', id: u.id, companyId: u.companyId, role: u.role, email: u.email, sessionId: session.id },
       mfaVerified: session.mfaVerified,
-      mfaRequired: u.role === 'ADMIN',
+      mfaRequired: u.role === 'ADMIN' && !(this.d.config.demoSimpleLogin && this.d.config.mode === 'demo'),
       mfaEnrolled: u.mfaEnabled,
     };
   }
