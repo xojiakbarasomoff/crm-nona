@@ -1,0 +1,1 @@
+{"runId":"7a5657a7","sent":9000,"acked":9000,"failed":0,"p50":15,"p95":21,"max":260,"externalIdPrefix":"ig_msg:perf-7a5657a7-"}

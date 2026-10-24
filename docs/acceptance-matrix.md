@@ -65,7 +65,7 @@ Test to‘plamlari (2026-10-24, Node 22.23.4, Prisma 7.10.1): unit + contract **
 | amoCRM import / reconciliation / kunlik nazorat (§5.2) | ✅ | ✅ demo amoCRM; contract (sahifalash, 204, 401) | PG ✅ · amoCRM ⛔ |
 | Lead Ads tarixini qayta olish (§8.3) | ✅ | ✅ demo Meta; contract (cursor, filtr) | PG ✅ · Meta ⛔ |
 | Demo loginlar production’da ishlamaydi (§25.1) | ✅ | — | PG ✅ `production-safety.test.ts` |
-| Webhook 10 ev/s × 15 daq (§22.1) | ✅ | demo provayderlar | PG/Redis ✅ lokal (`docs/perf/webhook-15min*.md`) · ajratilgan muhit ⛔ |
+| Webhook 10 ev/s × 15 daq (§22.1) | ✅ | demo provayderlar | PG/Redis ✅ lokal, ikki marta (`webhook-15min.md`, `webhook-15min-v2.md`) · ajratilgan muhit ⛔ |
 | Dependency xavfsizligi (§4.2) | ✅ | — | `npm audit` 0 (ADR 0005) |
 
 ## Unumdorlik (TZ §22.1)
@@ -76,4 +76,4 @@ Dataset: 20 xodim, 50 000 kontakt, 100 000 lid, 1 020 490 xabar, 10 000 segment.
 | --- | --- | --- |
 | Lokal GET, 20 parallel | p95 < 500 ms | leads 222 ms, orders 213 ms, flights 249 ms |
 | Dashboard | p95 < 2 s | keshsiz 1 mijoz 0,9–1,1 s; 20 parallel 1,7–1,8 s |
-| Webhook 10 ev/s × 15 daq | yo‘qotishsiz, ACK p95 < 2 s | `docs/perf/webhook-15min.md` (Prisma 6) va `webhook-15min-v2` (joriy kod) |
+| Webhook 10 ev/s × 15 daq | yo‘qotishsiz, ACK p95 < 2 s | joriy kod: 9000/9000, ACK p95 21 ms, qayta ishlash p95 0,66 s, qayta urinish 0, outbox xatosi 0 (`docs/perf/webhook-15min-v2.md`); Prisma 6 dagi birinchi sinov: `webhook-15min.md` |
