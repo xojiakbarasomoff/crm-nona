@@ -56,7 +56,8 @@ interface FlightRow {
   operationalStatus: string;
 }
 
-const iso = (d: Date) => d.toISOString().slice(0, 10);
+/** Bugungi sana kompaniya vaqt zonasida (Asia/Tashkent), brauzer/UTC zonasida emas. */
+const tashkentToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tashkent' }).format(new Date());
 const mins = (s: number | null) => (s === null ? '—' : `${Math.round(s / 60)} daq`);
 const money = (m: Record<string, string>) => (Object.keys(m).length ? Object.entries(m).map(([c, v]) => `${v} ${c}`).join(' · ') : '—');
 const initials = (name: string) =>
@@ -75,9 +76,8 @@ const LOST_STAGE = 'LOST';
 export default function DashboardPage() {
   const me = useMe();
   const router = useRouter();
-  const now = new Date();
-  const [from, setFrom] = useState(iso(new Date(now.getFullYear(), now.getMonth(), 1)));
-  const [to, setTo] = useState(iso(now));
+  const [from, setFrom] = useState(() => `${tashkentToday().slice(0, 8)}01`);
+  const [to, setTo] = useState(tashkentToday);
   const [source, setSource] = useState('');
   const [bucket, setBucket] = useState('day');
   const [query, setQuery] = useState('');
