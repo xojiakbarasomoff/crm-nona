@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { SOURCE_LABELS, STAGE_LABELS, fmtDateTime, useApi } from '../../../lib/api';
 import { Async, Badge, Field, Section, SyncBadge } from '../../../components/ui';
 
@@ -21,6 +21,11 @@ interface LeadRow {
 export default function LeadsPage() {
   const [stage, setStage] = useState('');
   const [search, setSearch] = useState('');
+  // Boshqaruv paneli qidiruvi /leads?search=... orqali keladi (bir marta o'qiladi).
+  useEffect(() => {
+    const s = new URLSearchParams(window.location.search).get('search');
+    if (s) setSearch(s);
+  }, []);
   const [cursor, setCursor] = useState<string | undefined>();
   const q = new URLSearchParams({ limit: '50', ...(stage ? { stage } : {}), ...(search ? { search } : {}), ...(cursor ? { cursor } : {}) });
   const state = useApi<{ items: LeadRow[]; nextCursor: string | null }>(`/api/v1/leads?${q}`);

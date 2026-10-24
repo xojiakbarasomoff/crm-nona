@@ -33,7 +33,7 @@ async function login(page: Page, email: string) {
     await page.getByLabel('MFA kodi (6 raqam)').fill(totp(ADMIN_TOTP_SECRET));
     await page.getByRole('button', { name: 'Kirish' }).click();
   }
-  await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Boshqaruv paneli' })).toBeVisible();
 }
 
 /** Calls the API with the page's session (same-origin through the Next.js rewrite). */
