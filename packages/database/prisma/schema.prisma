@@ -1,0 +1,1081 @@
+// Turizm CRM — PostgreSQL schema (TZ §16).
+// Every business table carries company_id; foreign keys are composite (company_id, id) so that a
+// row can never reference another company's row (TZ §16.2). Partial unique indexes and the audit
+// immutability trigger live in raw SQL migrations (Prisma cannot express them).
+
+generator client {
+  provider      = "prisma-client-js"
+  output        = "../generated/client"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  HEAD
+  MANAGER
+}
+
+enum UserStatus {
+  invited
+  active
+  blocked
+}
+
+enum Stage {
+  NEW
+  CONTACTED
+  QUALIFIED
+  PREPARING_OFFER
+  OFFER_SENT
+  AWAITING_PAYMENT
+  WON
+  LOST
+  FOLLOW_UP
+}
+
+enum Channel {
+  instagram_lead_ads
+  meta_lead_ads
+  instagram_direct
+  amocrm
+  manual
+  other
+}
+
+enum SyncState {
+  synced
+  pending
+  pending_create
+  conflict
+  failed
+  unknown
+  local_only
+}
+
+enum Provider {
+  AMOCRM_REST
+  AMOCRM_CHATS
+  META_LEADS
+  META_DIRECT
+}
+
+enum ConnectionMode {
+  demo
+  live
+}
+
+enum ConnectionHealth {
+  ok
+  degraded
+  paused
+  disconnected
+}
+
+enum PaymentState {
+  unpaid
+  partial
+  paid
+  refund_pending
+  refunded
+}
+
+enum TicketingState {
+  not_required
+  pending
+  reserved
+  issued
+  voided
+}
+
+enum FulfillmentState {
+  draft
+  confirmed
+  in_progress
+  completed
+  cancelled
+}
+
+enum MessageDirection {
+  inbound
+  outbound
+}
+
+enum MessageState {
+  received
+  queued
+  sending
+  accepted
+  delivered
+  read
+  failed
+  unknown
+}
+
+enum ActorType {
+  customer
+  human
+  bot
+  system
+}
+
+enum OperationalStatus {
+  scheduled
+  schedule_changed
+  cancelled
+  departed
+}
+
+enum CheckState {
+  pending
+  due
+  in_progress
+  checked
+  recheck_required
+}
+
+enum NotificationState {
+  not_required
+  required
+  notified
+}
+
+enum OccurrenceKind {
+  milestone
+  manual
+}
+
+enum OccurrenceState {
+  scheduled
+  dispatching
+  due
+  completed
+  snoozed
+  cancelled
+  superseded
+  missed
+}
+
+enum DeliveryState {
+  pending
+  sent
+  failed
+  cancelled
+  completed
+}
+
+enum InboxState {
+  pending
+  processing
+  done
+  failed
+  dead
+  ignored
+}
+
+enum OutboxState {
+  pending
+  processing
+  done
+  failed
+  dead
+  unknown
+  paused
+  cancelled
+}
+
+model Company {
+  id                      String   @id @default(uuid()) @db.Uuid
+  name                    String
+  timezone                String   @default("Asia/Tashkent")
+  workSchedule            Json     @map("work_schedule")
+  slaFirstResponseMinutes Int      @default(15) @map("sla_first_response_minutes")
+  stickyOwner             Boolean  @default(true) @map("sticky_owner")
+  phoneRule               Json?    @map("phone_rule")
+  orderPrefix             String   @default("TR") @map("order_prefix")
+  dutyUserId              String?  @map("duty_user_id") @db.Uuid
+  dataCollectionStartedAt DateTime @default(now()) @map("data_collection_started_at") @db.Timestamptz(3)
+  settings                Json     @default("{}")
+  createdAt               DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt               DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  users User[]
+
+  @@map("companies")
+}
+
+model User {
+  id           String     @id @default(uuid()) @db.Uuid
+  companyId    String     @map("company_id") @db.Uuid
+  email        String     @unique
+  fullName     String     @map("full_name")
+  passwordHash String?    @map("password_hash")
+  role         Role
+  status       UserStatus @default(invited)
+  amoUserId    String?    @map("amo_user_id")
+  mfaSecretEnc String?    @map("mfa_secret_enc")
+  mfaEnabled   Boolean    @default(false) @map("mfa_enabled")
+  lastLoginAt  DateTime?  @map("last_login_at") @db.Timestamptz(3)
+  blockedAt    DateTime?  @map("blocked_at") @db.Timestamptz(3)
+  version      Int        @default(1)
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  company  Company   @relation(fields: [companyId], references: [id])
+  sessions Session[]
+
+  @@unique([companyId, id])
+  @@unique([companyId, amoUserId])
+  @@map("users")
+}
+
+model UserInvite {
+  id          String    @id @default(uuid()) @db.Uuid
+  companyId   String    @map("company_id") @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  tokenHash   String    @unique @map("token_hash")
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz(3)
+  usedAt      DateTime? @map("used_at") @db.Timestamptz(3)
+  createdById String    @map("created_by_id") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([companyId, userId])
+  @@map("user_invites")
+}
+
+model Session {
+  id          String    @id @default(uuid()) @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  tokenHash   String    @unique @map("token_hash")
+  mfaVerified Boolean   @default(false) @map("mfa_verified")
+  ip          String?
+  userAgent   String?   @map("user_agent")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastSeenAt  DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt   DateTime? @map("revoked_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model ManagerPool {
+  id          String   @id @default(uuid()) @db.Uuid
+  companyId   String   @map("company_id") @db.Uuid
+  name        String
+  strategy    String   @default("rr-equal-v1")
+  pointer     Int      @default(-1)
+  serviceType String?  @map("service_type")
+  active      Boolean  @default(true)
+  isDefault   Boolean  @default(false) @map("is_default")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  members ManagerPoolMember[]
+
+  @@unique([companyId, id])
+  @@map("manager_pools")
+}
+
+model ManagerPoolMember {
+  id           String   @id @default(uuid()) @db.Uuid
+  companyId    String   @map("company_id") @db.Uuid
+  poolId       String   @map("pool_id") @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  position     Int
+  schedule     Json?
+  available    Boolean  @default(true)
+  serviceTypes String[] @default([]) @map("service_types")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  pool ManagerPool @relation(fields: [companyId, poolId], references: [companyId, id])
+
+  @@unique([poolId, userId])
+  @@unique([poolId, position])
+  @@map("manager_pool_members")
+}
+
+model IntegrationConnection {
+  id             String           @id @default(uuid()) @db.Uuid
+  companyId      String           @map("company_id") @db.Uuid
+  provider       Provider
+  mode           ConnectionMode
+  accountId      String           @map("account_id")
+  accountDomain  String?          @map("account_domain")
+  routeToken     String           @unique @map("route_token")
+  credentialsEnc String?          @map("credentials_enc")
+  expiresAt      DateTime?        @map("expires_at") @db.Timestamptz(3)
+  health         ConnectionHealth @default(ok)
+  healthReason   String?          @map("health_reason")
+  lastWebhookAt  DateTime?        @map("last_webhook_at") @db.Timestamptz(3)
+  lastSyncAt     DateTime?        @map("last_sync_at") @db.Timestamptz(3)
+  lastError      String?          @map("last_error")
+  settings       Json             @default("{}")
+  disconnectedAt DateTime?        @map("disconnected_at") @db.Timestamptz(3)
+  version        Int              @default(1)
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([companyId, id])
+  @@unique([companyId, provider, accountId])
+  @@map("integration_connections")
+}
+
+model OAuthState {
+  id          String    @id @default(uuid()) @db.Uuid
+  companyId   String    @map("company_id") @db.Uuid
+  provider    Provider
+  stateHash   String    @unique @map("state_hash")
+  sessionId   String    @map("session_id") @db.Uuid
+  redirectUri String    @map("redirect_uri")
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz(3)
+  usedAt      DateTime? @map("used_at") @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@map("oauth_states")
+}
+
+model IntegrationMapping {
+  id              String    @id @default(uuid()) @db.Uuid
+  companyId       String    @map("company_id") @db.Uuid
+  connectionId    String?   @map("connection_id") @db.Uuid
+  entityType      String    @map("entity_type")
+  localId         String    @map("local_id")
+  externalId      String    @map("external_id")
+  syncState       SyncState @default(synced) @map("sync_state")
+  stateHash       String?   @map("state_hash")
+  sourceUpdatedAt DateTime? @map("source_updated_at") @db.Timestamptz(3)
+  lastSyncedAt    DateTime? @map("last_synced_at") @db.Timestamptz(3)
+  meta            Json      @default("{}")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([companyId, entityType, externalId])
+  @@index([companyId, entityType, localId])
+  @@map("integration_mappings")
+}
+
+model SyncCheckpoint {
+  id           String    @id @default(uuid()) @db.Uuid
+  companyId    String    @map("company_id") @db.Uuid
+  connectionId String    @map("connection_id") @db.Uuid
+  stream       String
+  cursor       Json
+  lastRunAt    DateTime? @map("last_run_at") @db.Timestamptz(3)
+  lastResult   Json?     @map("last_result")
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([connectionId, stream])
+  @@map("sync_checkpoints")
+}
+
+model Contact {
+  id              String    @id @default(uuid()) @db.Uuid
+  companyId       String    @map("company_id") @db.Uuid
+  amoContactId    String?   @map("amo_contact_id")
+  fullName        String?   @map("full_name")
+  primaryPhone    String?   @map("primary_phone")
+  primaryEmail    String?   @map("primary_email")
+  ownerId         String?   @map("owner_id") @db.Uuid
+  syncState       SyncState @default(pending_create) @map("sync_state")
+  sourceUpdatedAt DateTime? @map("source_updated_at") @db.Timestamptz(3)
+  stateHash       String?   @map("state_hash")
+  mergedIntoId    String?   @map("merged_into_id") @db.Uuid
+  deletedAt       DateTime? @map("deleted_at") @db.Timestamptz(3)
+  version         Int       @default(1)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  identifiers ContactIdentifier[]
+
+  @@unique([companyId, id])
+  @@unique([companyId, amoContactId])
+  @@index([companyId, ownerId])
+  @@map("contacts")
+}
+
+model ContactIdentifier {
+  id              String   @id @default(uuid()) @db.Uuid
+  companyId       String   @map("company_id") @db.Uuid
+  contactId       String   @map("contact_id") @db.Uuid
+  type            String
+  value           String
+  originalValue   String?  @map("original_value")
+  scope           String   @default("")
+  verified        Boolean  @default(false)
+  shared          Boolean  @default(false)
+  active          Boolean  @default(true)
+  displayUsername String?  @map("display_username")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  contact Contact @relation(fields: [companyId, contactId], references: [companyId, id])
+
+  @@index([companyId, type, scope, value])
+  @@map("contact_identifiers")
+}
+
+model DuplicateCandidate {
+  id           String    @id @default(uuid()) @db.Uuid
+  companyId    String    @map("company_id") @db.Uuid
+  contactIds   String[]  @map("contact_ids")
+  reason       String
+  identifier   Json
+  state        String    @default("open")
+  flaggedById  String?   @map("flagged_by_id") @db.Uuid
+  resolvedById String?   @map("resolved_by_id") @db.Uuid
+  resolvedAt   DateTime? @map("resolved_at") @db.Timestamptz(3)
+  resolution   Json?
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([companyId, state])
+  @@map("duplicate_candidates")
+}
+
+model Inquiry {
+  id               String    @id @default(uuid()) @db.Uuid
+  companyId        String    @map("company_id") @db.Uuid
+  providerEventKey String    @map("provider_event_key")
+  contactId        String?   @map("contact_id") @db.Uuid
+  leadId           String?   @map("lead_id") @db.Uuid
+  channel          Channel
+  placement        String    @default("unknown")
+  sourceCreatedAt  DateTime? @map("source_created_at") @db.Timestamptz(3)
+  receivedAt       DateTime  @map("received_at") @db.Timestamptz(3)
+  processedAt      DateTime? @map("processed_at") @db.Timestamptz(3)
+  attribution      Json      @default("{}")
+  formData         Json?     @map("form_data")
+  nullReasons      Json      @default("{}") @map("null_reasons")
+  enrichmentState  String    @default("not_needed") @map("enrichment_state")
+  enrichmentError  String?   @map("enrichment_error")
+  mappingVersion   Int?      @map("mapping_version")
+  correlationId    String    @map("correlation_id")
+  processingState  String    @default("received") @map("processing_state")
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([companyId, providerEventKey])
+  @@index([companyId, receivedAt])
+  @@map("inquiries")
+}
+
+model Lead {
+  id                 String    @id @default(uuid()) @db.Uuid
+  companyId          String    @map("company_id") @db.Uuid
+  amoLeadId          String?   @map("amo_lead_id")
+  contactId          String    @map("contact_id") @db.Uuid
+  name               String
+  stage              Stage     @default(NEW)
+  returnStage        Stage?    @map("return_stage")
+  ownerId            String?   @map("owner_id") @db.Uuid
+  assignmentReason   String?   @map("assignment_reason")
+  serviceType        String?   @map("service_type")
+  requirements       Json      @default("{}")
+  firstSource        Channel   @map("first_source")
+  firstPlacement     String    @default("unknown") @map("first_placement")
+  firstInquiryId     String?   @map("first_inquiry_id") @db.Uuid
+  contactOutcome     String?   @map("contact_outcome")
+  offerPrepDueAt     DateTime? @map("offer_prep_due_at") @db.Timestamptz(3)
+  lostReasonCode     String?   @map("lost_reason_code")
+  lostNote           String?   @map("lost_note")
+  nextContactAt      DateTime? @map("next_contact_at") @db.Timestamptz(3)
+  followUpNote       String?   @map("follow_up_note")
+  closedAt           DateTime? @map("closed_at") @db.Timestamptz(3)
+  firstWonAt         DateTime? @map("first_won_at") @db.Timestamptz(3)
+  firstResponseDueAt DateTime? @map("first_response_due_at") @db.Timestamptz(3)
+  firstHumanActionAt DateTime? @map("first_human_action_at") @db.Timestamptz(3)
+  anomaly            Json?
+  pendingChange      Json?     @map("pending_change")
+  syncState          SyncState @default(pending_create) @map("sync_state")
+  sourceUpdatedAt    DateTime? @map("source_updated_at") @db.Timestamptz(3)
+  stateHash          String?   @map("state_hash")
+  deletedAt          DateTime? @map("deleted_at") @db.Timestamptz(3)
+  version            Int       @default(1)
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  orders Order[]
+
+  @@unique([companyId, id])
+  @@unique([companyId, amoLeadId])
+  @@index([companyId, ownerId, stage])
+  @@index([companyId, contactId])
+  @@index([companyId, createdAt])
+  @@map("leads")
+}
+
+model LeadEvent {
+  id               String   @id @default(uuid()) @db.Uuid
+  companyId        String   @map("company_id") @db.Uuid
+  leadId           String   @map("lead_id") @db.Uuid
+  kind             String
+  oldStage         Stage?   @map("old_stage")
+  newStage         Stage?   @map("new_stage")
+  oldOwnerId       String?  @map("old_owner_id") @db.Uuid
+  newOwnerId       String?  @map("new_owner_id") @db.Uuid
+  reason           String?
+  origin           String
+  operationId      String?  @map("operation_id")
+  algorithmVersion String?  @map("algorithm_version")
+  actorId          String?  @map("actor_id") @db.Uuid
+  effectiveAt      DateTime @map("effective_at") @db.Timestamptz(3)
+  observedAt       DateTime @default(now()) @map("observed_at") @db.Timestamptz(3)
+
+  @@index([companyId, leadId, effectiveAt])
+  @@index([companyId, kind, effectiveAt])
+  @@map("lead_events")
+}
+
+model Conversation {
+  id                   String    @id @default(uuid()) @db.Uuid
+  companyId            String    @map("company_id") @db.Uuid
+  connectionId         String    @map("connection_id") @db.Uuid
+  businessAccountId    String    @map("business_account_id")
+  scopedPeerId         String    @map("scoped_peer_id")
+  peerUsername         String?   @map("peer_username")
+  contactId            String    @map("contact_id") @db.Uuid
+  leadId               String?   @map("lead_id") @db.Uuid
+  amoChatId            String?   @map("amo_chat_id")
+  lastInboundAt        DateTime? @map("last_inbound_at") @db.Timestamptz(3)
+  lastHumanReplyAt     DateTime? @map("last_human_reply_at") @db.Timestamptz(3)
+  firstInboundAt       DateTime? @map("first_inbound_at") @db.Timestamptz(3)
+  firstHumanReplyAt    DateTime? @map("first_human_reply_at") @db.Timestamptz(3)
+  historyAvailableFrom DateTime? @map("history_available_from") @db.Timestamptz(3)
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  messages Message[]
+
+  @@unique([companyId, id])
+  @@unique([connectionId, scopedPeerId])
+  @@index([companyId, leadId])
+  @@map("conversations")
+}
+
+model Message {
+  id                String           @id @default(uuid()) @db.Uuid
+  companyId         String           @map("company_id") @db.Uuid
+  conversationId    String           @map("conversation_id") @db.Uuid
+  connectionId      String           @map("connection_id") @db.Uuid
+  providerMessageId String?          @map("provider_message_id")
+  direction         MessageDirection
+  type              String
+  content           String?
+  attachments       Json             @default("[]")
+  state             MessageState
+  actorType         ActorType        @map("actor_type")
+  actorUserId       String?          @map("actor_user_id") @db.Uuid
+  isEcho            Boolean          @default(false) @map("is_echo")
+  isInternalNote    Boolean          @default(false) @map("is_internal_note")
+  operationId       String?          @map("operation_id")
+  amoMessageId      String?          @map("amo_message_id")
+  error             String?
+  providerAt        DateTime?        @map("provider_at") @db.Timestamptz(3)
+  createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  conversation Conversation @relation(fields: [companyId, conversationId], references: [companyId, id])
+
+  @@unique([connectionId, providerMessageId])
+  @@index([companyId, conversationId, createdAt])
+  @@map("messages")
+}
+
+model Offer {
+  id               String    @id @default(uuid()) @db.Uuid
+  companyId        String    @map("company_id") @db.Uuid
+  leadId           String    @map("lead_id") @db.Uuid
+  offerNo          String    @map("offer_no")
+  version          Int
+  content          String
+  options          Json      @default("[]")
+  includedServices Json      @default("[]") @map("included_services")
+  amountMinor      BigInt    @map("amount_minor")
+  currency         String    @db.Char(3)
+  validUntil       DateTime? @map("valid_until") @db.Timestamptz(3)
+  note             String?
+  createdById      String    @map("created_by_id") @db.Uuid
+  sentAt           DateTime? @map("sent_at") @db.Timestamptz(3)
+  sentChannel      String?   @map("sent_channel")
+  acceptedAt       DateTime? @map("accepted_at") @db.Timestamptz(3)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([companyId, id])
+  @@unique([companyId, leadId, version])
+  @@map("offers")
+}
+
+model OrderSequence {
+  companyId String @map("company_id") @db.Uuid
+  year      Int
+  lastValue Int    @default(0) @map("last_value")
+
+  @@id([companyId, year])
+  @@map("order_sequences")
+}
+
+model Order {
+  id                String           @id @default(uuid()) @db.Uuid
+  companyId         String           @map("company_id") @db.Uuid
+  orderNo           String           @map("order_no")
+  leadId            String           @map("lead_id") @db.Uuid
+  contactId         String           @map("contact_id") @db.Uuid
+  ownerId           String?          @map("owner_id") @db.Uuid
+  agreedAmountMinor BigInt?          @map("agreed_amount_minor")
+  currency          String?          @db.Char(3)
+  offerVersionId    String?          @map("offer_version_id") @db.Uuid
+  confirmedAt       DateTime?        @map("confirmed_at") @db.Timestamptz(3)
+  saleEvidence      String?          @map("sale_evidence")
+  paymentState      PaymentState     @default(unpaid) @map("payment_state")
+  ticketingState    TicketingState   @default(pending) @map("ticketing_state")
+  fulfillmentState  FulfillmentState @default(draft) @map("fulfillment_state")
+  note              String?
+  cancelledAt       DateTime?        @map("cancelled_at") @db.Timestamptz(3)
+  amoSummaryState   SyncState        @default(pending) @map("amo_summary_state")
+  version           Int              @default(1)
+  createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  lead       Lead            @relation(fields: [companyId, leadId], references: [companyId, id])
+  services   OrderService[]
+  passengers Passenger[]
+  segments   FlightSegment[]
+  payments   Payment[]
+
+  @@unique([companyId, id])
+  @@unique([companyId, orderNo])
+  @@index([companyId, ownerId])
+  @@map("orders")
+}
+
+model OrderService {
+  id          String   @id @default(uuid()) @db.Uuid
+  companyId   String   @map("company_id") @db.Uuid
+  orderId     String   @map("order_id") @db.Uuid
+  serviceType String   @map("service_type")
+  description String
+  amountMinor BigInt?  @map("amount_minor")
+  currency    String?  @db.Char(3)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  order Order @relation(fields: [companyId, orderId], references: [companyId, id])
+
+  @@map("order_services")
+}
+
+model Passenger {
+  id        String    @id @default(uuid()) @db.Uuid
+  companyId String    @map("company_id") @db.Uuid
+  orderId   String    @map("order_id") @db.Uuid
+  fullName  String    @map("full_name")
+  type      String    @default("adult")
+  birthDate DateTime? @map("birth_date") @db.Date
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  order    Order              @relation(fields: [companyId, orderId], references: [companyId, id])
+  segments SegmentPassenger[]
+  tickets  Ticket[]
+
+  @@unique([companyId, id])
+  @@map("passengers")
+}
+
+model FlightSegment {
+  id                     String            @id @default(uuid()) @db.Uuid
+  companyId              String            @map("company_id") @db.Uuid
+  orderId                String            @map("order_id") @db.Uuid
+  segmentNo              Int               @map("segment_no")
+  direction              String            @default("outbound")
+  originIata             String            @map("origin_iata") @db.Char(3)
+  destinationIata        String            @map("destination_iata") @db.Char(3)
+  originAirportName      String?           @map("origin_airport_name")
+  destinationAirportName String?           @map("destination_airport_name")
+  marketingCarrier       String            @map("marketing_carrier")
+  operatingCarrier       String?           @map("operating_carrier")
+  flightNumber           String            @map("flight_number")
+  departureAtUtc         DateTime?         @map("departure_at_utc") @db.Timestamptz(3)
+  departureTimezone      String            @map("departure_timezone")
+  departureLocalOriginal String?           @map("departure_local_original")
+  arrivalAtUtc           DateTime?         @map("arrival_at_utc") @db.Timestamptz(3)
+  arrivalTimezone        String            @map("arrival_timezone")
+  arrivalLocalOriginal   String?           @map("arrival_local_original")
+  pnr                    String?
+  bookingProvider        String?           @map("booking_provider")
+  operationalStatus      OperationalStatus @default(scheduled) @map("operational_status")
+  scheduleRevision       Int               @default(1) @map("schedule_revision")
+  checkState             CheckState        @default(pending) @map("check_state")
+  notificationState      NotificationState @default(not_required) @map("notification_state")
+  lastCheckedAt          DateTime?         @map("last_checked_at") @db.Timestamptz(3)
+  checkedById            String?           @map("checked_by_id") @db.Uuid
+  nextReminderAt         DateTime?         @map("next_reminder_at") @db.Timestamptz(3)
+  evidenceSource         String?           @map("evidence_source")
+  ownerId                String?           @map("owner_id") @db.Uuid
+  active                 Boolean           @default(true)
+  version                Int               @default(1)
+  createdAt              DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  order      Order              @relation(fields: [companyId, orderId], references: [companyId, id])
+  passengers SegmentPassenger[]
+  checks     FlightCheck[]
+  tickets    TicketSegment[]
+
+  @@unique([companyId, id])
+  @@unique([companyId, orderId, segmentNo])
+  @@index([companyId, departureAtUtc])
+  @@index([companyId, ownerId, checkState, departureAtUtc])
+  @@map("flight_segments")
+}
+
+model SegmentPassenger {
+  companyId   String @map("company_id") @db.Uuid
+  segmentId   String @map("segment_id") @db.Uuid
+  passengerId String @map("passenger_id") @db.Uuid
+
+  segment   FlightSegment @relation(fields: [companyId, segmentId], references: [companyId, id])
+  passenger Passenger     @relation(fields: [companyId, passengerId], references: [companyId, id])
+
+  @@id([segmentId, passengerId])
+  @@map("segment_passengers")
+}
+
+model SegmentRevision {
+  id          String   @id @default(uuid()) @db.Uuid
+  companyId   String   @map("company_id") @db.Uuid
+  segmentId   String   @map("segment_id") @db.Uuid
+  revision    Int
+  before      Json
+  after       Json
+  changedById String?  @map("changed_by_id") @db.Uuid
+  changedAt   DateTime @default(now()) @map("changed_at") @db.Timestamptz(3)
+
+  @@unique([segmentId, revision])
+  @@map("segment_revisions")
+}
+
+model Ticket {
+  id           String    @id @default(uuid()) @db.Uuid
+  companyId    String    @map("company_id") @db.Uuid
+  passengerId  String    @map("passenger_id") @db.Uuid
+  ticketNumber String    @map("ticket_number")
+  issuedAt     DateTime? @map("issued_at") @db.Timestamptz(3)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  passenger Passenger       @relation(fields: [companyId, passengerId], references: [companyId, id])
+  segments  TicketSegment[]
+
+  @@unique([companyId, id])
+  @@map("tickets")
+}
+
+model TicketSegment {
+  companyId String @map("company_id") @db.Uuid
+  ticketId  String @map("ticket_id") @db.Uuid
+  segmentId String @map("segment_id") @db.Uuid
+
+  ticket  Ticket        @relation(fields: [companyId, ticketId], references: [companyId, id])
+  segment FlightSegment @relation(fields: [companyId, segmentId], references: [companyId, id])
+
+  @@id([ticketId, segmentId])
+  @@map("ticket_segments")
+}
+
+model FlightCheck {
+  id                         String    @id @default(uuid()) @db.Uuid
+  companyId                  String    @map("company_id") @db.Uuid
+  segmentId                  String    @map("segment_id") @db.Uuid
+  scheduleRevision           Int       @map("schedule_revision")
+  milestone                  String?
+  occurrenceId               String?   @map("occurrence_id") @db.Uuid
+  result                     String
+  observedDepartureAtUtc     DateTime? @map("observed_departure_at_utc") @db.Timestamptz(3)
+  terminal                   String?
+  source                     String    @default("manual")
+  change                     Json?
+  note                       String?
+  customerNotificationNeeded Boolean   @default(false) @map("customer_notification_needed")
+  startedAt                  DateTime? @map("started_at") @db.Timestamptz(3)
+  checkedAt                  DateTime  @map("checked_at") @db.Timestamptz(3)
+  checkedById                String    @map("checked_by_id") @db.Uuid
+  createdAt                  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  segment FlightSegment @relation(fields: [companyId, segmentId], references: [companyId, id])
+
+  @@index([companyId, segmentId, checkedAt])
+  @@map("flight_checks")
+}
+
+model CustomerNotification {
+  id        String   @id @default(uuid()) @db.Uuid
+  companyId String   @map("company_id") @db.Uuid
+  segmentId String   @map("segment_id") @db.Uuid
+  channel   String
+  result    String
+  note      String?
+  authorId  String   @map("author_id") @db.Uuid
+  at        DateTime @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([companyId, segmentId])
+  @@map("customer_notifications")
+}
+
+model Payment {
+  id           String   @id @default(uuid()) @db.Uuid
+  companyId    String   @map("company_id") @db.Uuid
+  orderId      String   @map("order_id") @db.Uuid
+  kind         String
+  amountMinor  BigInt   @map("amount_minor")
+  currency     String   @db.Char(3)
+  receivedAt   DateTime @map("received_at") @db.Timestamptz(3)
+  method       String
+  evidence     String?
+  status       String   @default("confirmed")
+  reference    String?
+  businessKey  String   @map("business_key")
+  recordedById String   @map("recorded_by_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  order Order @relation(fields: [companyId, orderId], references: [companyId, id])
+
+  @@unique([companyId, businessKey])
+  @@index([companyId, orderId])
+  @@map("payments")
+}
+
+model ReminderRule {
+  id                   String   @id @default(uuid()) @db.Uuid
+  companyId            String   @map("company_id") @db.Uuid
+  milestone            String
+  offsetSeconds        Int      @map("offset_seconds")
+  enabled              Boolean  @default(true)
+  version              Int
+  current              Boolean  @default(true)
+  escalateAfterMinutes Int      @map("escalate_after_minutes")
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([companyId, milestone, version])
+  @@map("reminder_rules")
+}
+
+model ReminderOccurrence {
+  id                   String          @id @default(uuid()) @db.Uuid
+  companyId            String          @map("company_id") @db.Uuid
+  kind                 OccurrenceKind
+  orderId              String?         @map("order_id") @db.Uuid
+  segmentId            String?         @map("segment_id") @db.Uuid
+  scheduleRevision     Int?            @map("schedule_revision")
+  ruleVersion          Int?            @map("rule_version")
+  milestone            String?
+  dedupeKey            String          @map("dedupe_key")
+  title                String
+  body                 String?
+  dueAt                DateTime        @map("due_at") @db.Timestamptz(3)
+  state                OccurrenceState @default(scheduled)
+  assigneeId           String?         @map("assignee_id") @db.Uuid
+  createdById          String?         @map("created_by_id") @db.Uuid
+  leaseUntil           DateTime?       @map("lease_until") @db.Timestamptz(3)
+  leaseOwner           String?         @map("lease_owner")
+  attempts             Int             @default(0)
+  escalateAfterMinutes Int?            @map("escalate_after_minutes")
+  escalatedAt          DateTime?       @map("escalated_at") @db.Timestamptz(3)
+  dispatchedAt         DateTime?       @map("dispatched_at") @db.Timestamptz(3)
+  completedAt          DateTime?       @map("completed_at") @db.Timestamptz(3)
+  completedById        String?         @map("completed_by_id") @db.Uuid
+  flightCheckId        String?         @map("flight_check_id") @db.Uuid
+  resultNote           String?         @map("result_note")
+  missedAt             DateTime?       @map("missed_at") @db.Timestamptz(3)
+  cancelledAt          DateTime?       @map("cancelled_at") @db.Timestamptz(3)
+  cancelReason         String?         @map("cancel_reason")
+  seriesId             String?         @map("series_id") @db.Uuid
+  seriesIndex          Int?            @map("series_index")
+  recurrence           Json?
+  localStart           String?         @map("local_start")
+  timezone             String?
+  version              Int             @default(1)
+  createdAt            DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([companyId, id])
+  @@unique([companyId, dedupeKey])
+  @@unique([companyId, segmentId, scheduleRevision, ruleVersion, milestone])
+  @@index([state, dueAt])
+  @@index([companyId, assigneeId, state])
+  @@index([companyId, segmentId])
+  @@map("reminder_occurrences")
+}
+
+model Notification {
+  id           String    @id @default(uuid()) @db.Uuid
+  companyId    String    @map("company_id") @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  occurrenceId String?   @map("occurrence_id") @db.Uuid
+  kind         String
+  dedupeKey    String    @map("dedupe_key")
+  title        String
+  body         String?
+  link         String?
+  readAt       DateTime? @map("read_at") @db.Timestamptz(3)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([companyId, dedupeKey])
+  @@index([companyId, userId, readAt])
+  @@map("notifications")
+}
+
+model NotificationDelivery {
+  id             String        @id @default(uuid()) @db.Uuid
+  companyId      String        @map("company_id") @db.Uuid
+  occurrenceId   String        @map("occurrence_id") @db.Uuid
+  channel        String
+  state          DeliveryState @default(pending)
+  externalTaskId String?       @map("external_task_id")
+  attempts       Int           @default(0)
+  lastError      String?       @map("last_error")
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([occurrenceId, channel])
+  @@map("notification_deliveries")
+}
+
+model CrmTask {
+  id                String    @id @default(uuid()) @db.Uuid
+  companyId         String    @map("company_id") @db.Uuid
+  automationKey     String    @map("automation_key")
+  entityType        String    @map("entity_type")
+  entityId          String    @map("entity_id") @db.Uuid
+  kind              String
+  text              String
+  responsibleUserId String?   @map("responsible_user_id") @db.Uuid
+  dueAt             DateTime  @map("due_at") @db.Timestamptz(3)
+  state             String    @default("pending")
+  amoTaskId         String?   @map("amo_task_id")
+  closedByCrmAt     DateTime? @map("closed_by_crm_at") @db.Timestamptz(3)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([companyId, automationKey])
+  @@index([companyId, entityType, entityId])
+  @@map("crm_tasks")
+}
+
+model WebhookInbox {
+  id              String     @id @default(uuid()) @db.Uuid
+  companyId       String?    @map("company_id") @db.Uuid
+  provider        String
+  connectionKey   String     @map("connection_key")
+  externalEventId String     @map("external_event_id")
+  eventType       String     @map("event_type")
+  payloadEnc      String     @map("payload_enc")
+  state           InboxState @default(pending)
+  attempts        Int        @default(0)
+  nextAttemptAt   DateTime   @default(now()) @map("next_attempt_at") @db.Timestamptz(3)
+  lastError       String?    @map("last_error")
+  correlationId   String     @map("correlation_id")
+  receivedAt      DateTime   @default(now()) @map("received_at") @db.Timestamptz(3)
+  processedAt     DateTime?  @map("processed_at") @db.Timestamptz(3)
+  leaseUntil      DateTime?  @map("lease_until") @db.Timestamptz(3)
+
+  @@unique([provider, connectionKey, externalEventId])
+  @@index([state, nextAttemptAt])
+  @@map("webhook_inbox")
+}
+
+model OutboxOperation {
+  id             String      @id @default(uuid()) @db.Uuid
+  companyId      String      @map("company_id") @db.Uuid
+  operationKey   String      @map("operation_key")
+  connectionId   String?     @map("connection_id") @db.Uuid
+  target         String
+  action         String
+  payload        Json
+  state          OutboxState @default(pending)
+  attempts       Int         @default(0)
+  nextAttemptAt  DateTime    @default(now()) @map("next_attempt_at") @db.Timestamptz(3)
+  leaseUntil     DateTime?   @map("lease_until") @db.Timestamptz(3)
+  firstAttemptAt DateTime?   @map("first_attempt_at") @db.Timestamptz(3)
+  lastError      String?     @map("last_error")
+  errorClass     String?     @map("error_class")
+  result         Json?
+  correlationId  String      @map("correlation_id")
+  createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([companyId, operationKey])
+  @@index([state, nextAttemptAt])
+  @@map("outbox_operations")
+}
+
+model IdempotencyKey {
+  id             String   @id @default(uuid()) @db.Uuid
+  companyId      String   @map("company_id") @db.Uuid
+  userId         String   @map("user_id") @db.Uuid
+  key            String
+  method         String
+  path           String
+  payloadHash    String   @map("payload_hash")
+  responseStatus Int?     @map("response_status")
+  responseBody   Json?    @map("response_body")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  expiresAt      DateTime @map("expires_at") @db.Timestamptz(3)
+
+  @@unique([companyId, userId, key])
+  @@map("idempotency_keys")
+}
+
+model AuditLog {
+  id            String   @id @default(uuid()) @db.Uuid
+  companyId     String   @map("company_id") @db.Uuid
+  actorType     String   @map("actor_type")
+  actorId       String?  @map("actor_id") @db.Uuid
+  entityType    String   @map("entity_type")
+  entityId      String   @map("entity_id")
+  action        String
+  oldValue      Json?    @map("old_value")
+  newValue      Json?    @map("new_value")
+  correlationId String   @map("correlation_id")
+  requestId     String?  @map("request_id")
+  ip            String?
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([companyId, entityType, entityId, createdAt])
+  @@index([companyId, createdAt])
+  @@map("audit_logs")
+}
+
+model Attachment {
+  id             String    @id @default(uuid()) @db.Uuid
+  companyId      String    @map("company_id") @db.Uuid
+  ownerType      String    @map("owner_type")
+  ownerId        String    @map("owner_id") @db.Uuid
+  objectKey      String    @map("object_key")
+  fileName       String    @map("file_name")
+  mime           String
+  size           Int
+  scanState      String    @default("pending") @map("scan_state")
+  retentionUntil DateTime? @map("retention_until") @db.Timestamptz(3)
+  uploadedById   String    @map("uploaded_by_id") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([companyId, objectKey])
+  @@index([companyId, ownerType, ownerId])
+  @@map("attachments")
+}
+
+model WorkerHeartbeat {
+  name       String   @id
+  lastBeatAt DateTime @map("last_beat_at") @db.Timestamptz(3)
+  info       Json     @default("{}")
+
+  @@map("worker_heartbeats")
+}

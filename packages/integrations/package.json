@@ -1,0 +1,12 @@
+{
+  "name": "@crm/integrations",
+  "version": "0.1.0",
+  "private": true,
+  "exports": {
+    ".": { "types": "./src/index.ts", "default": "./src/index.ts" }
+  },
+  "dependencies": {
+    "@crm/domain": "0.1.0",
+    "ioredis": "5.8.2"
+  }
+}

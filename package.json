@@ -1,0 +1,46 @@
+{
+  "name": "turizm-crm",
+  "private": true,
+  "version": "0.1.0",
+  "description": "amoCRM asosidagi turizm CRM",
+  "engines": {
+    "node": ">=22.11 <23"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev:infra && concurrently -n api,worker,web -c blue,magenta,green \"npm run dev -w @crm/api\" \"npm run dev -w @crm/worker\" \"npm run dev -w @crm/web\"",
+    "dev:infra": "docker compose -f infra/docker-compose.yml up -d postgres redis",
+    "build": "npm run db:generate && npm run build -w @crm/api -w @crm/worker -w @crm/web",
+    "lint": "eslint . --max-warnings=0",
+    "typecheck": "npm run db:generate && tsc -p packages/domain && tsc -p packages/contracts && tsc -p packages/database && tsc -p packages/integrations && tsc -p apps/api && tsc -p apps/worker && tsc -p apps/web && tsc -p tests",
+    "test": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "test:e2e": "playwright test -c tests/e2e/playwright.config.ts",
+    "test:all": "npm run test && npm run test:integration",
+    "db:generate": "prisma generate --schema packages/database/prisma/schema.prisma",
+    "db:migrate": "prisma migrate deploy --schema packages/database/prisma/schema.prisma",
+    "db:migrate:dev": "prisma migrate dev --schema packages/database/prisma/schema.prisma",
+    "db:seed": "tsx --conditions=development --env-file-if-exists=.env packages/database/src/seed.ts",
+    "db:reset": "prisma migrate reset --force --skip-seed --schema packages/database/prisma/schema.prisma && npm run db:seed",
+    "openapi": "tsx --conditions=development --env-file-if-exists=.env packages/contracts/src/openapi/generate.ts",
+    "amo-config": "tsx --conditions=development apps/worker/src/cli/amo-config.ts",
+    "smoke:live": "tsx --conditions=development apps/worker/src/cli/smoke-live.ts",
+    "perf:seed": "tsx --conditions=development packages/database/src/perf-seed.ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.5",
+    "@playwright/test": "1.56.1",
+    "@types/node": "22.19.1",
+    "concurrently": "9.2.1",
+    "eslint": "9.39.5",
+    "globals": "16.5.0",
+    "prisma": "6.19.3",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.72.0",
+    "vitest": "3.2.7"
+  }
+}

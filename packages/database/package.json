@@ -1,0 +1,17 @@
+{
+  "name": "@crm/database",
+  "version": "0.1.0",
+  "private": true,
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@crm/domain": "0.1.0",
+    "@crm/integrations": "0.1.0",
+    "@node-rs/argon2": "2.0.2",
+    "@prisma/client": "6.19.3"
+  }
+}

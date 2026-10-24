@@ -1,0 +1,53 @@
+# Local development stack. Images are pinned (TZ §4.2). Ports avoid common defaults.
+name: turizm-crm
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_USER: crm
+      POSTGRES_PASSWORD: crm_local_only
+      POSTGRES_DB: crm
+    ports: ["127.0.0.1:55432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crm -d crm"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  redis:
+    image: redis:7.4.1-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["127.0.0.1:56379:6379"]
+    volumes: [redisdata:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  api:
+    profiles: ["app"]
+    build: { context: .., dockerfile: infra/Dockerfile, target: api }
+    env_file: ../.env
+    environment:
+      DATABASE_URL: postgresql://crm:crm_local_only@postgres:5432/crm
+      REDIS_URL: redis://redis:6379
+    ports: ["127.0.0.1:4100:4100"]
+    depends_on: { postgres: { condition: service_healthy }, redis: { condition: service_healthy } }
+  worker:
+    profiles: ["app"]
+    build: { context: .., dockerfile: infra/Dockerfile, target: worker }
+    env_file: ../.env
+    environment:
+      DATABASE_URL: postgresql://crm:crm_local_only@postgres:5432/crm
+      REDIS_URL: redis://redis:6379
+    depends_on: { postgres: { condition: service_healthy }, redis: { condition: service_healthy } }
+  web:
+    profiles: ["app"]
+    build: { context: .., dockerfile: infra/Dockerfile, target: web }
+    environment:
+      API_INTERNAL_URL: http://api:4100
+    ports: ["127.0.0.1:3100:3100"]
+    depends_on: [api]
+volumes:
+  pgdata:
+  redisdata:

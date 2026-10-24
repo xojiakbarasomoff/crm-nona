@@ -1,0 +1,32 @@
+{
+  "_provenance": "synthetic (docs shape [S09]); not captured",
+  "object": "page",
+  "entry": [
+    {
+      "id": "100000000000001",
+      "time": 1761300000,
+      "changes": [
+        {
+          "field": "leadgen",
+          "value": {
+            "ad_id": "120000000000011",
+            "form_id": "130000000000021",
+            "leadgen_id": "140000000000031",
+            "created_time": 1761300000,
+            "page_id": "100000000000001",
+            "adgroup_id": "150000000000041"
+          }
+        },
+        {
+          "field": "leadgen",
+          "value": {
+            "form_id": "130000000000021",
+            "leadgen_id": "140000000000032",
+            "created_time": 1761300005,
+            "page_id": "100000000000001"
+          }
+        }
+      ]
+    }
+  ]
+}
