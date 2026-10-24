@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { api, fmtDateTime, newKey, SOURCE_LABELS, STAGE_LABELS, useApi, type ApiError } from '../../../../lib/api';
 import { Async, Badge, Field, FormError, Section, SyncBadge } from '../../../../components/ui';
 import { canDo, useMe } from '../../../../components/shell';
+import { Attachments } from '../../../../components/attachments';
 
 interface LeadDetail {
   lead: {
@@ -29,6 +30,8 @@ interface LeadDetail {
     anomaly: { stage: string; missing: string[] } | null;
     pendingChange: { stage?: string; ownerId?: string } | null;
     firstResponseDueAt: string | null;
+    firstHumanActionAt: string | null;
+    slaBreachedAt: string | null;
     createdAt: string;
   };
   events: Array<{ id: string; kind: string; oldStage: string | null; newStage: string | null; oldOwnerId: string | null; newOwnerId: string | null; origin: string; reason: string | null; effectiveAt: string }>;
@@ -76,6 +79,7 @@ export default function LeadPage() {
               )}{' '}
               · Mas’ul: {userName(l.ownerId)} · Manba: {SOURCE_LABELS[l.firstSource]} ({l.firstPlacement}) · amoCRM ID: {l.amoLeadId ?? 'hali yaratilmagan'} · SLA: {fmtDateTime(l.firstResponseDueAt)}
             </p>
+            {l.slaBreachedAt && !l.firstHumanActionAt && <div className="state error">SLA buzildi: birinchi inson javobi {fmtDateTime(l.firstResponseDueAt)} gacha qayd etilmadi.</div>}
             {l.anomaly && (
               <div className="state stale">
                 Anomaliya: amoCRM’da «{STAGE_LABELS[l.anomaly.stage]}» bosqichi uchun ma’lumot yetishmaydi — {l.anomaly.missing.join(', ')}. Tuzatish vazifasi yaratilgan.
@@ -96,6 +100,7 @@ export default function LeadPage() {
                   onSent={(oid) => run(() => api(`/api/v1/offers/${oid}/sent`, { method: 'POST', body: { channel: 'instagram_direct' } }))}
                   onAccept={(oid) => run(() => api(`/api/v1/offers/${oid}/accept`, { method: 'POST' }))}
                 />
+                <Attachments ownerType="lead" ownerId={id} />
                 <Section title="Tarix">
                   <ul>
                     {d.events.map((e) => (

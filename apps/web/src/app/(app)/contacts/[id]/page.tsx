@@ -2,11 +2,13 @@
 
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { fmtDateTime, SOURCE_LABELS, STAGE_LABELS, useApi } from '../../../../lib/api';
-import { Async, Badge, Section } from '../../../../components/ui';
+import { api, fmtDateTime, SOURCE_LABELS, STAGE_LABELS, useApi, type ApiError } from '../../../../lib/api';
+import { useState } from 'react';
+import { useMe } from '../../../../components/shell';
+import { Async, Badge, FormError, Section } from '../../../../components/ui';
 
 interface ContactView {
-  contact: { id: string; fullName: string | null; primaryPhone: string | null; primaryEmail: string | null; amoContactId: string | null };
+  contact: { id: string; fullName: string | null; primaryPhone: string | null; primaryEmail: string | null; amoContactId: string | null; piiErasedAt: string | null };
   identifiers: Array<{ id: string; type: string; value: string; shared: boolean; verified: boolean; displayUsername: string | null }>;
   leads: Array<{ id: string; name: string; stage: string }>;
   inquiries: Array<{ id: string; channel: string; placement: string; receivedAt: string; enrichmentState: string }>;
@@ -17,6 +19,8 @@ interface ContactView {
 export default function ContactPage() {
   const { id } = useParams<{ id: string }>();
   const state = useApi<ContactView>(`/api/v1/contacts/${id}`);
+  const me = useMe();
+  const [error, setError] = useState<ApiError | null>(null);
   return (
     <Async state={state}>
       {(d) => (
@@ -25,6 +29,26 @@ export default function ContactPage() {
           <p className="muted">
             {d.contact.primaryPhone ?? 'Telefon yo‘q'} · {d.contact.primaryEmail ?? 'Email yo‘q'} · amoCRM kontakt: {d.contact.amoContactId ?? 'hali yaratilmagan'}
           </p>
+          {d.contact.piiErasedAt && <div className="state stale">Shaxsiy ma’lumotlar {fmtDateTime(d.contact.piiErasedAt)} da o‘chirilgan. Moliyaviy yozuvlar siyosat bo‘yicha saqlanadi.</div>}
+          {me.role === 'ADMIN' && !d.contact.piiErasedAt && (
+            <button
+              type="button"
+              className="btn danger"
+              onClick={async () => {
+                const reason = window.prompt('Shaxsiy ma’lumotlarni o‘chirish sababi (qaytarib bo‘lmaydi)');
+                if (!reason) return;
+                try {
+                  await api(`/api/v1/contacts/${id}/erase`, { method: 'POST', body: { reason } });
+                  await state.reload();
+                } catch (e) {
+                  setError(e as ApiError);
+                }
+              }}
+            >
+              Shaxsiy ma’lumotlarni o‘chirish
+            </button>
+          )}
+          <FormError error={error} />
           <div className="split">
             <div>
               {d.conversations.map((c) => (

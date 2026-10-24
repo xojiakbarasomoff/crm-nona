@@ -19,6 +19,12 @@ interface Health {
   needsOperator: Array<{ id: string; action: string; state: string; lastError: string | null; updatedAt: string }>;
   metrics: Record<string, number>;
   overdueReminders: number;
+  checkpoints: Array<{ stream: string; lastRunAt: string | null; lastResult: unknown; cursor: unknown }>;
+  retention: { status: string; confirmed?: boolean; rawWebhookDays?: number; technicalLogDays?: number; messageContentMonths?: number };
+  slaBreachesOpen: number;
+  attachmentsPendingScan: number;
+  scanner: { name: string; kind: string };
+  storage: { name: string; kind: string };
 }
 
 export default function IntegrationsPage() {
@@ -168,6 +174,66 @@ export default function IntegrationsPage() {
                     ))}
                   </tbody>
                 </table>
+              )}
+            </Section>
+            <Section title="Sinxronlash va tarixni qayta olish">
+              {canDo(me, 'integrations.manage') && (
+                <div className="row">
+                  <button className="btn secondary" type="button" onClick={() => act(() => api('/api/v1/integrations/amocrm/import', { method: 'POST' }))}>
+                    amoCRM boshlang‘ich importi
+                  </button>
+                  <button className="btn secondary" type="button" onClick={() => act(() => api('/api/v1/integrations/lead-ads/backfill', { method: 'POST', body: {} }))}>
+                    Lead Ads tarixini qayta olish
+                  </button>
+                </div>
+              )}
+              <table>
+                <thead>
+                  <tr>
+                    <th>Oqim</th>
+                    <th>Oxirgi ishga tushish</th>
+                    <th>Natija</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {h.checkpoints.map((c) => (
+                    <tr key={c.stream}>
+                      <td>{c.stream}</td>
+                      <td>{fmtDateTime(c.lastRunAt)}</td>
+                      <td className="muted">
+                        <code>{JSON.stringify(c.lastResult ?? c.cursor).slice(0, 200)}</code>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="muted">Lead Ads: saqlanish oynasidan oldingi davr bo‘shliq sifatida ko‘rsatiladi — barcha eski lidlarni qaytarish va’da qilinmaydi.</p>
+            </Section>
+            <Section title="Xavfsizlik va saqlash">
+              <p>
+                Fayl skaneri: <Badge tone={h.scanner.kind === 'clamav' ? 'ok' : 'warn'}>{h.scanner.name}</Badge> · Saqlash: {h.storage.name} · Skan kutayotgan fayllar: {h.attachmentsPendingScan} · Ochiq SLA buzilishlari: {h.slaBreachesOpen}
+              </p>
+              <p>
+                Retention:{' '}
+                {h.retention.status === 'active' ? (
+                  <Badge tone="ok">
+                    Faol: webhook {h.retention.rawWebhookDays} kun, yozishma {h.retention.messageContentMonths} oy
+                  </Badge>
+                ) : (
+                  <Badge tone="warn">Tasdiqlanmagan — tozalash o‘chirilgan</Badge>
+                )}
+              </p>
+              {me.role === 'ADMIN' && h.retention.status !== 'active' && (
+                <button
+                  className="btn secondary"
+                  type="button"
+                  onClick={() =>
+                    window.confirm('Taklif etilgan muddatlarni (webhook 30 kun, texnik log 90 kun, yozishma 12 oy) kompaniya nomidan tasdiqlaysizmi?') &&
+                    act(() => api('/api/v1/privacy/retention/confirm', { method: 'POST', body: { rawWebhookDays: 30, technicalLogDays: 90, messageContentMonths: 12 } }))
+                  }
+                >
+                  Retention siyosatini tasdiqlash
+                </button>
               )}
             </Section>
             {h.appMode === 'demo' && canDo(me, 'integrations.manage') && <DemoTools onDone={() => state.reload()} />}

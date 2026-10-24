@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation';
 import { useState } from 'react';
 import { api, CHECK_LABELS, fmtDateTime, newKey, OP_STATUS_LABELS, useApi, type ApiError } from '../../../../lib/api';
 import { Async, Badge, Field, FormError, Section } from '../../../../components/ui';
+import { Attachments } from '../../../../components/attachments';
 
 interface Segment {
   id: string;
@@ -153,6 +154,8 @@ export default function OrderPage() {
               </table>
               <ManualReminder orderId={id} onAdd={(b) => run(() => api('/api/v1/reminders', { method: 'POST', body: b }))} />
             </Section>
+
+            <Attachments ownerType="order" ownerId={id} />
 
             <Section title="Audit">
               <ul>

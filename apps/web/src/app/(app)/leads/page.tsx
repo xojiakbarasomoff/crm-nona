@@ -14,6 +14,8 @@ interface LeadRow {
   createdAt: string;
   ownerId: string | null;
   anomaly: unknown;
+  slaBreachedAt: string | null;
+  firstHumanActionAt: string | null;
 }
 
 export default function LeadsPage() {
@@ -64,7 +66,7 @@ export default function LeadsPage() {
                 {d.items.map((l) => (
                   <tr key={l.id}>
                     <td>
-                      <Link href={`/leads/${l.id}`}>{l.name}</Link> {l.anomaly ? <Badge tone="warn">Anomaliya</Badge> : null}
+                      <Link href={`/leads/${l.id}`}>{l.name}</Link> {l.anomaly ? <Badge tone="warn">Anomaliya</Badge> : null} {l.slaBreachedAt && !l.firstHumanActionAt ? <Badge tone="bad">SLA buzildi</Badge> : null}
                     </td>
                     <td>{STAGE_LABELS[l.stage]}</td>
                     <td>{SOURCE_LABELS[l.firstSource] ?? l.firstSource}</td>
