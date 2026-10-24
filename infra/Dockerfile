@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # Multi-stage build for api, worker and web. Base image is pinned (TZ §4.2).
-FROM node:22.11.0-alpine3.20 AS base
+FROM node:22.23.4-alpine3.24 AS base
 RUN apk add --no-cache openssl libc6-compat
 WORKDIR /app
 
