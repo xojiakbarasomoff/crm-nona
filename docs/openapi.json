@@ -98,7 +98,8 @@
                   "tour_package",
                   "hotel",
                   "visa",
-                  "other"
+                  "other",
+                  null
                 ]
               },
               "origin": {
@@ -144,7 +145,8 @@
                 "nullable": true,
                 "enum": [
                   "known",
-                  "undetermined"
+                  "undetermined",
+                  null
                 ]
               },
               "budgetAmount": {
@@ -178,7 +180,8 @@
               "tour_package",
               "hotel",
               "visa",
-              "other"
+              "other",
+              null
             ]
           },
           "contactOutcome": {

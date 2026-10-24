@@ -23,8 +23,8 @@ export default defineConfig({
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], viewport: { width: 1366, height: 800 }, ...(process.env.CI ? {} : { channel: 'chrome' }) } }],
   webServer: [
-    { command: 'npm run dev -w @crm/api', url: 'http://localhost:4100/ready', reuseExistingServer: true, timeout: 120_000, cwd: '../..', env },
-    { command: 'npm run dev -w @crm/worker', url: 'http://localhost:4100/health', reuseExistingServer: true, timeout: 120_000, cwd: '../..', env },
+    // API and worker start together: the worker has no HTTP port of its own to probe.
+    { command: 'npm run dev:backend', url: 'http://localhost:4100/ready', reuseExistingServer: !process.env.CI, timeout: 120_000, cwd: '../..', env },
     { command: 'npm run dev -w @crm/web', url: 'http://localhost:3100/login', reuseExistingServer: true, timeout: 180_000, cwd: '../..', env },
   ],
 });

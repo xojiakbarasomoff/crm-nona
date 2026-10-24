@@ -32,19 +32,28 @@
     "perf:measure": "tsx --conditions=development apps/worker/src/cli/perf-measure.ts",
     "perf:webhook": "tsx --conditions=development --env-file-if-exists=.env apps/worker/src/cli/perf-webhook.ts",
     "admin:invite": "tsx --conditions=development --env-file-if-exists=.env apps/worker/src/cli/admin-invite.ts",
-    "perf:monitor": "tsx --conditions=development apps/worker/src/cli/perf-monitor.ts"
+    "perf:monitor": "tsx --conditions=development apps/worker/src/cli/perf-monitor.ts",
+    "dev:backend": "concurrently -n api,worker -c blue,magenta \"npm run dev -w @crm/api\" \"npm run dev -w @crm/worker\""
   },
   "devDependencies": {
-    "@eslint/js": "9.39.5",
+    "@eslint/js": "10.0.1",
     "@playwright/test": "1.56.1",
     "@types/node": "22.19.1",
-    "concurrently": "9.2.1",
-    "eslint": "9.39.5",
-    "globals": "16.5.0",
+    "concurrently": "9.2.5",
+    "eslint": "10.13.0",
+    "globals": "17.13.0",
     "prisma": "6.19.3",
-    "tsx": "4.20.6",
+    "tsx": "4.23.15",
     "typescript": "5.9.3",
     "typescript-eslint": "8.72.0",
-    "vitest": "3.2.7"
+    "vitest": "4.1.12"
+  },
+  "overrides": {
+    "multer": "2.5.0",
+    "postcss": "8.5.31",
+    "deepmerge-ts": "8.0.2",
+    "tsup": {
+      "esbuild": "0.28.2"
+    }
   }
 }

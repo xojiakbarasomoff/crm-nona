@@ -22,7 +22,7 @@ export default defineConfig({
           globalSetup: ['tests/integration/global-setup.ts'],
           fileParallelism: false,
           pool: 'forks',
-          poolOptions: { forks: { singleFork: true } },
+          maxWorkers: 1,
           testTimeout: 60_000,
           hookTimeout: 120_000,
         },

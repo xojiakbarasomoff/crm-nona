@@ -21,7 +21,7 @@ export const SERVICE_TYPE = z.enum(['avia', 'tour_package', 'hotel', 'visa', 'ot
 
 export const ErrorSchema = z
   .object({
-    error: z.object({ code: z.string(), message: z.string(), field_errors: z.record(z.string()).optional(), details: z.record(z.unknown()).optional() }),
+    error: z.object({ code: z.string(), message: z.string(), field_errors: z.record(z.string(), z.string()).optional(), details: z.record(z.string(), z.unknown()).optional() }),
     request_id: z.string(),
   })
   .openapi('Error');
@@ -79,7 +79,7 @@ export const OfferSchema = z
     amount: decimal,
     currency,
     validUntil: isoDateTime.nullable().default(null),
-    options: z.array(z.record(z.unknown())).max(20).optional(),
+    options: z.array(z.record(z.string(), z.unknown())).max(20).optional(),
     includedServices: z.array(z.string().max(200)).max(50).optional(),
     note: z.string().max(4000).nullable().optional(),
   })
