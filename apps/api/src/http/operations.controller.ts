@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Inject, Param, Patch, Post, Query, Req, Res } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Inject, Param, Patch, Post, Query, Req, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import {
   CheckSchema,
@@ -16,12 +16,13 @@ import {
   RuleUpdateSchema,
   SegmentPatchSchema,
   SegmentSchema,
+  ServicePatchSchema,
   ServiceSchema,
   TicketSchema,
 } from '@crm/contracts';
 import { formatMoney, maskReference } from '@crm/domain';
 import type { Core, UserActor } from '../core';
-import { serializeOrder } from '../core/services/orders.service';
+import { serializeOrder, serializeService } from '../core/services/orders.service';
 import { serializeSegment } from '../core/services/segments.service';
 import { Actor, CORE, parse, send, UuidPipe as uuid, withIdempotency, type AuthedRequest } from './common';
 import { serializeOffer } from './sales.controller';
@@ -54,7 +55,7 @@ export class OperationsController {
         segments: r.order.segments.map((s) => serializeSegment(s, full)),
         passengers: r.order.passengers.map((p) => ({ ...p, tickets: p.tickets.map((t) => ({ ...t, ticketNumber: full ? t.ticketNumber : maskReference(t.ticketNumber) })) })),
         payments: r.order.payments.map((p) => ({ ...p, amount: formatMoney({ amountMinor: p.amountMinor, currency: p.currency }), amountMinor: undefined })),
-        services: r.order.services.map((s) => ({ ...s, amount: s.amountMinor !== null && s.currency ? formatMoney({ amountMinor: s.amountMinor, currency: s.currency }) : null, amountMinor: undefined })),
+        services: r.order.services.map(serializeService),
       },
     });
   }
@@ -84,6 +85,18 @@ export class OperationsController {
   @Post('orders/:id/services')
   async service(@Actor() actor: UserActor, @Param('id', uuid) id: string, @Body() body: unknown, @Res() res: Response) {
     send(res, 201, await this.core.orders.addService(actor, id, parse(ServiceSchema, body)));
+  }
+
+  @Patch('services/:id')
+  async patchService(@Actor() actor: UserActor, @Param('id', uuid) id: string, @Body() body: unknown, @Res() res: Response) {
+    send(res, 200, await this.core.orders.updateService(actor, id, parse(ServicePatchSchema, body)));
+  }
+
+  /** Soft-delete: qator auditda qoladi, hisobga kirmaydi. */
+  @Delete('services/:id')
+  async deleteService(@Actor() actor: UserActor, @Param('id', uuid) id: string, @Res() res: Response) {
+    await this.core.orders.removeService(actor, id);
+    send(res, 200, { ok: true });
   }
 
   @Post('orders/:id/tickets')

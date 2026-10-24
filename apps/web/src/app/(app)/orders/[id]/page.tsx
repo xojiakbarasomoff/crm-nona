@@ -5,7 +5,9 @@ import { useParams } from 'next/navigation';
 import { useState } from 'react';
 import { api, CHECK_LABELS, fmtDateTime, newKey, OP_STATUS_LABELS, useApi, type ApiError } from '../../../../lib/api';
 import { Async, Badge, Field, FormError, Section } from '../../../../components/ui';
-import { Attachments } from '../../../../components/attachments';
+import { Attachments, type DocOwner } from '../../../../components/attachments';
+import { FinanceSummary, PricingForm, ServicesSection, type FinanceView, type ServiceView, type SupplierRef } from '../../../../components/order-finance';
+import { SERVICE_TYPE_LABELS } from '../../../../lib/format';
 
 interface Segment {
   id: string;
@@ -38,6 +40,7 @@ interface OrderView {
     orderNo: string;
     version: number;
     agreedAmount: string | null;
+    netPrice: string | null;
     currency: string | null;
     paymentState: string;
     ticketingState: string;
@@ -47,18 +50,23 @@ interface OrderView {
     segments: Segment[];
     passengers: Array<{ id: string; fullName: string; type: string; tickets: Array<{ id: string; ticketNumber: string }> }>;
     payments: Array<{ id: string; kind: string; amount: string; currency: string; method: string; receivedAt: string }>;
-    services: Array<{ id: string; serviceType: string; description: string; amount: string | null; currency: string | null }>;
+    services: ServiceView[];
   };
-  lead: { id: string; name: string; stage: string } | null;
-  contact: { id: string; fullName: string | null; primaryPhone: string | null } | null;
+  lead: { id: string; name: string; stage: string; version: number; serviceType: string | null; requirements: Record<string, unknown>; tourOperatorId: string | null } | null;
+  contact: { id: string; fullName: string | null; primaryPhone: string | null; primaryEmail: string | null } | null;
   reminders: Array<{ id: string; kind: string; milestone: string | null; title: string; dueAt: string; state: string; scheduleRevision: number | null; escalatedAt: string | null }>;
-  audit: Array<{ id: string; action: string; createdAt: string; actorType: string }>;
+  audit: Array<{ id: string; action: string; createdAt: string; actorType: string; oldValue: unknown; newValue: unknown }>;
+  finance: FinanceView;
+  suppliers: Record<string, SupplierRef>;
+  tourOperator: SupplierRef | null;
 }
 
 export default function OrderPage() {
   const { id } = useParams<{ id: string }>();
   const state = useApi<OrderView>(`/api/v1/orders/${id}`);
+  const supplierList = useApi<{ items: SupplierRef[] }>('/api/v1/suppliers?status=active');
   const [error, setError] = useState<ApiError | null>(null);
+  const [serviceError, setServiceError] = useState<ApiError | null>(null);
   const run = async (fn: () => Promise<unknown>) => {
     setError(null);
     try {
@@ -70,11 +78,33 @@ export default function OrderPage() {
       return false;
     }
   };
+  const runService = async (fn: () => Promise<unknown>) => {
+    setServiceError(null);
+    try {
+      await fn();
+      await state.reload();
+      return true;
+    } catch (e) {
+      setServiceError(e as ApiError);
+      return false;
+    }
+  };
 
   return (
     <Async state={state}>
       {(d) => {
         const o = d.order;
+        const cancelled = o.fulfillmentState === 'cancelled';
+        const known = new Map<string, SupplierRef>();
+        for (const s of supplierList.data?.items ?? []) known.set(s.id, s);
+        for (const s of Object.values(d.suppliers)) known.set(s.id, s);
+        const suppliers = [...known.values()];
+        const operators = suppliers.filter((s) => s.kind === 'tour_operator' && (s.status === 'active' || s.id === d.lead?.tourOperatorId));
+        const docOwners: DocOwner[] = [
+          { type: 'order', id, label: `Buyurtma ${o.orderNo}` },
+          ...o.passengers.map((p) => ({ type: 'passenger' as const, id: p.id, label: `Yo‘lovchi: ${p.fullName}` })),
+          ...(d.contact ? [{ type: 'contact' as const, id: d.contact.id, label: `Mijoz: ${d.contact.fullName ?? '—'}` }] : []),
+        ];
         return (
           <>
             <h1>Buyurtma {o.orderNo}</h1>
@@ -82,40 +112,22 @@ export default function OrderPage() {
               Lid: {d.lead ? <Link href={`/leads/${d.lead.id}`}>{d.lead.name}</Link> : '—'} · Mijoz: {d.contact ? <Link href={`/contacts/${d.contact.id}`}>{d.contact.fullName ?? '—'}</Link> : '—'}
             </p>
             <FormError error={error} />
+            {cancelled && <div className="state denied">Buyurtma bekor qilingan: tahrirlab bo‘lmaydi. Summalar tarix sifatida saqlanadi va jami sotuv/foydaga kirmaydi.</div>}
             <Section title="Holatlar (bir-biridan mustaqil)">
               <div className="row">
                 <StateSelect label="Xizmat" value={o.fulfillmentState} options={['draft', 'confirmed', 'in_progress', 'completed', 'cancelled']} onChange={(v) => run(() => api(`/api/v1/orders/${id}`, { method: 'PATCH', body: { version: o.version, fulfillmentState: v } }))} />
                 <StateSelect label="Chipta" value={o.ticketingState} options={['not_required', 'pending', 'reserved', 'issued', 'voided']} onChange={(v) => run(() => api(`/api/v1/orders/${id}`, { method: 'PATCH', body: { version: o.version, ticketingState: v } }))} />
                 <StateSelect label="To‘lov" value={o.paymentState} options={['unpaid', 'partial', 'paid', 'refund_pending', 'refunded']} onChange={(v) => run(() => api(`/api/v1/orders/${id}`, { method: 'PATCH', body: { version: o.version, paymentState: v } }))} />
               </div>
-              <CommercialForm order={o} onSave={(b) => run(() => api(`/api/v1/orders/${id}`, { method: 'PATCH', body: { version: o.version, ...b } }))} />
             </Section>
 
-            <Section title="Reys segmentlari">
-              <p className="muted">Ma’lumot manbasi: qo‘lda kiritilgan (manual). Bu jonli reys API ma’lumoti emas.</p>
-              {o.segments.map((s) => (
-                <SegmentCard key={s.id} s={s} run={run} />
-              ))}
-              <AddSegment passengers={o.passengers} onAdd={async (b) => { await api(`/api/v1/orders/${id}/segments`, { method: 'POST', body: b }); await state.reload(); return true; }} />
+            <Section title="Mijoz va aloqa tarixi">
+              <CustomerHistory contact={d.contact} />
             </Section>
 
             <div className="split">
-              <Section title="To‘lovlar (qayd etish pul o‘tkazmaydi)">
-                <table>
-                  <tbody>
-                    {o.payments.map((p) => (
-                      <tr key={p.id}>
-                        <td>{fmtDateTime(p.receivedAt)}</td>
-                        <td>{p.kind === 'refund' ? 'Qaytarim' : 'To‘lov'}</td>
-                        <td>
-                          {p.amount} {p.currency}
-                        </td>
-                        <td>{p.method}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <PaymentForm onAdd={(b) => run(() => api(`/api/v1/orders/${id}/payments`, { method: 'POST', body: b, idempotencyKey: newKey() }))} />
+              <Section title="Safar talablari">
+                <TripRequirements lead={d.lead} />
               </Section>
               <Section title="Yo‘lovchilar">
                 {o.passengers.map((p) => (
@@ -127,7 +139,82 @@ export default function OrderPage() {
               </Section>
             </div>
 
-            <Section title="Eslatmalar">
+            <Section title="Turpaket, turoperator va narx">
+              <div className="row">
+                <Field label="Turoperator (yetkazib beruvchi)" hint="Reklama manbasi emas: mijoz qayerdan kelgani lid kartasida («Manba»)">
+                  <select
+                    value={d.lead?.tourOperatorId ?? ''}
+                    disabled={!d.lead || cancelled}
+                    onChange={(e) => d.lead && run(() => api(`/api/v1/leads/${d.lead!.id}`, { method: 'PATCH', body: { version: d.lead!.version, tourOperatorId: e.target.value || null } }))}
+                  >
+                    <option value="">Tanlanmagan</option>
+                    {operators.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                        {s.status === 'archived' ? ' (arxiv)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                {d.tourOperator && (
+                  <div className="field">
+                    <span className="field-label">Tanlangan</span>
+                    <span>
+                      <b>{d.tourOperator.name}</b> {d.tourOperator.status === 'archived' && <Badge>Arxiv</Badge>}
+                    </span>
+                  </div>
+                )}
+              </div>
+              <PricingForm key={o.version} order={o} disabled={cancelled} onSave={(b) => run(() => api(`/api/v1/orders/${id}`, { method: 'PATCH', body: { version: o.version, ...b } }))} />
+            </Section>
+
+            <FinanceSummary finance={d.finance} />
+
+            <ServicesSection
+              services={o.services}
+              suppliers={suppliers}
+              disabled={cancelled}
+              error={serviceError}
+              onAdd={(b) => runService(() => api(`/api/v1/orders/${id}/services`, { method: 'POST', body: b }))}
+              onUpdate={(sid, b) => runService(() => api(`/api/v1/services/${sid}`, { method: 'PATCH', body: b }))}
+              onRemove={(sid) => runService(() => api(`/api/v1/services/${sid}`, { method: 'DELETE' }))}
+            />
+
+            <Section title="Reys segmentlari">
+              <p className="muted">Ma’lumot manbasi: qo‘lda kiritilgan (manual). Bu jonli reys API ma’lumoti emas.</p>
+              {o.segments.map((s) => (
+                <SegmentCard key={s.id} s={s} run={run} />
+              ))}
+              <AddSegment passengers={o.passengers} onAdd={async (b) => { await api(`/api/v1/orders/${id}/segments`, { method: 'POST', body: b }); await state.reload(); return true; }} />
+            </Section>
+
+            <Section title="To‘lovlar (qayd etish pul o‘tkazmaydi)">
+              <table>
+                <tbody>
+                  {o.payments.map((p) => (
+                    <tr key={p.id}>
+                      <td>{fmtDateTime(p.receivedAt)}</td>
+                      <td>{p.kind === 'refund' ? 'Qaytarim' : 'To‘lov'}</td>
+                      <td>
+                        {p.amount} {p.currency}
+                      </td>
+                      <td>{p.method}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="hint">Qaytarim foydani avtomatik o‘zgartirmaydi; faqat to‘liq qaytarilgan buyurtma («refunded») jami sotuvdan chiqadi. Qaytarimlar dashboard’da alohida ko‘rsatiladi.</p>
+              <PaymentForm onAdd={(b) => run(() => api(`/api/v1/orders/${id}/payments`, { method: 'POST', body: b, idempotencyKey: newKey() }))} />
+            </Section>
+
+            <Attachments ownerType="order" ownerId={id} owners={docOwners} title="Hujjatlar" />
+
+            <Section title="Izohlar, vazifalar va eslatmalar">
+              {o.note && (
+                <p>
+                  <b>Izoh:</b> {o.note}
+                </p>
+              )}
               <table>
                 <thead>
                   <tr>
@@ -155,13 +242,12 @@ export default function OrderPage() {
               <ManualReminder orderId={id} onAdd={(b) => run(() => api('/api/v1/reminders', { method: 'POST', body: b }))} />
             </Section>
 
-            <Attachments ownerType="order" ownerId={id} />
-
-            <Section title="Audit">
+            <Section title="O‘zgarishlar tarixi (audit)">
               <ul>
                 {d.audit.map((a) => (
                   <li key={a.id}>
-                    {fmtDateTime(a.createdAt)} — {a.action} <span className="muted">({a.actorType})</span>
+                    {fmtDateTime(a.createdAt)} — {AUDIT_LABELS[a.action] ?? a.action} <span className="muted">({a.actorType})</span>
+                    {PRICE_ACTIONS.has(a.action) && <div className="muted audit-diff">{auditDiff(a.oldValue, a.newValue)}</div>}
                   </li>
                 ))}
               </ul>
@@ -170,6 +256,86 @@ export default function OrderPage() {
         );
       }}
     </Async>
+  );
+}
+
+const PRICE_ACTIONS = new Set(['price_updated', 'service_price_updated', 'service_added', 'service_removed']);
+const AUDIT_LABELS: Record<string, string> = {
+  price_updated: 'Narx o‘zgardi',
+  service_price_updated: 'Xizmat narxi o‘zgardi',
+  service_added: 'Xizmat qo‘shildi',
+  service_removed: 'Xizmat olib tashlandi',
+  service_updated: 'Xizmat o‘zgardi',
+};
+
+/** Narx o'zgarishini eski → yangi ko'rinishida qisqa ko'rsatadi (backend auditidagi qiymatlar). */
+function auditDiff(oldV: unknown, newV: unknown): string {
+  const pick = (v: unknown) => {
+    const r = (v ?? {}) as Record<string, unknown>;
+    const minor = (x: unknown) => (typeof x === 'string' && /^-?\d+$/.test(x) ? (Number(x) / 100).toFixed(2) : null);
+    const parts = [
+      ['sotuv', r.amount ?? r.agreedAmount ?? minor(r.agreedAmountMinor)],
+      ['tannarx', r.netAmount ?? r.netPrice ?? minor(r.netPriceMinor)],
+      ['valyuta', r.currency],
+    ].filter(([, x]) => x !== null && x !== undefined && x !== '');
+    return parts.map(([k, x]) => `${k}: ${String(x)}`).join(', ') || '—';
+  };
+  return `${pick(oldV)} → ${pick(newV)}`;
+}
+
+function CustomerHistory({ contact }: { contact: OrderView['contact'] }) {
+  const state = useApi<{ conversations: Array<{ messages: Array<{ id: string; direction: string; content: string | null; createdAt: string }> }> }>(contact ? `/api/v1/contacts/${contact.id}` : null);
+  if (!contact) return <div className="state empty">Mijoz biriktirilmagan</div>;
+  const messages = (state.data?.conversations ?? [])
+    .flatMap((c) => c.messages)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, 5);
+  return (
+    <>
+      <div>
+        <b>{contact.fullName ?? '—'}</b> · {contact.primaryPhone ?? 'Telefon yo‘q'} {contact.primaryEmail ? `· ${contact.primaryEmail}` : ''}
+      </div>
+      {messages.length === 0 ? (
+        <div className="muted">Yozishmalar yo‘q.</div>
+      ) : (
+        <ul className="msg-list">
+          {messages.map((m) => (
+            <li key={m.id}>
+              <span className="muted">{fmtDateTime(m.createdAt)}</span> · {m.direction === 'inbound' ? 'Mijoz' : 'Biz'}: {m.content ? m.content.slice(0, 140) : '—'}
+            </li>
+          ))}
+        </ul>
+      )}
+      <Link href={`/contacts/${contact.id}`}>To‘liq aloqa tarixi va mijoz kartasi</Link>
+    </>
+  );
+}
+
+function TripRequirements({ lead }: { lead: OrderView['lead'] }) {
+  if (!lead) return <div className="state empty">Lid topilmadi</div>;
+  const r = (lead.requirements ?? {}) as Record<string, string | number | null>;
+  const rows: Array<[string, string | number | null | undefined]> = [
+    ['Xizmat turi', lead.serviceType ? (SERVICE_TYPE_LABELS[lead.serviceType] ?? lead.serviceType) : null],
+    ['Qayerdan', r.origin],
+    ['Qayerga', r.destination],
+    ['Sanalar', r.dateFrom ? `${r.dateFrom}${r.dateTo ? ` → ${r.dateTo}` : ''}` : null],
+    ['Kattalar / bolalar / chaqaloqlar', r.adults !== undefined || r.children !== undefined ? `${r.adults ?? 0} / ${r.children ?? 0} / ${r.infants ?? 0}` : null],
+    ['Byudjet', r.budgetAmount ? `${r.budgetAmount} ${r.budgetCurrency ?? ''}` : r.budgetState === 'undetermined' ? 'aniqlanmagan' : null],
+  ];
+  return (
+    <>
+      <dl className="kv">
+        {rows.map(([k, v]) => (
+          <div key={k}>
+            <dt>{k}</dt>
+            <dd>{v === null || v === undefined || v === '' ? '—' : String(v)}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="hint">
+        Talablar lid kartasida saqlanadi (bitta manba, nusxa yo‘q): <Link href={`/leads/${lead.id}`}>lid kartasida tahrirlash</Link>.
+      </p>
+    </>
   );
 }
 
@@ -182,38 +348,6 @@ function StateSelect({ label, value, options, onChange }: { label: string; value
         ))}
       </select>
     </Field>
-  );
-}
-
-function CommercialForm({ order, onSave }: { order: OrderView['order']; onSave: (b: Record<string, unknown>) => void }) {
-  const [amount, setAmount] = useState(order.agreedAmount ?? '');
-  const [currency, setCurrency] = useState(order.currency ?? 'USD');
-  const [evidence, setEvidence] = useState(order.saleEvidence ?? '');
-  return (
-    <form
-      className="row"
-      onSubmit={(e) => {
-        e.preventDefault();
-        onSave({ ...(amount ? { agreedAmount: amount, currency } : {}), saleEvidence: evidence || null });
-      }}
-    >
-      <Field label="Kelishilgan summa">
-        <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" />
-      </Field>
-      <Field label="Valyuta">
-        <select value={currency} onChange={(e) => setCurrency(e.target.value)}>
-          <option>USD</option>
-          <option>UZS</option>
-          <option>EUR</option>
-        </select>
-      </Field>
-      <Field label="Sotuv tasdiqlash dalili">
-        <input value={evidence} onChange={(e) => setEvidence(e.target.value)} />
-      </Field>
-      <button className="btn" type="submit">
-        Saqlash
-      </button>
-    </form>
   );
 }
 

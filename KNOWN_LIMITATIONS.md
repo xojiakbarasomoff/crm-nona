@@ -26,6 +26,17 @@ Holat: 2026-10-24. Tizim **production tayyor emas** — quyidagi bloklar tashqi 
 - Telefon raqami uchun standart mamlakat qoidasi (`phoneRule.confirmed=false`), ish jadvali, SLA, sticky owner, navbatchi — hozir seed qiymatlari; sozlamalar UI’si yo‘q.
 - Hosting hududi va Meta/amoCRM’ga uzatiladigan shaxsiy ma’lumotlar doirasi.
 
+## 3a. Moliya va hujjatlar (2026-10-25, `docs/tz-addendum-finance.md`)
+
+- **Foyda = sotuv − tannarx** (mijoz talabi, v1). Komissiya, soliq, bank to‘lovlari va valyuta farqi hisobga olinmaydi: bu buxgalteriya «sof foydasi» emas. Interfeys buni aytadi.
+- **Valyuta kursi yo‘q:** bir nechta valyuta bo‘yicha yagona jami hisoblanmaydi; har valyuta alohida. Kurs manbai va sana qoidasi (TZ §12.3) tasdiqlanmaguncha konvertatsiya qo‘shilmaydi.
+- **Turoperator kesimi lid darajasida:** turoperator lidga biriktiriladi. Uni keyin o‘zgartirsangiz, o‘tmishdagi sotuvlar dashboard’da yangi turoperator ostida guruhlanadi (narxlar o‘zgarmaydi; turoperatorning tarixiy snapshot’i saqlanmaydi). Xizmat qatoridagi yetkazib beruvchilar kesimi dashboard’da hali yo‘q (har qatorda saqlanadi va eksport/API orqali olinadi).
+- **Menejer o‘z buyurtmalarida tannarx va foydani ko‘radi.** Tannarxni menejerdan yashirish kerak bo‘lsa, alohida capability qo‘shiladi (qaror kerak).
+- **Kutilayotgan foyda** faqat ochiq buyurtmalardan (tannarxi ma’lumlari); takliflar (`offers`) tannarx saqlamaydi.
+- Olib tashlangan xizmat qatorini tiklash interfeysi yo‘q (qator bazada va auditda saqlanadi).
+- Hujjatlar: pasport fayllari uchun storage darajasida shifrlash (S3 SSE) provayderda sozlanmagan/sinalmagan; EXIF/OCR tekshiruvi yo‘q; haqiqiy ClamAV bilan kategoriya oqimi alohida sinalmagan (mavjud `services` testlari fayl oqimini sinaydi).
+- **Test beqarorligi (eski, mazkur ishga aloqasiz):** `rbac-auth` dagi 2 ta integratsiya testi haqiqiy soatga bog‘liq: menejerlar faqat 09:00–19:00 (Asia/Tashkent) da navbatga olinadi, shu oraliqdan tashqarida yiqiladi (tuzatish: testda soatni qotirish).
+
 ## 4. Ma’lum texnik cheklovlar
 
 - Audit yozuvlari o‘zgarmas: PII o‘chirishda audit `old/new` qiymatlaridagi shaxsiy ma’lumot qoladi (siyosat bo‘yicha saqlanadi).

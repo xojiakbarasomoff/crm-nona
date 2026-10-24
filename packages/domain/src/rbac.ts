@@ -21,7 +21,8 @@ export type Capability =
   | 'reminders.assign_others'
   | 'leads.reopen'
   | 'integrations.replay'
-  | 'reference.view_full';
+  | 'reference.view_full'
+  | 'suppliers.manage';
 
 const MATRIX: Record<Role, ReadonlySet<Capability>> = {
   ADMIN: new Set<Capability>([
@@ -39,6 +40,7 @@ const MATRIX: Record<Role, ReadonlySet<Capability>> = {
     'leads.reopen',
     'integrations.replay',
     'reference.view_full',
+    'suppliers.manage',
   ]),
   HEAD: new Set<Capability>([
     'records.view_all',
@@ -52,6 +54,7 @@ const MATRIX: Record<Role, ReadonlySet<Capability>> = {
     'reminders.assign_others',
     'leads.reopen',
     'reference.view_full',
+    'suppliers.manage',
   ]),
   MANAGER: new Set<Capability>(['duplicates.flag', 'audit.read_own']),
 };

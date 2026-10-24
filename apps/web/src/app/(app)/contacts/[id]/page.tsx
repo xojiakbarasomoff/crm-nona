@@ -6,6 +6,7 @@ import { api, fmtDateTime, SOURCE_LABELS, STAGE_LABELS, useApi, type ApiError } 
 import { useState } from 'react';
 import { useMe } from '../../../../components/shell';
 import { Async, Badge, FormError, Section } from '../../../../components/ui';
+import { Attachments } from '../../../../components/attachments';
 
 interface ContactView {
   contact: { id: string; fullName: string | null; primaryPhone: string | null; primaryEmail: string | null; amoContactId: string | null; piiErasedAt: string | null };
@@ -95,6 +96,7 @@ export default function ContactPage() {
                   </div>
                 ))}
               </Section>
+              <Attachments ownerType="contact" ownerId={id} title="Mijoz hujjatlari" />
               <Section title="Buyurtmalar">
                 {d.orders.map((o) => (
                   <div key={o.id}>

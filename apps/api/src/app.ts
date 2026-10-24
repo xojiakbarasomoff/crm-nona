@@ -10,6 +10,7 @@ import { OperationsController } from './http/operations.controller';
 import { PlatformController } from './http/platform.controller';
 import { SalesController } from './http/sales.controller';
 import { FilesController } from './http/files.controller';
+import { SuppliersController } from './http/suppliers.controller';
 import { ALLOWED_MIME } from '@crm/integrations';
 
 @Module({})
@@ -17,7 +18,7 @@ class AppModule {
   static register(core: Core): DynamicModule {
     return {
       module: AppModule,
-      controllers: [AuthController, SalesController, OperationsController, PlatformController, FilesController],
+      controllers: [AuthController, SalesController, OperationsController, PlatformController, FilesController, SuppliersController],
       providers: [{ provide: CORE, useValue: core }, { provide: APP_GUARD, useClass: AuthGuard }],
     };
   }

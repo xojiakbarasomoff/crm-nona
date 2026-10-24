@@ -1,4 +1,5 @@
 export * from './money';
+export * from './finance';
 export * from './phone';
 export * from './contact-matching';
 export * from './schedule';

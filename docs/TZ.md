@@ -818,3 +818,9 @@ Ushbu fayl repozitoriyda `docs/TZ.md` sifatida saqlanadi. Hamroh `CLAUDE_CODE_ST
 Claude Code yo‘q permission, provider ID, API endpoint yoki integration imkoniyatini o‘ylab topmasin. Real ruxsat yo‘q bo‘lsa adapter interfeysi, contract test va aniq belgilangan demo bilan mustaqil ishni davom ettirsin. Tashqi integratsiya faqat haqiqiy end-to-end dalil mavjud bo‘lsa ishlaydi deb belgilanadi.
 
 Har bosqich yakunida bajarilgan qism, o‘zgargan fayllar, ishga tushirish usuli, o‘tgan testlar, tekshirilmagan tashqi shartlar va keyingi bosqich yozilsin. Tekshirilmagan natija “tayyor” deb berilmasin.
+
+---
+
+## Qo‘shimcha (2026-10-25): turoperatorlar, tannarx/foyda, hujjatlar
+
+Turoperatorlar va yetkazib beruvchilar ma’lumotnomasi, tannarx/sotuv/foyda hisobi, moliyaviy dashboard, kengaytirilgan lid/buyurtma kartasi va hujjat kategoriyalari talablari: **`docs/tz-addendum-finance.md`**. Foydalanuvchi yo‘riqnomasi: **`docs/user-guide-finance.md`**. Facebook/Instagram integratsiyasi bu qo‘shimchaga kirmaydi.

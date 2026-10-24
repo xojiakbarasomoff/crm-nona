@@ -3,6 +3,7 @@ import type { Channel, Lead, Prisma, Stage, Tx } from '@crm/database';
 import {
   addWorkingMinutes,
   automationKey,
+  can,
   checkTransition,
   detectAnomaly,
   isClosed,
@@ -21,6 +22,7 @@ import { conflict, forbidden, unprocessable } from '../errors';
 import { enqueueOutbox } from '../queue';
 import { assertFound, canEditRecord, leadWhere, requireCap } from '../scope';
 import { assignNewLead } from './assignment.service';
+import { assertSelectableSupplier, serializeSupplier } from './suppliers.service';
 
 export interface LeadRequirements {
   serviceType?: string | null;
@@ -55,6 +57,8 @@ export async function buildLeadFacts(tx: Tx, lead: Lead): Promise<LeadFacts> {
     tx.offer.findFirst({ where: { companyId: lead.companyId, leadId: lead.id, acceptedAt: { not: null } }, orderBy: { version: 'desc' } }),
     tx.order.findFirst({ where: { companyId: lead.companyId, leadId: lead.id, fulfillmentState: { not: 'cancelled' } } }),
   ]);
+  // Kelishilgan summa: paket narxi yoki paketdan tashqari narxli xizmat (jami qiymat xizmatlar yig'indisidan ham hisoblanadi).
+  const pricedServices = order ? await tx.orderService.count({ where: { companyId: lead.companyId, orderId: order.id, removedAt: null, includedInPackage: false, amountMinor: { not: null } } }) : 0;
   return {
     stage: lead.stage,
     hasContactOrIdentifier: !!lead.contactId,
@@ -76,7 +80,7 @@ export async function buildLeadFacts(tx: Tx, lead: Lead): Promise<LeadFacts> {
       dueAt: r.paymentDueAt ?? null,
       acceptedOfferId: acceptedOffer?.id ?? null,
     },
-    order: { exists: !!order, agreedAmountSet: order?.agreedAmountMinor !== null && order?.agreedAmountMinor !== undefined, saleEvidence: !!order?.saleEvidence },
+    order: { exists: !!order, agreedAmountSet: (order?.agreedAmountMinor !== null && order?.agreedAmountMinor !== undefined) || pricedServices > 0, saleEvidence: !!order?.saleEvidence },
     lostReasonCode: lead.lostReasonCode,
     followUp: { nextContactAt: lead.nextContactAt?.toISOString() ?? null, note: lead.followUpNote },
   };
@@ -190,7 +194,8 @@ export class LeadsService {
         select: { id: true, action: true, state: true, lastError: true },
       }),
     ]);
-    return { lead, events, offers, orders, contact, pendingOperations: pendingOps };
+    const op = lead.tourOperatorId ? await this.d.prisma.supplier.findFirst({ where: { id: lead.tourOperatorId, companyId: actor.companyId } }) : null;
+    return { lead, events, offers, orders, contact, pendingOperations: pendingOps, tourOperator: op ? serializeSupplier(op, can(actor.role, 'reference.view_full')) : null };
   }
 
   /** Local tourism fields are owned by PostgreSQL and change immediately (optimistic lock). */
@@ -198,7 +203,7 @@ export class LeadsService {
     actor: UserActor,
     id: string,
     version: number,
-    patch: { requirements?: LeadRequirements; serviceType?: string | null; contactOutcome?: string | null; offerPrepDueAt?: Date | null; lostReasonCode?: string | null; lostNote?: string | null; nextContactAt?: Date | null; followUpNote?: string | null },
+    patch: { requirements?: LeadRequirements; serviceType?: string | null; contactOutcome?: string | null; offerPrepDueAt?: Date | null; lostReasonCode?: string | null; lostNote?: string | null; nextContactAt?: Date | null; followUpNote?: string | null; tourOperatorId?: string | null },
   ) {
     return this.d.prisma.$transaction(async (tx) => {
       const lead = assertFound(await tx.lead.findFirst({ where: leadWhere(actor, { id }) }), 'Lid');
@@ -212,6 +217,11 @@ export class LeadsService {
       if (patch.lostNote !== undefined) data.lostNote = patch.lostNote;
       if (patch.nextContactAt !== undefined) data.nextContactAt = patch.nextContactAt;
       if (patch.followUpNote !== undefined) data.followUpNote = patch.followUpNote;
+      if (patch.tourOperatorId !== undefined) {
+        // Turoperator — yetkazib beruvchi; reklama manbasi (firstSource) bilan aralashmaydi.
+        if (patch.tourOperatorId) await assertSelectableSupplier(tx, actor.companyId, patch.tourOperatorId, { kind: 'tour_operator', unchanged: patch.tourOperatorId === lead.tourOperatorId });
+        (data as Prisma.LeadUncheckedUpdateInput).tourOperatorId = patch.tourOperatorId;
+      }
       if (patch.contactOutcome && !lead.firstHumanActionAt) data.firstHumanActionAt = this.d.clock.now();
       const res = await tx.lead.updateMany({ where: { id, version }, data: data as Prisma.LeadUpdateManyMutationInput });
       if (res.count !== 1) throw conflict('VERSION_CONFLICT', 'Lid boshqa foydalanuvchi tomonidan o‘zgartirilgan. Sahifani yangilang.');

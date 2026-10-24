@@ -1,11 +1,13 @@
-import type { FulfillmentState, Order, PaymentState, Prisma, TicketingState, Tx } from '@crm/database';
-import { formatMoney, formatOrderNo, isSupportedCurrency, parseMoney, sumByCurrency } from '@crm/domain';
+import type { FulfillmentState, Order, OrderService as ServiceRow, PaymentState, Prisma, TicketingState, Tx } from '@crm/database';
+import { validateServiceDetails } from '@crm/contracts';
+import { can, computeOrderFinance, formatMoney, formatOrderNo, isSupportedCurrency, marginPercent, parseMoney, singleCurrencySelling, sumByCurrency, type FinanceLine, type OrderFinance } from '@crm/domain';
 import { audit } from '../audit';
 import type { CoreDeps, UserActor } from '../context';
 import { publishEvent } from '../events';
 import { conflict, forbidden, isPgUniqueViolation, unprocessable } from '../errors';
 import { enqueueOutbox } from '../queue';
 import { assertFound, canEditRecord, leadWhere, orderWhere } from '../scope';
+import { assertSelectableSupplier, serializeSupplier } from './suppliers.service';
 
 /** Atomic per-company, per-year order number; gaps are acceptable (TZ §12.3). */
 export async function nextOrderNo(tx: Tx, companyId: string, year: number): Promise<string> {
@@ -52,8 +54,74 @@ export async function createOrderRow(
 export function serializeOrder(o: Order) {
   return {
     ...o,
+    /** Paket darajasidagi sotuv narxi (selling price). */
     agreedAmount: o.agreedAmountMinor !== null && o.currency ? formatMoney({ amountMinor: o.agreedAmountMinor, currency: o.currency }) : null,
+    /** Paket darajasidagi tannarx (net price); null — noma'lum. */
+    netPrice: o.netPriceMinor !== null && o.currency ? formatMoney({ amountMinor: o.netPriceMinor, currency: o.currency }) : null,
     agreedAmountMinor: undefined,
+    netPriceMinor: undefined,
+  };
+}
+
+const fmt = (amountMinor: bigint, currency: string) => formatMoney({ amountMinor, currency });
+
+export function serializeService(s: ServiceRow) {
+  const ccy = s.currency;
+  const known = s.amountMinor !== null && s.netMinor !== null && !!ccy;
+  return {
+    id: s.id,
+    serviceType: s.serviceType,
+    description: s.description,
+    /** Sotuv narxi (mijozga). */
+    amount: s.amountMinor !== null && ccy ? fmt(s.amountMinor, ccy) : null,
+    /** Tannarx (yetkazib beruvchidan); null — noma'lum. */
+    netAmount: s.netMinor !== null && ccy ? fmt(s.netMinor, ccy) : null,
+    currency: ccy,
+    profit: known ? fmt(s.amountMinor! - s.netMinor!, ccy!) : null,
+    supplierId: s.supplierId,
+    includedInPackage: s.includedInPackage,
+    details: s.details,
+    createdAt: s.createdAt,
+    updatedAt: s.updatedAt,
+  };
+}
+
+/** Buyurtma (paket) va xizmat qatorlaridan hisob qatorlari. Olib tashlangan xizmatlar `removed` bilan belgilanadi. */
+export function orderFinanceLines(o: Pick<Order, 'id' | 'agreedAmountMinor' | 'netPriceMinor' | 'currency'>, services: ServiceRow[]): FinanceLine[] {
+  const lines: FinanceLine[] = [];
+  if (o.currency && (o.agreedAmountMinor !== null || o.netPriceMinor !== null)) {
+    lines.push({ kind: 'package', id: `package:${o.id}`, sellingMinor: o.agreedAmountMinor, netMinor: o.netPriceMinor, currency: o.currency });
+  }
+  for (const s of services) {
+    lines.push({ kind: 'service', id: s.id, sellingMinor: s.amountMinor, netMinor: s.netMinor, currency: s.currency, includedInPackage: s.includedInPackage, removed: !!s.removedAt });
+  }
+  return lines;
+}
+
+export const orderFinance = (o: Pick<Order, 'id' | 'agreedAmountMinor' | 'netPriceMinor' | 'currency'>, services: ServiceRow[]) => computeOrderFinance(orderFinanceLines(o, services));
+
+export const FINANCE_FORMULA = "Foyda = sotuv narxi (selling price) − tannarx (net price). Qo'shimcha xarajatlar (komissiya, soliq, bank to'lovlari, valyuta farqi) hisobga olinmagan: bu buxgalteriya bo'yicha yakuniy «sof foyda» emas.";
+
+export function serializeFinance(f: OrderFinance) {
+  return {
+    hasPrice: f.hasPrice,
+    profitUndetermined: f.profitUndetermined,
+    byCurrency: Object.fromEntries(
+      Object.values(f.byCurrency).map((c) => [
+        c.currency,
+        {
+          selling: fmt(c.sellingMinor, c.currency),
+          net: c.lines - c.missingNetLines > 0 ? fmt(c.netMinor, c.currency) : null,
+          netComplete: c.missingNetLines === 0 && c.missingSellingLines === 0,
+          profit: c.profitMinor === null ? null : fmt(c.profitMinor, c.currency),
+          profitState: c.profitState,
+          marginPercent: c.profitMinor === null ? null : marginPercent(c.sellingMinor, c.profitMinor),
+          lines: c.lines,
+          missingNetLines: c.missingNetLines,
+        },
+      ]),
+    ),
+    formula: FINANCE_FORMULA,
   };
 }
 
@@ -158,7 +226,7 @@ export class OrdersService {
       await this.d.prisma.order.findFirst({
         where: orderWhere(actor, { id }),
         include: {
-          services: true,
+          services: { where: { removedAt: null }, orderBy: { createdAt: 'asc' } },
           passengers: { include: { segments: true, tickets: { include: { segments: true } } } },
           segments: { orderBy: { segmentNo: 'asc' }, include: { passengers: true, checks: { orderBy: { checkedAt: 'desc' }, take: 20 } } },
           payments: { orderBy: { receivedAt: 'asc' } },
@@ -168,12 +236,17 @@ export class OrdersService {
     );
     const canSeeFull = actor.role !== 'MANAGER' || order.ownerId === actor.id;
     const [lead, contact, reminders, auditRows] = await Promise.all([
-      this.d.prisma.lead.findFirst({ where: { id: order.leadId, companyId: actor.companyId }, select: { id: true, name: true, stage: true, amoLeadId: true } }),
+      this.d.prisma.lead.findFirst({ where: { id: order.leadId, companyId: actor.companyId }, select: { id: true, name: true, stage: true, version: true, amoLeadId: true, serviceType: true, requirements: true, tourOperatorId: true, ownerId: true } }),
       this.d.prisma.contact.findFirst({ where: { id: order.contactId, companyId: actor.companyId }, select: { id: true, fullName: true, primaryPhone: true, primaryEmail: true } }),
       this.d.prisma.reminderOccurrence.findMany({ where: { companyId: actor.companyId, orderId: id }, orderBy: { dueAt: 'asc' } }),
       this.d.prisma.auditLog.findMany({ where: { companyId: actor.companyId, entityId: { in: [id, ...order.segments.map((s) => s.id)] } }, orderBy: { createdAt: 'desc' }, take: 100 }),
     ]);
-    return { order, lead, contact, reminders, audit: auditRows, canSeeFullReferences: canSeeFull };
+    const supplierIds = [...new Set([lead?.tourOperatorId, ...order.services.map((s) => s.supplierId)].filter((x): x is string => !!x))];
+    const suppliers = supplierIds.length ? await this.d.prisma.supplier.findMany({ where: { companyId: actor.companyId, id: { in: supplierIds } } }) : [];
+    const full = can(actor.role, 'reference.view_full');
+    const supplierMap = Object.fromEntries(suppliers.map((x) => [x.id, serializeSupplier(x, full)]));
+    const finance = serializeFinance(orderFinance(order, order.services));
+    return { order, lead, contact, reminders, audit: auditRows, canSeeFullReferences: canSeeFull, finance, suppliers: supplierMap, tourOperator: lead?.tourOperatorId ? (supplierMap[lead.tourOperatorId] ?? null) : null };
   }
 
   async listOrders(actor: UserActor, q: { cursor?: string; limit: number; state?: FulfillmentState }) {
@@ -195,19 +268,34 @@ export class OrdersService {
     actor: UserActor,
     id: string,
     version: number,
-    patch: { agreedAmount?: string; currency?: string; saleEvidence?: string | null; note?: string | null; ticketingState?: TicketingState; fulfillmentState?: FulfillmentState; paymentState?: PaymentState },
+    patch: { agreedAmount?: string; netPrice?: string | null; currency?: string; saleEvidence?: string | null; note?: string | null; ticketingState?: TicketingState; fulfillmentState?: FulfillmentState; paymentState?: PaymentState },
   ) {
     const result = await this.d.prisma.$transaction(async (tx) => {
       const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id }) }), 'Buyurtma');
       if (!canEditRecord(actor, order.ownerId)) throw forbidden();
       if (order.fulfillmentState === 'cancelled') throw unprocessable('ORDER_CANCELLED', 'Bekor qilingan buyurtmani tahrirlab bo‘lmaydi');
       const data: Prisma.OrderUncheckedUpdateManyInput = { version: { increment: 1 } };
-      if (patch.agreedAmount !== undefined || patch.currency !== undefined) {
+      const pricing = patch.agreedAmount !== undefined || patch.currency !== undefined || patch.netPrice !== undefined;
+      if (pricing) {
         const currency = patch.currency ?? order.currency;
         if (!currency || !isSupportedCurrency(currency)) throw unprocessable('INVALID_CURRENCY', 'Valyuta ko‘rsatilmagan', { currency: 'required' });
-        const m = parseMoney(patch.agreedAmount ?? formatMoney({ amountMinor: order.agreedAmountMinor ?? 0n, currency }), currency);
-        if (m.amountMinor < 0n) throw unprocessable('INVALID_AMOUNT', 'Summa manfiy bo‘lmasin');
-        data.agreedAmountMinor = m.amountMinor;
+        const hasAmounts = order.agreedAmountMinor !== null || order.netPriceMinor !== null;
+        if (order.currency && currency !== order.currency && hasAmounts && (patch.agreedAmount === undefined || patch.netPrice === undefined)) {
+          throw unprocessable('CURRENCY_CHANGE_REQUIRES_AMOUNTS', 'Valyutani o‘zgartirishda sotuv narxi va tannarx qayta kiritilishi kerak (kurs bo‘yicha avtomatik o‘zgartirilmaydi)', { currency: 'amounts_required' });
+        }
+        if (patch.agreedAmount !== undefined) {
+          const m = parseMoney(patch.agreedAmount, currency);
+          if (m.amountMinor < 0n) throw unprocessable('INVALID_AMOUNT', 'Sotuv narxi manfiy bo‘lmasin', { agreedAmount: 'negative' });
+          data.agreedAmountMinor = m.amountMinor;
+        }
+        if (patch.netPrice !== undefined) {
+          if (patch.netPrice === null) data.netPriceMinor = null;
+          else {
+            const m = parseMoney(patch.netPrice, currency);
+            if (m.amountMinor < 0n) throw unprocessable('INVALID_AMOUNT', 'Tannarx manfiy bo‘lmasin', { netPrice: 'negative' });
+            data.netPriceMinor = m.amountMinor;
+          }
+        }
         data.currency = currency;
       }
       if (patch.saleEvidence !== undefined) data.saleEvidence = patch.saleEvidence;
@@ -224,8 +312,8 @@ export class OrdersService {
       await audit(tx, actor, {
         entityType: 'order',
         entityId: id,
-        action: patch.agreedAmount !== undefined ? 'price_updated' : 'updated',
-        oldValue: { agreedAmountMinor: order.agreedAmountMinor, currency: order.currency, fulfillmentState: order.fulfillmentState, ticketingState: order.ticketingState, paymentState: order.paymentState },
+        action: pricing ? 'price_updated' : 'updated',
+        oldValue: { agreedAmountMinor: order.agreedAmountMinor, netPriceMinor: order.netPriceMinor, currency: order.currency, fulfillmentState: order.fulfillmentState, ticketingState: order.ticketingState, paymentState: order.paymentState },
         newValue: patch,
       });
       const updated = await tx.order.findUniqueOrThrow({ where: { id } });
@@ -281,7 +369,10 @@ export class OrdersService {
         },
       });
       const all = await tx.payment.findMany({ where: { companyId: actor.companyId, orderId, status: 'confirmed' } });
-      const { state, note } = computePaymentState(order, all);
+      // To'lov holati paket + paketdan tashqari xizmatlarning jami sotuv narxiga nisbatan hisoblanadi (yagona valyutada).
+      const svcRows = await tx.orderService.findMany({ where: { companyId: actor.companyId, orderId, removedAt: null } });
+      const eff = singleCurrencySelling(orderFinance(order, svcRows));
+      const { state, note } = computePaymentState(eff ? { ...order, agreedAmountMinor: eff.amountMinor, currency: eff.currency } : { ...order, agreedAmountMinor: null }, all);
       const updated = state && state !== order.paymentState ? await tx.order.update({ where: { id: orderId }, data: { paymentState: state, version: { increment: 1 } } }) : order;
       await audit(tx, actor, { entityType: 'order', entityId: orderId, action: input.kind === 'refund' ? 'refund_recorded' : 'payment_recorded', newValue: { paymentId: payment.id, amount: input.amount, currency: input.currency, method: input.method } });
       return { payment, order: updated, duplicate: false, paymentStateNote: note };
@@ -300,14 +391,123 @@ export class OrdersService {
     });
   }
 
-  async addService(actor: UserActor, orderId: string, input: { serviceType: string; description: string; amount?: string | null; currency?: string | null }) {
+  private moneyPair(amount: string | null | undefined, net: string | null | undefined, currency: string | null | undefined) {
+    if ((amount || net) && !currency) throw unprocessable('INVALID_CURRENCY', 'Narx kiritilganda valyuta majburiy', { currency: 'required' });
+    if (currency && !isSupportedCurrency(currency)) throw unprocessable('INVALID_CURRENCY', 'Valyuta qo‘llab-quvvatlanmaydi', { currency: 'unsupported' });
+    const sell = amount ? parseMoney(amount, currency!) : null;
+    const cost = net ? parseMoney(net, currency!) : null;
+    if (sell && sell.amountMinor < 0n) throw unprocessable('INVALID_AMOUNT', 'Sotuv narxi manfiy bo‘lmasin', { amount: 'negative' });
+    if (cost && cost.amountMinor < 0n) throw unprocessable('INVALID_AMOUNT', 'Tannarx manfiy bo‘lmasin', { netAmount: 'negative' });
+    return { sell: sell?.amountMinor ?? null, cost: cost?.amountMinor ?? null };
+  }
+
+  /** Xizmat qatori o'zgarsa, amoCRM'dagi sotuv jami (order.summary) qayta yuboriladi; tannarx/foyda yuborilmaydi. */
+  private async queueSummary(tx: Tx, actor: UserActor, order: Pick<Order, 'id' | 'leadId'>, token: string) {
+    await enqueueOutbox(tx, { companyId: actor.companyId, operationKey: `order.summary:${order.id}:svc:${token}:${this.d.clock.now().getTime()}`, target: 'amocrm', action: 'order.summary', payload: { orderId: order.id, leadId: order.leadId } });
+  }
+
+  async addService(
+    actor: UserActor,
+    orderId: string,
+    input: { serviceType: string; description: string; amount?: string | null; netAmount?: string | null; currency?: string | null; supplierId?: string | null; includedInPackage?: boolean; details?: Record<string, unknown> },
+  ) {
+    const { sell, cost } = this.moneyPair(input.amount, input.netAmount, input.currency);
+    const det = validateServiceDetails(input.serviceType, input.details);
+    if (!det.ok) throw unprocessable('VALIDATION_FAILED', 'Kiritilgan ma’lumot noto‘g‘ri', det.errors);
     return this.d.prisma.$transaction(async (tx) => {
       const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: orderId }) }), 'Buyurtma');
       if (!canEditRecord(actor, order.ownerId)) throw forbidden();
-      const m = input.amount && input.currency ? parseMoney(input.amount, input.currency) : null;
-      const s = await tx.orderService.create({ data: { companyId: actor.companyId, orderId, serviceType: input.serviceType, description: input.description, amountMinor: m?.amountMinor ?? null, currency: m?.currency ?? null } });
-      await audit(tx, actor, { entityType: 'order', entityId: orderId, action: 'service_added', newValue: { serviceId: s.id } });
-      return s;
+      if (order.fulfillmentState === 'cancelled') throw unprocessable('ORDER_CANCELLED', 'Bekor qilingan buyurtmani tahrirlab bo‘lmaydi');
+      if (input.supplierId) await assertSelectableSupplier(tx, actor.companyId, input.supplierId);
+      const s = await tx.orderService.create({
+        data: {
+          companyId: actor.companyId,
+          orderId,
+          serviceType: input.serviceType,
+          description: input.description,
+          amountMinor: sell,
+          netMinor: cost,
+          currency: input.currency ?? null,
+          supplierId: input.supplierId ?? null,
+          includedInPackage: input.includedInPackage ?? false,
+          details: det.value as Prisma.InputJsonValue,
+        },
+      });
+      await audit(tx, actor, {
+        entityType: 'order',
+        entityId: orderId,
+        action: 'service_added',
+        newValue: { serviceId: s.id, serviceType: s.serviceType, amount: input.amount ?? null, netAmount: input.netAmount ?? null, currency: s.currency, supplierId: s.supplierId, includedInPackage: s.includedInPackage },
+      });
+      await this.queueSummary(tx, actor, order, s.id);
+      return serializeService(s);
+    });
+  }
+
+  async updateService(
+    actor: UserActor,
+    serviceId: string,
+    patch: { serviceType?: string; description?: string; amount?: string | null; netAmount?: string | null; currency?: string | null; supplierId?: string | null; includedInPackage?: boolean; details?: Record<string, unknown> },
+  ) {
+    return this.d.prisma.$transaction(async (tx) => {
+      const before = assertFound(await tx.orderService.findFirst({ where: { id: serviceId, companyId: actor.companyId, removedAt: null } }), 'Xizmat');
+      const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: before.orderId }) }), 'Xizmat');
+      if (!canEditRecord(actor, order.ownerId)) throw forbidden();
+      if (order.fulfillmentState === 'cancelled') throw unprocessable('ORDER_CANCELLED', 'Bekor qilingan buyurtmani tahrirlab bo‘lmaydi');
+      const currency = patch.currency !== undefined ? patch.currency : before.currency;
+      const hasAmounts = before.amountMinor !== null || before.netMinor !== null;
+      if (patch.currency !== undefined && before.currency && patch.currency !== before.currency && hasAmounts && (patch.amount === undefined || patch.netAmount === undefined)) {
+        throw unprocessable('CURRENCY_CHANGE_REQUIRES_AMOUNTS', 'Valyutani o‘zgartirishda sotuv narxi va tannarx qayta kiritilishi kerak', { currency: 'amounts_required' });
+      }
+      const curText = (v: bigint | null) => (v !== null && before.currency ? fmt(v, before.currency) : null);
+      const { sell, cost } = this.moneyPair(patch.amount !== undefined ? patch.amount : curText(before.amountMinor), patch.netAmount !== undefined ? patch.netAmount : curText(before.netMinor), currency);
+      const type = patch.serviceType ?? before.serviceType;
+      const det = validateServiceDetails(type, patch.details ?? (before.details as Record<string, unknown>));
+      if (!det.ok) throw unprocessable('VALIDATION_FAILED', 'Kiritilgan ma’lumot noto‘g‘ri', det.errors);
+      if (patch.supplierId) await assertSelectableSupplier(tx, actor.companyId, patch.supplierId, { unchanged: patch.supplierId === before.supplierId });
+      const after = await tx.orderService.update({
+        where: { id: serviceId },
+        data: {
+          serviceType: type,
+          ...(patch.description !== undefined ? { description: patch.description } : {}),
+          amountMinor: sell,
+          netMinor: cost,
+          currency: currency ?? null,
+          ...(patch.supplierId !== undefined ? { supplierId: patch.supplierId } : {}),
+          ...(patch.includedInPackage !== undefined ? { includedInPackage: patch.includedInPackage } : {}),
+          details: det.value as Prisma.InputJsonValue,
+        },
+      });
+      const priceChanged = before.amountMinor !== after.amountMinor || before.netMinor !== after.netMinor || before.currency !== after.currency || before.includedInPackage !== after.includedInPackage;
+      const snap = (r: ServiceRow) => ({
+        serviceId,
+        amount: r.amountMinor !== null && r.currency ? fmt(r.amountMinor, r.currency) : null,
+        netAmount: r.netMinor !== null && r.currency ? fmt(r.netMinor, r.currency) : null,
+        currency: r.currency,
+        supplierId: r.supplierId,
+        includedInPackage: r.includedInPackage,
+      });
+      await audit(tx, actor, { entityType: 'order', entityId: before.orderId, action: priceChanged ? 'service_price_updated' : 'service_updated', oldValue: snap(before), newValue: snap(after) });
+      if (priceChanged) await this.queueSummary(tx, actor, order, serviceId);
+      return serializeService(after);
+    });
+  }
+
+  /** Soft-delete: qator tarixda (auditda) qoladi va hisobga kirmaydi. */
+  async removeService(actor: UserActor, serviceId: string) {
+    return this.d.prisma.$transaction(async (tx) => {
+      const before = assertFound(await tx.orderService.findFirst({ where: { id: serviceId, companyId: actor.companyId, removedAt: null } }), 'Xizmat');
+      const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: before.orderId }) }), 'Xizmat');
+      if (!canEditRecord(actor, order.ownerId)) throw forbidden();
+      if (order.fulfillmentState === 'cancelled') throw unprocessable('ORDER_CANCELLED', 'Bekor qilingan buyurtmani tahrirlab bo‘lmaydi');
+      await tx.orderService.update({ where: { id: serviceId }, data: { removedAt: this.d.clock.now() } });
+      await audit(tx, actor, {
+        entityType: 'order',
+        entityId: before.orderId,
+        action: 'service_removed',
+        oldValue: { serviceId, serviceType: before.serviceType, amount: before.amountMinor !== null && before.currency ? fmt(before.amountMinor, before.currency) : null, netAmount: before.netMinor !== null && before.currency ? fmt(before.netMinor, before.currency) : null, currency: before.currency },
+      });
+      await this.queueSummary(tx, actor, order, serviceId);
     });
   }
 

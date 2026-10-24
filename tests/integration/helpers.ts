@@ -78,6 +78,7 @@ export interface Session {
   get(path: string): request.Test;
   post(path: string, body?: unknown, headers?: Record<string, string>): request.Test;
   patch(path: string, body?: unknown): request.Test;
+  delete(path: string): request.Test;
   cookie: string;
 }
 
@@ -94,6 +95,7 @@ export async function login(app: INestApplication, email: string): Promise<Sessi
     get: (p) => request(srv).get(p).set('Cookie', cookie),
     post: (p, b, h = {}) => request(srv).post(p).set('Cookie', cookie).set('X-CSRF-Token', csrf).set(h).send(b as object),
     patch: (p, b) => request(srv).patch(p).set('Cookie', cookie).set('X-CSRF-Token', csrf).send(b as object),
+    delete: (p) => request(srv).delete(p).set('Cookie', cookie).set('X-CSRF-Token', csrf),
   };
 }
 
