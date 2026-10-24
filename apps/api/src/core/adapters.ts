@@ -10,7 +10,12 @@ import {
   GraphMetaLeadsClient,
   LiveAmoChatsClient,
   LiveAmoRestClient,
+  BuiltinTestScanner,
+  ClamdScanner,
+  LocalPrivateStorage,
   ManualFlightProvider,
+  type MalwareScanner,
+  type StorageDriver,
   RedisRateLimiter,
   type AdapterDescriptor,
   type AmoChatsClient,
@@ -37,6 +42,8 @@ export interface Adapters {
   /** null when Direct is handled by a native amoCRM connector (we must not process it twice). */
   readonly amoChats: AmoChatsClient | null;
   readonly flight: FlightProvider;
+  readonly storage: StorageDriver;
+  readonly scanner: MalwareScanner;
   amoRest(conn: AmoConnectionRef): AmoRestClient;
   descriptors(): AdapterDescriptor[];
 }
@@ -46,6 +53,10 @@ export type TokenProviderFactory = (connectionId: string) => AmoTokenProvider;
 export function buildAdapters(config: AppConfig, redis: Redis, tokenProviderFor: TokenProviderFactory): Adapters {
   const limiter = new RedisRateLimiter(redis);
   const flight = new ManualFlightProvider();
+  const storage = new LocalPrivateStorage(config.storageDir);
+  const scanner: MalwareScanner = config.scanner.kind === 'clamav' ? new ClamdScanner(config.scanner.host, config.scanner.port) : new BuiltinTestScanner();
+  // The builtin scanner only knows the EICAR test signature: it counts as a mock outside demo.
+  const scannerDescriptor = { name: scanner.descriptor.name, kind: scanner.descriptor.kind === 'builtin' ? ('mock' as const) : ('live' as const) };
 
   if (config.mode === 'demo') {
     const store = new DemoStore(redis);
@@ -58,8 +69,10 @@ export function buildAdapters(config: AppConfig, redis: Redis, tokenProviderFor:
       metaDirect: new DemoMetaDirectClient(store),
       amoChats: config.directChannelMode === 'custom_channel' ? new DemoAmoChatsClient(store) : null,
       flight,
+      storage,
+      scanner,
       amoRest: () => amo,
-      descriptors: () => [amo.descriptor, adapters.metaLeads.descriptor, adapters.metaDirect.descriptor, ...(adapters.amoChats ? [adapters.amoChats.descriptor] : []), { name: flight.name, kind: 'manual' }],
+      descriptors: () => [amo.descriptor, adapters.metaLeads.descriptor, adapters.metaDirect.descriptor, ...(adapters.amoChats ? [adapters.amoChats.descriptor] : []), { name: flight.name, kind: 'manual' }, scannerDescriptor],
     };
     return adapters;
   }
@@ -75,6 +88,8 @@ export function buildAdapters(config: AppConfig, redis: Redis, tokenProviderFor:
     metaDirect,
     amoChats,
     flight,
+    storage,
+    scanner,
     amoRest: (conn) => {
       if (!conn.accountDomain) throw new Error('amoCRM connection has no account domain');
       return new LiveAmoRestClient(conn.accountDomain, tokenProviderFor(conn.id), limiter, `amo:${conn.accountId}`, config.amo.rps);
@@ -85,6 +100,7 @@ export function buildAdapters(config: AppConfig, redis: Redis, tokenProviderFor:
       metaDirect.descriptor,
       ...(amoChats ? [amoChats.descriptor] : []),
       { name: flight.name, kind: 'manual' },
+      scannerDescriptor,
     ],
   };
   assertAdaptersAllowed(config.mode, adapters.descriptors());

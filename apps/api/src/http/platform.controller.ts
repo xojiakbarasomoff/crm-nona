@@ -8,6 +8,11 @@ import { DemoAmoRestClient, DemoMetaLeadsClient, signMetaBody, type DemoFailure 
 import { createHmac } from 'node:crypto';
 import { eventsChannel, forbidden, notFound, requireCapOrThrow, type ChangeEvent, type Core, type UserActor } from './platform-helpers';
 import { Actor, CORE, parse, Public, requireDemo, send, UuidPipe as uuid, type AuthedRequest } from './common';
+import { enqueueOutbox } from '../core/queue';
+import { z } from 'zod';
+
+const RetentionSchema = z.object({ rawWebhookDays: z.number().int().min(1).max(3650), technicalLogDays: z.number().int().min(1).max(3650), messageContentMonths: z.number().int().min(1).max(120) }).strict();
+const EraseSchema = z.object({ reason: z.string().min(3).max(500) }).strict();
 
 @Controller()
 export class PlatformController {
@@ -79,6 +84,45 @@ export class PlatformController {
     const input = parse(AmoOAuthCallbackQuery, q);
     await this.core.oauth.callback(actor, { code: input.code, state: input.state, referer: input.referer });
     res.redirect(302, `${this.core.deps.config.appPublicUrl}/integrations?connected=amocrm`);
+  }
+
+  /** Initial amoCRM import runs in the worker (resumable checkpoints); 202 + operation id. */
+  @Post('api/v1/integrations/amocrm/import')
+  async amoImport(@Actor() actor: UserActor, @Res() res: Response) {
+    requireCapOrThrow(actor, 'integrations.manage');
+    const id = await this.core.deps.prisma.$transaction((tx) => enqueueOutbox(tx, { companyId: actor.companyId, operationKey: `amo.import:${Date.now()}`, target: 'amocrm', action: 'amo.import', payload: { requestedBy: actor.id } }));
+    send(res, 202, { operationId: id });
+  }
+
+  @Post('api/v1/integrations/lead-ads/backfill')
+  async leadAdsBackfill(@Actor() actor: UserActor, @Body() body: { since?: string }, @Res() res: Response) {
+    requireCapOrThrow(actor, 'integrations.manage');
+    const since = body?.since && !Number.isNaN(Date.parse(body.since)) ? new Date(body.since).toISOString() : null;
+    const id = await this.core.deps.prisma.$transaction((tx) => enqueueOutbox(tx, { companyId: actor.companyId, operationKey: `meta.backfill:${Date.now()}`, target: 'meta', action: 'meta.backfill', payload: { since, requestedBy: actor.id } }));
+    send(res, 202, { operationId: id });
+  }
+
+  @Get('api/v1/privacy/retention')
+  async retention(@Actor() actor: UserActor, @Res() res: Response) {
+    requireCapOrThrow(actor, 'integrations.manage');
+    send(res, 200, { policy: await this.core.privacy.policy(actor.companyId) });
+  }
+
+  @Post('api/v1/privacy/retention/confirm')
+  async confirmRetention(@Actor() actor: UserActor, @Body() body: unknown, @Res() res: Response) {
+    const input = parse(RetentionSchema, body);
+    send(res, 200, { policy: await this.core.privacy.confirmPolicy(actor, input) });
+  }
+
+  @Post('api/v1/privacy/retention/run')
+  async runRetention(@Actor() actor: UserActor, @Res() res: Response) {
+    requireCapOrThrow(actor, 'integrations.manage');
+    send(res, 200, await this.core.privacy.runRetention(actor.companyId));
+  }
+
+  @Post('api/v1/contacts/:id/erase')
+  async erase(@Actor() actor: UserActor, @Param('id', uuid) id: string, @Body() body: unknown, @Res() res: Response) {
+    send(res, 200, await this.core.privacy.eraseContact(actor, id, parse(EraseSchema, body).reason));
   }
 
   @Post('api/v1/integrations/:id/disconnect')

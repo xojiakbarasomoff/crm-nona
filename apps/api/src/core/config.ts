@@ -40,6 +40,12 @@ const schema = z.object({
   META_HUMAN_AGENT_WINDOW_HOURS: optionalNumber,
   META_HUMAN_AGENT_GRANTED: z.string().default('false'),
   STORAGE_LOCAL_DIR: z.string().default('./storage'),
+  SCANNER: z.enum(['builtin', 'clamav']).default('builtin'),
+  CLAMD_HOST: z.string().default('127.0.0.1'),
+  CLAMD_PORT: z.coerce.number().default(3310),
+  DOWNLOAD_URL_TTL_SECONDS: z.coerce.number().min(30).max(3600).default(300),
+  SLA_WARN_MINUTES: z.coerce.number().min(1).max(120).default(5),
+  META_LEADS_RETENTION_DAYS: z.coerce.number().min(1).max(3650).default(90),
   MAX_UPLOAD_BYTES: z.coerce.number().default(10 * 1024 * 1024),
   SCHEDULER_INTERVAL_MS: z.coerce.number().default(15_000),
   OUTBOX_INTERVAL_MS: z.coerce.number().default(1_000),
@@ -73,6 +79,10 @@ export interface AppConfig {
     humanAgentGranted: boolean;
   };
   storageDir: string;
+  scanner: { kind: 'builtin' | 'clamav'; host: string; port: number };
+  downloadUrlTtlSeconds: number;
+  slaWarnMinutes: number;
+  metaLeadsRetentionDays: number;
   maxUploadBytes: number;
   schedulerIntervalMs: number;
   outboxIntervalMs: number;
@@ -112,6 +122,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       humanAgentGranted: e.META_HUMAN_AGENT_GRANTED === 'true',
     },
     storageDir: e.STORAGE_LOCAL_DIR,
+    scanner: { kind: e.SCANNER, host: e.CLAMD_HOST, port: e.CLAMD_PORT },
+    downloadUrlTtlSeconds: e.DOWNLOAD_URL_TTL_SECONDS,
+    slaWarnMinutes: e.SLA_WARN_MINUTES,
+    metaLeadsRetentionDays: e.META_LEADS_RETENTION_DAYS,
     maxUploadBytes: e.MAX_UPLOAD_BYTES,
     schedulerIntervalMs: Math.min(e.SCHEDULER_INTERVAL_MS, 30_000),
     outboxIntervalMs: e.OUTBOX_INTERVAL_MS,

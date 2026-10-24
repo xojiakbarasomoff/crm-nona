@@ -1,0 +1,6 @@
+{
+  "_provenance": "synthetic (REST v4 list shape [S04]); not captured",
+  "_page": 2,
+  "_links": { "self": { "href": "https://example.amocrm.ru/api/v4/leads?page=2&limit=2" } },
+  "_embedded": { "leads": [ { "id": 50000103, "name": "Lid C", "responsible_user_id": null, "status_id": 7100002, "pipeline_id": 7000001, "created_at": 1761200200, "updated_at": 1761300200, "_embedded": { "contacts": [] } } ] }
+}

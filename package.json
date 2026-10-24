@@ -31,7 +31,8 @@
     "perf:seed": "tsx --conditions=development --env-file-if-exists=.env packages/database/src/perf-seed.ts",
     "perf:measure": "tsx --conditions=development apps/worker/src/cli/perf-measure.ts",
     "perf:webhook": "tsx --conditions=development --env-file-if-exists=.env apps/worker/src/cli/perf-webhook.ts",
-    "admin:invite": "tsx --conditions=development --env-file-if-exists=.env apps/worker/src/cli/admin-invite.ts"
+    "admin:invite": "tsx --conditions=development --env-file-if-exists=.env apps/worker/src/cli/admin-invite.ts",
+    "perf:monitor": "tsx --conditions=development apps/worker/src/cli/perf-monitor.ts"
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",

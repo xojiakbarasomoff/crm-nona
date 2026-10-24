@@ -104,6 +104,11 @@ export class AdminService {
     const now = this.d.clock.now().getTime();
     const metricKeys = ['webhook_count', 'signature_failures', 'inbox_retries', 'inbox_dead', 'outbox_retries', 'outbox_dead', 'provider_429', 'token_refresh_failures', 'sync_conflicts'];
     const values = await this.d.redis.mget(...metricKeys.map((k) => `metrics:${k}`)).catch(() => metricKeys.map(() => null));
+    const checkpoints = await this.d.prisma.syncCheckpoint.findMany({ where: { companyId: actor.companyId }, select: { stream: true, lastRunAt: true, lastResult: true, cursor: true }, orderBy: { stream: 'asc' } });
+    const company = await this.d.prisma.company.findUniqueOrThrow({ where: { id: actor.companyId } });
+    const retention = ((company.settings ?? {}) as { retention?: { confirmed?: boolean } }).retention ?? null;
+    const slaBreachesOpen = await this.d.prisma.lead.count({ where: { companyId: actor.companyId, slaBreachedAt: { not: null }, firstHumanActionAt: null, deletedAt: null, stage: { notIn: ['WON', 'LOST'] } } });
+    const attachmentsPendingScan = await this.d.prisma.attachment.count({ where: { companyId: actor.companyId, scanState: 'pending', deletedAt: null } });
     const overdue = await this.d.prisma.reminderOccurrence.count({ where: { companyId: actor.companyId, state: 'due', dispatchedAt: { lt: new Date(now - 15 * 60_000) } } });
     return {
       appMode: this.d.config.mode,
@@ -119,6 +124,12 @@ export class AdminService {
       needsOperator: unknown,
       metrics: Object.fromEntries(metricKeys.map((k, i) => [k, Number(values[i] ?? 0)])),
       overdueReminders: overdue,
+      checkpoints,
+      retention: retention ? { ...retention, status: retention.confirmed ? 'active' : 'not_confirmed_purge_disabled' } : { status: 'not_configured' },
+      slaBreachesOpen,
+      attachmentsPendingScan,
+      scanner: this.d.adapters.scanner.descriptor,
+      storage: this.d.adapters.storage.descriptor,
     };
   }
 }

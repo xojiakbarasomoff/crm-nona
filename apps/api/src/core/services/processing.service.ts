@@ -102,7 +102,7 @@ export class ProcessingService {
       if (signal.action === 'delete') {
         const lead = await this.d.prisma.lead.findFirst({ where: { companyId: conn.companyId, amoLeadId: signal.id } });
         if (lead && !lead.deletedAt) {
-          await this.d.prisma.$transaction((tx) => this.leads.applyRemoteSnapshot(tx, conn.companyId, { id: signal.id, name: lead.name, pipelineId: '', statusId: '', responsibleUserId: null, price: null, updatedAt: this.d.clock.now(), closedAt: null, contactIds: [], customFields: {}, deleted: true }, { origin: 'amocrm' }));
+          await this.d.prisma.$transaction((tx) => this.leads.applyRemoteSnapshot(tx, conn.companyId, { id: signal.id, name: lead.name, pipelineId: '', statusId: '', responsibleUserId: null, price: null, updatedAt: this.d.clock.now(), createdAt: null, closedAt: null, contactIds: [], customFields: {}, deleted: true }, { origin: 'amocrm' }));
         }
       }
       return 'processed';
@@ -248,6 +248,15 @@ export class ProcessingService {
         return this.handleEnrich(p.inquiryId as string, p.adId as string, p.connectionId as string);
       case 'meta.send':
         return this.handleMetaSend(op, p.messageId as string, (p.tag as 'HUMAN_AGENT' | null) ?? null);
+      case 'amo.import': {
+        const { AmoSyncService } = await import('./amo-sync.service');
+        return { kind: 'done', result: await new AmoSyncService(this.d).importInitial(op.companyId) };
+      }
+      case 'meta.backfill': {
+        const { LeadAdsBackfillService } = await import('./lead-ads-backfill.service');
+        const since = typeof p.since === 'string' ? new Date(p.since) : undefined;
+        return { kind: 'done', result: (await new LeadAdsBackfillService(this.d).run(op.companyId, { since })) as unknown as Record<string, unknown> };
+      }
       default:
         throw new ProviderError(`Unknown outbox action ${op.action}`, 'validation', null);
     }

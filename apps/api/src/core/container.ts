@@ -6,6 +6,11 @@ import type { AppConfig } from './config';
 import { systemClock, type Clock, type CoreDeps } from './context';
 import { createLogger, type Logger } from './logger';
 import { AdminService } from './services/admin.service';
+import { AttachmentsService } from './services/attachments.service';
+import { SlaService } from './services/sla.service';
+import { PrivacyService } from './services/privacy.service';
+import { AmoSyncService } from './services/amo-sync.service';
+import { LeadAdsBackfillService } from './services/lead-ads-backfill.service';
 import { AuthService } from './services/auth.service';
 import { DashboardService } from './services/dashboard.service';
 import { IntakeService } from './services/intake.service';
@@ -30,6 +35,11 @@ export interface Core {
   dashboard: DashboardService;
   webhooks: WebhooksService;
   admin: AdminService;
+  attachments: AttachmentsService;
+  sla: SlaService;
+  privacy: PrivacyService;
+  amoSync: AmoSyncService;
+  leadAdsBackfill: LeadAdsBackfillService;
   close(): Promise<void>;
 }
 
@@ -63,6 +73,11 @@ export function createCore(config: AppConfig, o: CoreOverrides = {}): Core {
     dashboard: new DashboardService(deps),
     webhooks: new WebhooksService(deps),
     admin: new AdminService(deps),
+    attachments: new AttachmentsService(deps),
+    sla: new SlaService(deps),
+    privacy: new PrivacyService(deps),
+    amoSync: new AmoSyncService(deps),
+    leadAdsBackfill: new LeadAdsBackfillService(deps),
     async close() {
       if (!o.prisma) await prisma.$disconnect();
       if (!o.redis) redis.disconnect();

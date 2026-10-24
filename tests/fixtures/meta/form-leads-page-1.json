@@ -1,0 +1,8 @@
+{
+  "_provenance": "synthetic (Graph /{form-id}/leads shape [S09]); not captured",
+  "data": [
+    { "id": "140000000000201", "created_time": "2026-10-20T10:00:00+0000", "form_id": "130000000000021", "ad_id": "120000000000011", "field_data": [ { "name": "full_name", "values": ["A"] } ] },
+    { "id": "140000000000202", "created_time": "2026-10-20T11:00:00+0000", "form_id": "130000000000021", "field_data": [] }
+  ],
+  "paging": { "cursors": { "before": "QVFIUmFh", "after": "QVFIUmJi" }, "next": "https://graph.facebook.com/vX/130000000000021/leads?after=QVFIUmJi" }
+}

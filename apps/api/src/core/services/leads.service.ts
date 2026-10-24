@@ -250,7 +250,13 @@ export class LeadsService {
       const pending: PendingChange = { operationKey, stage: target, requestedBy: actor.id, requestedAt: this.d.clock.now().toISOString() };
       await tx.lead.update({
         where: { id },
-        data: { pendingChange: pending as unknown as Prisma.InputJsonValue, syncState: lead.amoLeadId ? 'pending' : lead.syncState, returnStage: check.returnStage ?? (lead.stage === 'FOLLOW_UP' ? null : lead.returnStage), version: { increment: 1 } },
+        data: {
+          pendingChange: pending as unknown as Prisma.InputJsonValue,
+          syncState: lead.amoLeadId ? 'pending' : lead.syncState,
+          returnStage: check.returnStage ?? (lead.stage === 'FOLLOW_UP' ? null : lead.returnStage),
+          ...(lead.firstHumanActionAt ? {} : { firstHumanActionAt: this.d.clock.now() }),
+          version: { increment: 1 },
+        },
       });
       await enqueueOutbox(tx, { companyId: actor.companyId, operationKey, target: 'amocrm', action: 'lead.stage', payload: { leadId: id, stage: target, reason: extra.reason ?? null, requestedBy: actor.id } });
       await audit(tx, actor, { entityType: 'lead', entityId: id, action: 'stage_change_requested', oldValue: { stage: lead.stage }, newValue: { stage: target } });

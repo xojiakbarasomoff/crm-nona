@@ -88,6 +88,7 @@ export class OrdersService {
           createdById: actor.id,
         },
       });
+      await tx.lead.updateMany({ where: { id: leadId, firstHumanActionAt: null }, data: { firstHumanActionAt: this.d.clock.now() } });
       await audit(tx, actor, { entityType: 'offer', entityId: offer.id, action: 'created', newValue: { leadId, version, amount: input.amount, currency: input.currency } });
       return offer;
     });

@@ -28,6 +28,8 @@ export interface MetaLeadsClient {
   readonly descriptor: { name: string; kind: 'mock' | 'live' };
   fetchLead(leadgenId: string, accessToken: string): Promise<MetaLeadData>;
   fetchAdNames(adId: string, accessToken: string): Promise<MetaAdNames>;
+  /** Lists leads of one form created after `since`, one page at a time (cursor pagination). */
+  listFormLeads(formId: string, since: Date, after: string | null, accessToken: string, limit?: number): Promise<{ items: MetaLeadData[]; after: string | null }>;
 }
 
 export interface MetaSendResult {
@@ -56,6 +58,18 @@ export class GraphMetaLeadsClient implements MetaLeadsClient {
     const url = `${this.baseUrl}/${this.version}/${encodeURIComponent(leadgenId)}?fields=${fields}`;
     const raw = await requestJson<Json>(url, { headers: { Authorization: `Bearer ${accessToken}` } }, this.fetchImpl);
     return normalizeLead(leadgenId, raw);
+  }
+
+  async listFormLeads(formId: string, since: Date, after: string | null, accessToken: string, limit = 100) {
+    const filtering = encodeURIComponent(JSON.stringify([{ field: 'time_created', operator: 'GREATER_THAN', value: Math.floor(since.getTime() / 1000) }]));
+    const fields = 'created_time,field_data,form_id,ad_id,adset_id,campaign_id,platform';
+    const url = `${this.baseUrl}/${this.version}/${encodeURIComponent(formId)}/leads?fields=${fields}&filtering=${filtering}&limit=${limit}${after ? `&after=${encodeURIComponent(after)}` : ''}`;
+    const raw = await requestJson<Json>(url, { headers: { Authorization: `Bearer ${accessToken}` } }, this.fetchImpl);
+    const data = Array.isArray(raw?.data) ? (raw.data as Json[]) : [];
+    const paging = (raw?.paging ?? {}) as Json;
+    const cursors = (paging.cursors ?? {}) as Json;
+    const nextAfter = typeof paging.next === 'string' && typeof cursors.after === 'string' ? cursors.after : null;
+    return { items: data.map((d) => normalizeLead(String(d.id), d)), after: nextAfter };
   }
 
   async fetchAdNames(adId: string, accessToken: string): Promise<MetaAdNames> {

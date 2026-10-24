@@ -1,0 +1,4 @@
+{
+  "_provenance": "synthetic (REST v4 contacts shape); not captured",
+  "_embedded": { "contacts": [ { "id": 60000101, "name": "Test Mijoz", "responsible_user_id": 9000003, "updated_at": 1761300000, "custom_fields_values": [ { "field_code": "PHONE", "values": [ { "value": "+998900000101", "enum_code": "WORK" } ] }, { "field_code": "EMAIL", "values": [ { "value": "Test@Example.com" } ] } ] } ] }
+}

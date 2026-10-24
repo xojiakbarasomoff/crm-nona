@@ -23,6 +23,7 @@ export interface AmoLeadSnapshot {
   responsibleUserId: string | null;
   price: number | null;
   updatedAt: Date;
+  createdAt: Date | null;
   closedAt: Date | null;
   contactIds: string[];
   customFields: Record<string, string>;

@@ -51,6 +51,8 @@ export class WorkerRuntime {
     this.every('scheduler', config.schedulerIntervalMs, () => this.schedulerTick());
     this.every('heartbeat', 15_000, () => this.heartbeat());
     this.every('reconcile', config.reconcileIntervalMs, () => this.reconcileAmo());
+    this.every('housekeeping', 60_000, () => this.housekeeping());
+    this.every('daily', 24 * 3600_000, () => this.daily());
     this.core.deps.logger.info({ worker: this.id, mode: config.mode }, 'worker started');
   }
 
@@ -84,36 +86,26 @@ export class WorkerRuntime {
     await this.core.deps.prisma.workerHeartbeat.upsert({ where: { name }, create: { name, lastBeatAt: now, info: info as object }, update: { lastBeatAt: now, info: info as object } });
   }
 
-  /**
-   * Incremental amoCRM reconciliation every 5 minutes with a checkpoint and a 10-minute overlap
-   * (TZ §5.2). Snapshots are applied idempotently and monotonically.
-   */
+  /** Incremental amoCRM reconciliation (5 min, overlap) + daily control once per 24 h. */
   async reconcileAmo() {
     const conns = await this.core.deps.prisma.integrationConnection.findMany({ where: { provider: 'AMOCRM_REST', disconnectedAt: null, health: 'ok' } });
     for (const conn of conns) {
-      const cp = await this.core.deps.prisma.syncCheckpoint.findUnique({ where: { connectionId_stream: { connectionId: conn.id, stream: 'leads' } } });
-      const startedAt = new Date();
-      const since = new Date(((cp?.cursor as { since?: string } | null)?.since ? Date.parse((cp!.cursor as { since: string }).since) : startedAt.getTime() - 24 * 3600_000) - 10 * 60_000);
-      const client = this.core.deps.adapters.amoRest(conn);
-      let page = 1;
-      let applied = 0;
-      let seen = 0;
-      for (;;) {
-        const r = await client.listLeadsUpdatedSince(since, page, 250);
-        for (const snap of r.items) {
-          seen++;
-          const res = await this.core.deps.prisma.$transaction((tx) => this.core.leads.applyRemoteSnapshot(tx, conn.companyId, snap, { origin: 'reconcile' }));
-          if (res.applied) applied++;
-        }
-        if (!r.hasMore || page >= 200) break;
-        page++;
-      }
-      await this.core.deps.prisma.syncCheckpoint.upsert({
-        where: { connectionId_stream: { connectionId: conn.id, stream: 'leads' } },
-        create: { companyId: conn.companyId, connectionId: conn.id, stream: 'leads', cursor: { since: startedAt.toISOString() }, lastRunAt: startedAt, lastResult: { seen, applied } },
-        update: { cursor: { since: startedAt.toISOString() }, lastRunAt: startedAt, lastResult: { seen, applied } },
-      });
-      await this.core.deps.prisma.integrationConnection.update({ where: { id: conn.id }, data: { lastSyncAt: startedAt } });
+      await this.core.amoSync.reconcile(conn);
+      await this.core.amoSync.dailyAuditIfDue(conn);
+    }
+  }
+
+  /** SLA, attachment scanning (frequent) and retention + tombstone re-application (daily). */
+  async housekeeping() {
+    await this.core.sla.tick();
+    await this.core.attachments.scanPending();
+  }
+
+  async daily() {
+    const companies = await this.core.deps.prisma.company.findMany({ select: { id: true } });
+    for (const c of companies) {
+      await this.core.privacy.runRetention(c.id);
+      await this.core.privacy.reapplyTombstones(c.id);
     }
   }
 

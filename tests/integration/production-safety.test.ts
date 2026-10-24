@@ -3,7 +3,7 @@ import { assertProductionSafety } from '../../apps/api/src/core';
 import { DEMO_PASSWORD } from '../../packages/database/src/seed';
 import { makeCore } from './helpers';
 
-const staging = makeCore({ env: { APP_MODE: 'staging', COOKIE_SECURE: 'true', META_GRAPH_VERSION: 'v-test', AMO_CHAT_CHANNEL_ID: 'test-channel' } });
+const staging = makeCore({ env: { APP_MODE: 'staging', COOKIE_SECURE: 'true', META_GRAPH_VERSION: 'v-test', AMO_CHAT_CHANNEL_ID: 'test-channel', SCANNER: 'clamav' } });
 const demo = makeCore();
 
 afterAll(async () => {

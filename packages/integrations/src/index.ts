@@ -11,3 +11,4 @@ export * from './amocrm/rest-client';
 export * from './amocrm/webhook';
 export * from './amocrm/chats';
 export * from './demo/adapters';
+export * from './files';

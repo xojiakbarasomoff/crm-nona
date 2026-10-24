@@ -215,6 +215,7 @@ export class DashboardService {
         won: wonInPeriod(facts, start, end),
         lost: lostCount,
         cancelledOrders: cancelledOrdersCount,
+        slaBreaches: cohort.length ? Number((await q<{ n: bigint }>(Prisma.sql`SELECT count(*)::bigint AS n FROM leads l WHERE ${where} AND l.sla_breached_at >= ${start} AND l.sla_breached_at < ${end}`))[0]?.n ?? 0) : 0,
         cohortConversion: cohortConversion(facts, start, end),
         closedConversion: closedConversion(facts, start, end),
         salesByCurrency: moneyMap(salesByCurrency),

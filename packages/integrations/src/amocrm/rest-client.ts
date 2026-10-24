@@ -247,6 +247,7 @@ export function toLead(r: Json): AmoLeadSnapshot {
     responsibleUserId: r.responsible_user_id ? String(r.responsible_user_id) : null,
     price: typeof r.price === 'number' ? r.price : null,
     updatedAt: new Date(Number(r.updated_at) * 1000),
+    createdAt: r.created_at ? new Date(Number(r.created_at) * 1000) : null,
     closedAt: r.closed_at ? new Date(Number(r.closed_at) * 1000) : null,
     contactIds: contacts,
     customFields: customFieldMap(r.custom_fields_values),

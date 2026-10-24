@@ -88,8 +88,9 @@ function failureToError(f: DemoFailure, mutation: boolean): ProviderError {
   }
 }
 
-interface StoredLead extends Omit<AmoLeadSnapshot, 'updatedAt' | 'closedAt'> {
+interface StoredLead extends Omit<AmoLeadSnapshot, 'updatedAt' | 'closedAt' | 'createdAt'> {
   updatedAt: string;
+  createdAt: string | null;
   closedAt: string | null;
 }
 
@@ -128,10 +129,10 @@ export class DemoAmoRestClient implements AmoRestClient {
     const raw = await this.store.redis.get(this.store.k('amo', 'lead', id));
     if (!raw) return null;
     const s = JSON.parse(raw) as StoredLead;
-    return { ...s, updatedAt: new Date(s.updatedAt), closedAt: s.closedAt ? new Date(s.closedAt) : null };
+    return { ...s, updatedAt: new Date(s.updatedAt), createdAt: s.createdAt ? new Date(s.createdAt) : null, closedAt: s.closedAt ? new Date(s.closedAt) : null };
   }
   private async writeLead(l: AmoLeadSnapshot) {
-    const s: StoredLead = { ...l, updatedAt: l.updatedAt.toISOString(), closedAt: l.closedAt?.toISOString() ?? null };
+    const s: StoredLead = { ...l, updatedAt: l.updatedAt.toISOString(), createdAt: (l.createdAt ?? l.updatedAt).toISOString(), closedAt: l.closedAt?.toISOString() ?? null };
     await this.store.redis.set(this.store.k('amo', 'lead', l.id), JSON.stringify(s));
     await this.store.redis.zadd(this.store.k('amo', 'leads_by_updated'), l.updatedAt.getTime(), l.id);
   }
@@ -155,8 +156,32 @@ export class DemoAmoRestClient implements AmoRestClient {
     return { items, hasMore: ids.length > limit };
   }
 
-  async listContactsUpdatedSince() {
-    return { items: [], hasMore: false };
+  async listContactsUpdatedSince(since: Date, page: number, limit: number) {
+    await this.maybeFail(false);
+    const ids = await this.store.redis.zrangebyscore(this.store.k('amo', 'contacts_by_updated'), since.getTime(), '+inf', 'LIMIT', (page - 1) * limit, limit + 1);
+    const items = (await Promise.all(ids.slice(0, limit).map((id) => this.getContact(id)))).filter((x): x is AmoContactSnapshot => !!x);
+    return { items, hasMore: ids.length > limit };
+  }
+
+  private async writeContact(c: AmoContactSnapshot) {
+    await this.store.redis.set(this.store.k('amo', 'contact', c.id), JSON.stringify({ ...c, updatedAt: c.updatedAt.toISOString() }));
+    await this.store.redis.zadd(this.store.k('amo', 'contacts_by_updated'), c.updatedAt.getTime(), c.id);
+  }
+
+  /** Demo-only: a lead and contact created natively in amoCRM (not through this system). */
+  async simulateNativeCreate(p: { name: string; contactName: string; phone: string | null; statusId: string; responsibleUserId: string | null; createdAt?: Date }) {
+    const contactId = await this.store.seq('contact');
+    const leadId = await this.store.seq('lead');
+    const at = p.createdAt ?? new Date();
+    await this.writeContact({ id: contactId, name: p.contactName, phones: p.phone ? [p.phone] : [], emails: [], responsibleUserId: p.responsibleUserId, updatedAt: at, customFields: {}, deleted: false });
+    await this.writeLead({ id: leadId, name: p.name, pipelineId: DEMO_PIPELINE_ID, statusId: p.statusId, responsibleUserId: p.responsibleUserId, price: null, updatedAt: at, createdAt: at, closedAt: null, contactIds: [contactId], customFields: {}, deleted: false });
+    return { leadId, contactId };
+  }
+
+  /** Demo-only: removes a lead from amoCRM entirely (as if deleted and purged). */
+  async simulateHardDelete(leadId: string) {
+    await this.store.redis.del(this.store.k('amo', 'lead', leadId));
+    await this.store.redis.zrem(this.store.k('amo', 'leads_by_updated'), leadId);
   }
 
   async createLeadWithContact(input: CreateLeadInput) {
@@ -179,6 +204,7 @@ export class DemoAmoRestClient implements AmoRestClient {
         deleted: false,
       };
       await this.store.redis.set(this.store.k('amo', 'contact', contactId), JSON.stringify(contact));
+      await this.store.redis.zadd(this.store.k('amo', 'contacts_by_updated'), Date.parse(contact.updatedAt), contactId);
     }
     const customFields: Record<string, string> = { operation_id: input.operationId };
     for (const c of input.customFields) customFields[c.fieldId] = c.value;
@@ -190,6 +216,7 @@ export class DemoAmoRestClient implements AmoRestClient {
       responsibleUserId: input.responsibleUserId,
       price: null,
       updatedAt: new Date(),
+      createdAt: new Date(),
       closedAt: null,
       contactIds: [contactId],
       customFields,
@@ -298,6 +325,17 @@ export class DemoMetaLeadsClient implements MetaLeadsClient {
   /** Demo-only: registers form answers that a later leadgen webhook will reference. */
   async registerLead(data: MetaLeadData) {
     await this.store.redis.set(this.store.k('meta', 'lead', data.leadgenId), JSON.stringify(data));
+    if (data.formId) await this.store.redis.zadd(this.store.k('meta', 'form', data.formId), (data.createdTime ?? new Date()).getTime(), data.leadgenId);
+  }
+
+  /** Cursor = numeric offset; small default page size exercises pagination. */
+  async listFormLeads(formId: string, since: Date, after: string | null, _token: string, limit = 2) {
+    const f = await this.store.takeFailure('meta_leads');
+    if (f) throw failureToError(f, false);
+    const offset = after ? Number(after) : 0;
+    const ids = await this.store.redis.zrangebyscore(this.store.k('meta', 'form', formId), `(${since.getTime()}`, '+inf', 'LIMIT', offset, limit + 1);
+    const items = await Promise.all(ids.slice(0, limit).map((id) => this.fetchLead(id)));
+    return { items, after: ids.length > limit ? String(offset + limit) : null };
   }
 
   async fetchLead(leadgenId: string): Promise<MetaLeadData> {

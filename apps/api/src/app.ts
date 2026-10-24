@@ -9,13 +9,15 @@ import { AuthGuard, CORE, ErrorFilter, requestIdMiddleware } from './http/common
 import { OperationsController } from './http/operations.controller';
 import { PlatformController } from './http/platform.controller';
 import { SalesController } from './http/sales.controller';
+import { FilesController } from './http/files.controller';
+import { ALLOWED_MIME } from '@crm/integrations';
 
 @Module({})
 class AppModule {
   static register(core: Core): DynamicModule {
     return {
       module: AppModule,
-      controllers: [AuthController, SalesController, OperationsController, PlatformController],
+      controllers: [AuthController, SalesController, OperationsController, PlatformController, FilesController],
       providers: [{ provide: CORE, useValue: core }, { provide: APP_GUARD, useClass: AuthGuard }],
     };
   }
@@ -30,6 +32,8 @@ export async function createApp(core: Core): Promise<INestApplication> {
   app.useBodyParser('json', { limit: '1mb' });
   app.useBodyParser('urlencoded', { extended: false, limit: '1mb' });
   app.useBodyParser('text', { type: 'text/*', limit: '1mb' });
+  // Attachment uploads arrive as raw bytes; the service enforces the real size limit and type.
+  app.useBodyParser('raw', { type: [...ALLOWED_MIME, 'application/octet-stream', 'application/zip', 'image/gif', 'application/x-msdownload'], limit: core.deps.config.maxUploadBytes * 2 });
   app.useGlobalFilters(new ErrorFilter((o, m) => core.deps.logger.error(o, m)));
   app.enableShutdownHooks();
   return app;
