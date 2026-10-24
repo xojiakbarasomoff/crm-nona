@@ -52,6 +52,14 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run test:integration
+      - name: Real services (SeaweedFS S3 + ClamAV)
+        run: |
+          docker run -d --name seaweedfs -p 58333:8333 -v "$PWD/infra/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro" chrislusf/seaweedfs:3.97 server -dir=/data -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json -volume.max=0 -master.volumeSizeLimitMB=256
+          docker run -d --name clamav -p 53310:3310 clamav/clamav:1.4.3
+          for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:58333 && break; sleep 2; done
+          for i in $(seq 1 90); do docker exec clamav clamdcheck.sh >/dev/null 2>&1 && break; sleep 5; done
+          STORAGE_DRIVER=s3 S3_ENDPOINT=http://127.0.0.1:58333 S3_BUCKET=crm-files-test S3_ACCESS_KEY_ID=crm_local_access S3_SECRET_ACCESS_KEY=crm_local_secret_only_for_dev npm run storage:init
+          npm run test:services
       - run: npm run build
       - name: E2E
         run: |

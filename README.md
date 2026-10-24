@@ -22,7 +22,9 @@ tests               contract fixture’lar, integration (real PG/Redis), E2E (Pl
 
 ## Talablar
 
-Node.js **22.12 yoki yangiroq** (tavsiya: `.nvmrc` dagi 22.23.4; Prisma 7 eski Node’da o‘rnatilmaydi), npm 10, Docker Desktop. Portlar: PostgreSQL 55432, Redis 56379, API 4100, web 3100.
+Node.js **22.12 yoki yangiroq** (tavsiya: `.nvmrc` dagi 22.23.4), npm 10, Docker Desktop.
+
+Node mosligi: ilova (API, worker, web) Node 22.11 da ham ishga tushadi, lekin `npm ci`/`npm install` (Prisma 7 preinstall tekshiruvi), `npm run db:migrate`/`db:generate` (Prisma CLI ESM moduli `require` qiladi — Node 22.12+) va testlar 22.12+ talab qiladi. Windows’da yangilash: https://nodejs.org dan 22.x LTS o‘rnatuvchisi yoki `winget install OpenJS.NodeJS.LTS`. Portlar: PostgreSQL 55432, Redis 56379, API 4100, web 3100.
 
 ## Lokal ishga tushirish (demo)
 
@@ -62,6 +64,8 @@ Docker’da to‘liq stack: `docker compose -f infra/docker-compose.yml --profil
 | `npm run typecheck` | barcha paketlar uchun `tsc` (oldin `npm run db:generate`) |
 | `npm test` | unit + contract testlar |
 | `npm run test:integration` | real PostgreSQL + Redis (har ishga tushishda yangi `crm_it_*` baza yaratiladi va o‘chiriladi) |
+| `npm run test:services` | Haqiqiy SeaweedFS (S3) va ClamAV bilan testlar — avval `docker compose -f infra/docker-compose.yml --profile services up -d seaweedfs clamav` |
+| `npm run storage:init` | `STORAGE_DRIVER=s3` uchun private bucket yaratish/tekshirish |
 | `npm run test:e2e` | Playwright (api/worker/web’ni o‘zi ishga tushiradi yoki mavjudini ishlatadi) |
 | `npm run build` | API/worker bundle (tsup) va Next.js build |
 | `npm run db:migrate` / `npm run db:seed` | migratsiya / sun’iy seed |

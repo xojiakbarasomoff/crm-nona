@@ -13,8 +13,8 @@ Holat: 2026-10-24. Tizim **production tayyor emas** — quyidagi bloklar tashqi 
 
 ## 2. Infratuzilmaga bog‘liq (⛔)
 
-- **ClamAV (clamd)**: protokol implement qilingan va soxta clamd bilan contract-testlangan; haqiqiy clamd bilan sinalmagan. Production’da `SCANNER=clamav` majburiy (builtin faqat EICAR’ni taniydi va demo’dan tashqarida rad etiladi).
-- **Object storage**: faqat lokal private katalog adapteri bor. S3-mos storage adapteri yozilmagan; production uchun shifrlangan, backup qilinadigan volume yoki adapter qo‘shish kerak.
+- **ClamAV production deploy**: haqiqiy `clamav/clamav:1.4.3` daemon bilan lokal sinalgan (`npm run test:services`, 12 test). Production’da clamd’ni joylashtirish, signatura yangilanishi (freshclam) monitoringi va yuklama ostida skan vaqti sinalmagan.
+- **Bulutli object storage**: S3-mos adapter implement qilingan va lokal SeaweedFS’da sinalgan (private bucket, anonim o‘qish rad etiladi). Haqiqiy bulut provayderi (AWS S3, Cloudflare R2, Yandex Object Storage va h.k.), server-side shifrlash (`S3_SSE`), versioning va lifecycle siyosati provayderda sozlanmagan va sinalmagan.
 - **PITR production**: konfiguratsiya va yo‘riqnoma bor, lokal mashq o‘tgan; off-site (object storage) WAL arxivi, haqiqiy hajmdagi RTO ≤ 4 soat mashqi, boshqariladigan PostgreSQL bajarilmagan.
 - Staging/production deploy, TLS, secret manager, hosting hududi, Docker registry, image imzolash va zaiflik skanerlash.
 - Unumdorlikni ajratilgan 4 vCPU/8 GB muhitda qayta o‘lchash (hozirgi raqamlar noutbukda).
@@ -34,6 +34,6 @@ Holat: 2026-10-24. Tizim **production tayyor emas** — quyidagi bloklar tashqi 
 - Kontakt ismi/telefonini web’dan amoCRM’ga yozish yo‘li yo‘q (faqat amoCRM’da tahrirlanadi va proyeksiyalanadi).
 - `ENCRYPTION_KEY` rotatsiyasi uchun qayta shifrlash skripti yo‘q.
 - Prisma 7: so‘rov rejasi va natijani map qilish Node process’ida — dashboard 20 parallelda 1,7–1,8 s (maqsad 2 s, zaxira kam). `$queryRaw` `void` ustunni o‘qimaydi.
-- Mahalliy ishlab chiqish uchun Node ≥ 22.12 kerak (tavsiya 22.23.4).
+- Node: ilova runtime’i Node 22.11 da ham ishlaydi, lekin `npm ci`/`npm install`, `prisma migrate|generate` va testlar Node ≥ 22.12 talab qiladi (Prisma 7). Tavsiya: 22.23.4 (`.nvmrc`).
 - Next.js 15 va NestJS 11 hali patch oladi; 16/12 major’ga o‘tish alohida vazifa.
-- AC10 bir marta yuklangan mashinada to‘liq suite’da muvaffaqiyatsiz bo‘ldi va qayta tiklanmadi; test diagnostika bilan kuchaytirilgan.
+- Builtin (demo) skaner EICAR qatorini fayl ichida istalgan joyda topadi; haqiqiy ClamAV EICAR standartiga ko‘ra uni faqat fayl boshida taniydi (arxiv ichidagi faylda ham). Demo va real skaner natijalari shu holatda farq qiladi.
