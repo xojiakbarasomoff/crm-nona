@@ -35,6 +35,7 @@ function LoginForm() {
         }
       }}
     >
+      <img className="login-logo" src="/nona-logo-bordo.png" alt="NONA Travel" width={200} height={110} />
       <h1>Tizimga kirish</h1>
       <Field label="Email">
         <input type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
