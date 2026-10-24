@@ -2,7 +2,7 @@ import { execSync } from 'node:child_process';
 import { join } from 'node:path';
 import { Redis } from 'ioredis';
 import type { TestProject } from 'vitest/node';
-import { PrismaClient } from '../../packages/database/generated/client';
+import { PrismaClient } from '@prisma/client';
 
 declare module 'vitest' {
   export interface ProvidedContext {

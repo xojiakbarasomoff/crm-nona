@@ -57,8 +57,9 @@ export async function isolate(core: Core) {
   const store = core.deps.adapters.demoStore!;
   let cursor = '0';
   do {
-    const [next, keys] = await core.deps.redis.scan(cursor, 'MATCH', 'demo:fail:*', 'COUNT', 500);
-    if (keys.length) await core.deps.redis.del(...keys);
+    const [next, keys] = await core.deps.redis.scan(cursor, 'MATCH', '*', 'COUNT', 500);
+    const drop = keys.filter((k) => k.startsWith('demo:fail:') || k.startsWith('dash:'));
+    if (drop.length) await core.deps.redis.del(...drop);
     cursor = next;
   } while (cursor !== '0');
   void store;

@@ -1,6 +1,6 @@
-import { PrismaClient } from '../generated/client';
+import { PrismaClient } from '@prisma/client';
 
-export * from '../generated/client';
+export * from '@prisma/client';
 export { encryptSecret, decryptSecret, loadEncryptionKey } from './crypto';
 
 export type Tx = Omit<PrismaClient, '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'>;

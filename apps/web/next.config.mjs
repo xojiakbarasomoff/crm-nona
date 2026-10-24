@@ -1,7 +1,9 @@
+import { fileURLToPath } from 'node:url';
 /** @type {import('next').NextConfig} */
 const api = process.env.API_INTERNAL_URL ?? 'http://127.0.0.1:4100';
 export default {
   output: 'standalone',
+  outputFileTracingRoot: fileURLToPath(new URL('../../', import.meta.url)),
   reactStrictMode: true,
   poweredByHeader: false,
   eslint: { ignoreDuringBuilds: true },

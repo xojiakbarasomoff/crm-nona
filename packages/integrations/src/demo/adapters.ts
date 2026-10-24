@@ -275,6 +275,10 @@ export class DemoAmoRestClient implements AmoRestClient {
     await this.store.redis.rpush(this.store.k('amo', 'notes', entityType, entityId), text);
   }
 
+  async createPipelineStatus(_pipelineId: string, _name: string) {
+    return { id: await this.store.seq('status', 7_200_000) };
+  }
+
   async listCustomFields(entity: 'leads' | 'contacts') {
     const raw = await this.store.redis.hgetall(this.store.k('amo', 'fields', entity));
     return Object.entries(raw).map(([code, json]) => ({ ...(JSON.parse(json) as { id: string; name: string; type: string }), code }));

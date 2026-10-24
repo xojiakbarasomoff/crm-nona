@@ -79,6 +79,7 @@ export interface AmoRestClient {
   completeTask(taskId: string, resultText: string): Promise<void>;
   updateTaskResponsible(taskId: string, responsibleUserId: string): Promise<void>;
   addNote(entityType: 'leads' | 'contacts', entityId: string, text: string): Promise<void>;
+  createPipelineStatus(pipelineId: string, name: string): Promise<{ id: string }>;
   listCustomFields(entity: 'leads' | 'contacts'): Promise<Array<{ id: string; name: string; code: string | null; type: string }>>;
   createCustomField(entity: 'leads' | 'contacts', field: { name: string; type: string; code: string }): Promise<{ id: string }>;
 }

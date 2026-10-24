@@ -201,6 +201,13 @@ export class LiveAmoRestClient implements AmoRestClient {
     await this.call(`/api/v4/${entityType}/${encodeURIComponent(entityId)}/notes`, { method: 'POST', body: [{ note_type: 'common', params: { text } }], mutation: true });
   }
 
+  async createPipelineStatus(pipelineId: string, name: string) {
+    const r = await this.call<Json>(`/api/v4/leads/pipelines/${encodeURIComponent(pipelineId)}/statuses`, { method: 'POST', body: [{ name, sort: 100 }], mutation: true });
+    const s = (((r?._embedded as Json | undefined)?.statuses ?? []) as Json[])[0];
+    if (!s?.id) throw new ProviderError('Status create returned no id', 'unknown_outcome', null);
+    return { id: String(s.id) };
+  }
+
   async listCustomFields(entity: 'leads' | 'contacts') {
     const r = await this.call<Json | undefined>(`/api/v4/${entity}/custom_fields?limit=250`);
     return (((r?._embedded as Json | undefined)?.custom_fields ?? []) as Json[]).map((f) => ({

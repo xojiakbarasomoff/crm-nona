@@ -1,4 +1,4 @@
-import type { Channel, Prisma, Stage } from '@crm/database';
+import { Prisma, type Channel, type Stage } from '@crm/database';
 import {
   bucketKey,
   can,
@@ -8,6 +8,8 @@ import {
   firstResponseStats,
   formatMoney,
   percent,
+  sha256Hex,
+  stableStringify,
   sumByCurrency,
   wonInPeriod,
   workingMinutesBetween,
@@ -43,6 +45,8 @@ const median = (xs: number[]) => {
  * KPI formulas exactly as TZ §15.1. Period metrics and current snapshots are labelled separately.
  * Managers see only their own figures; filters are applied in the backend.
  */
+const inflight = new Map<string, Promise<unknown>>();
+
 export class DashboardService {
   constructor(private readonly d: CoreDeps) {}
 
@@ -58,40 +62,75 @@ export class DashboardService {
     };
   }
 
+  /** SQL scope for alias `l` (leads) — same rules as leadScope; used by aggregate queries. */
+  private scopeSql(actor: UserActor, f: DashboardFilters, departure: { start: Date; end: Date } | null): Prisma.Sql {
+    const ownerId = can(actor.role, 'dashboard.company') ? f.ownerId : actor.id;
+    const parts: Prisma.Sql[] = [Prisma.sql`l.company_id = ${actor.companyId}::uuid`, Prisma.sql`l.deleted_at IS NULL`];
+    if (ownerId) parts.push(Prisma.sql`l.owner_id = ${ownerId}::uuid`);
+    if (f.source) parts.push(Prisma.sql`l.first_source = ${f.source}::"Channel"`);
+    if (f.serviceType) parts.push(Prisma.sql`l.service_type = ${f.serviceType}`);
+    if (f.stage) parts.push(Prisma.sql`l.stage = ${f.stage}::"Stage"`);
+    if (departure) {
+      parts.push(Prisma.sql`EXISTS (SELECT 1 FROM orders o JOIN flight_segments s ON s.order_id = o.id WHERE o.lead_id = l.id AND s.active AND s.departure_at_utc >= ${departure.start} AND s.departure_at_utc < ${departure.end})`);
+    }
+    return Prisma.join(parts, ' AND ');
+  }
+
+  /** Short Redis cache per scope+filters; the payload carries generatedAt so staleness is visible. */
   async compute(actor: UserActor, f: DashboardFilters) {
+    const scopeKey = can(actor.role, 'dashboard.company') ? 'company' : `user:${actor.id}`;
+    const key = `dash:${actor.companyId}:${scopeKey}:${sha256Hex(stableStringify(f))}`;
+    const cached = await this.d.redis.get(key).catch(() => null);
+    if (cached) return JSON.parse(cached) as Awaited<ReturnType<DashboardService['computeFresh']>>;
+    // Single-flight: concurrent identical requests share one computation (no cache stampede).
+    const running = inflight.get(key);
+    if (running) return running as ReturnType<DashboardService['computeFresh']>;
+    const job = this.computeFresh(actor, f)
+      .then(async (fresh) => {
+        await this.d.redis.set(key, JSON.stringify(fresh), 'EX', 20).catch(() => undefined);
+        return fresh;
+      })
+      .finally(() => inflight.delete(key));
+    inflight.set(key, job);
+    return job;
+  }
+
+  async computeFresh(actor: UserActor, f: DashboardFilters) {
     const company = await this.d.prisma.company.findUniqueOrThrow({ where: { id: actor.companyId } });
     const { start, end } = companyDateRangeToUtc(f.from, f.to, company.timezone);
+    const departure = f.departureFrom && f.departureTo ? companyDateRangeToUtc(f.departureFrom, f.departureTo, company.timezone) : null;
     const scope = this.leadScope(actor, f);
-    if (f.departureFrom && f.departureTo) {
-      const dr = companyDateRangeToUtc(f.departureFrom, f.departureTo, company.timezone);
-      const orders = await this.d.prisma.flightSegment.findMany({ where: { companyId: actor.companyId, active: true, departureAtUtc: { gte: dr.start, lt: dr.end } }, select: { order: { select: { leadId: true } } } });
-      scope.id = { in: [...new Set(orders.map((o) => o.order.leadId))] };
-    }
+    if (departure) scope.orders = { some: { segments: { some: { active: true, departureAtUtc: { gte: departure.start, lt: departure.end } } } } };
+    const where = this.scopeSql(actor, f, departure);
+    const q = <T>(sql: Prisma.Sql) => this.d.prisma.$queryRaw<T[]>(sql);
 
-    // Leads relevant for the period: created in period, or closed in period.
-    const leads = await this.d.prisma.lead.findMany({
-      where: { ...scope, OR: [{ createdAt: { gte: start, lt: end } }, { closedAt: { gte: start, lt: end } }, { firstWonAt: { gte: start, lt: end } }] },
-      select: { id: true, createdAt: true, stage: true, firstWonAt: true, firstSource: true, firstHumanActionAt: true, ownerId: true },
-    });
+    // Leads relevant for the period: created, closed or first won in the period.
+    const leads = await q<{ id: string; createdAt: Date; stage: string; firstWonAt: Date | null; firstSource: string; firstHumanActionAt: Date | null; ownerId: string | null }>(Prisma.sql`
+      SELECT l.id, l.created_at AS "createdAt", l.stage::text AS stage, l.first_won_at AS "firstWonAt", l.first_source::text AS "firstSource",
+             l.first_human_action_at AS "firstHumanActionAt", l.owner_id AS "ownerId"
+      FROM leads l
+      WHERE ${where} AND ((l.created_at >= ${start} AND l.created_at < ${end}) OR (l.closed_at >= ${start} AND l.closed_at < ${end}) OR (l.first_won_at >= ${start} AND l.first_won_at < ${end}))`);
     const leadIds = leads.map((l) => l.id);
-    const closeEvents = leadIds.length
-      ? await this.d.prisma.leadEvent.findMany({ where: { companyId: actor.companyId, leadId: { in: leadIds }, newStage: { in: ['WON', 'LOST'] } }, select: { leadId: true, newStage: true, effectiveAt: true } })
-      : [];
-    const ownerEvents = leadIds.length
-      ? await this.d.prisma.leadEvent.findMany({ where: { companyId: actor.companyId, leadId: { in: leadIds }, newOwnerId: { not: null } }, select: { leadId: true, newOwnerId: true, effectiveAt: true }, orderBy: { effectiveAt: 'asc' } })
-      : [];
-    const humanEvents = leadIds.length
-      ? await this.d.prisma.leadEvent.findMany({ where: { companyId: actor.companyId, leadId: { in: leadIds }, actorId: { not: null } }, select: { leadId: true }, distinct: ['leadId'] })
-      : [];
+    const [closeEvents, humanEvents] = leadIds.length
+      ? await Promise.all([
+          q<{ leadId: string; newStage: string; effectiveAt: Date }>(Prisma.sql`
+            SELECT lead_id AS "leadId", new_stage::text AS "newStage", effective_at AS "effectiveAt" FROM lead_events
+            WHERE company_id = ${actor.companyId}::uuid AND lead_id = ANY(${leadIds}::uuid[]) AND new_stage IN ('WON', 'LOST')`),
+          q<{ leadId: string }>(Prisma.sql`
+            SELECT DISTINCT lead_id AS "leadId" FROM lead_events
+            WHERE company_id = ${actor.companyId}::uuid AND lead_id = ANY(${leadIds}::uuid[]) AND actor_id IS NOT NULL`),
+        ])
+      : [[], []];
     const humanSet = new Set(humanEvents.map((e) => e.leadId));
+    const closesByLead = new Map<string, Array<{ stage: 'WON' | 'LOST'; at: Date }>>();
+    for (const e of closeEvents) {
+      const list = closesByLead.get(e.leadId) ?? [];
+      list.push({ stage: e.newStage as 'WON' | 'LOST', at: e.effectiveAt });
+      closesByLead.set(e.leadId, list);
+    }
+    const leadById = new Map(leads.map((l) => [l.id, l]));
 
-    const facts: LeadFact[] = leads.map((l) => ({
-      id: l.id,
-      createdAt: l.createdAt,
-      stage: l.stage,
-      firstWonAt: l.firstWonAt,
-      closes: closeEvents.filter((e) => e.leadId === l.id).map((e) => ({ stage: e.newStage as 'WON' | 'LOST', at: e.effectiveAt })),
-    }));
+    const facts: LeadFact[] = leads.map((l) => ({ id: l.id, createdAt: l.createdAt, stage: l.stage, firstWonAt: l.firstWonAt, closes: closesByLead.get(l.id) ?? [] }));
     const inRange = (d: Date | null) => !!d && d >= start && d < end;
     const cohort = leads.filter((l) => inRange(l.createdAt));
 
@@ -99,43 +138,47 @@ export class DashboardService {
     for (const l of cohort) bySource[l.firstSource] = (bySource[l.firstSource] ?? 0) + 1;
     const adsLeads = (bySource.instagram_lead_ads ?? 0) + (bySource.meta_lead_ads ?? 0);
     const directLeads = bySource.instagram_direct ?? 0;
-
-    const inquiries = await this.d.prisma.inquiry.count({
-      where: { companyId: actor.companyId, receivedAt: { gte: start, lt: end }, ...(f.source ? { channel: f.source } : {}), ...(can(actor.role, 'dashboard.company') && !f.ownerId ? {} : { leadId: { in: (await this.d.prisma.lead.findMany({ where: scope, select: { id: true } })).map((x) => x.id) } }) },
-    });
-
-    // Snapshots (current state, not period-bound).
-    const inProgress = await this.d.prisma.lead.count({ where: { ...scope, stage: { notIn: ['WON', 'LOST'] } } });
-    const scopedConversationLeads = await this.d.prisma.lead.findMany({ where: { ...scope, stage: { notIn: ['WON', 'LOST'] } }, select: { id: true } });
-    const awaiting = scopedConversationLeads.length
-      ? await this.d.prisma.$queryRaw<Array<{ n: bigint }>>`
-          SELECT count(*)::bigint AS n FROM conversations
-          WHERE company_id = ${actor.companyId}::uuid AND lead_id = ANY(${scopedConversationLeads.map((l) => l.id)}::uuid[])
-            AND last_inbound_at IS NOT NULL AND (last_human_reply_at IS NULL OR last_human_reply_at < last_inbound_at)`
-      : [{ n: 0n }];
+    const companyWide = can(actor.role, 'dashboard.company') && !f.ownerId && !f.serviceType && !f.stage && !departure;
 
     const wonIds = leads.filter((l) => inRange(l.firstWonAt)).map((l) => l.id);
-    const lostCount = new Set(closeEvents.filter((e) => e.newStage === 'LOST' && inRange(e.effectiveAt)).filter((e) => leads.find((l) => l.id === e.leadId)?.stage === 'LOST').map((e) => e.leadId)).size;
-    const cancelledOrders = await this.d.prisma.order.count({ where: { companyId: actor.companyId, fulfillmentState: 'cancelled', cancelledAt: { gte: start, lt: end }, lead: scope } });
-
-    const wonOrders = wonIds.length ? await this.d.prisma.order.findMany({ where: { companyId: actor.companyId, leadId: { in: wonIds }, fulfillmentState: { not: 'cancelled' }, agreedAmountMinor: { not: null } }, select: { agreedAmountMinor: true, currency: true, ownerId: true, leadId: true } }) : [];
+    const [inquiryRows, inProgress, awaitingRows, cancelledOrders, wonOrders, paymentRows, convs, ownerEvents] = await Promise.all([
+      companyWide
+        ? q<{ n: bigint }>(Prisma.sql`SELECT count(*)::bigint AS n FROM inquiries i WHERE i.company_id = ${actor.companyId}::uuid AND i.received_at >= ${start} AND i.received_at < ${end} ${f.source ? Prisma.sql`AND i.channel = ${f.source}::"Channel"` : Prisma.empty}`)
+        : q<{ n: bigint }>(Prisma.sql`SELECT count(*)::bigint AS n FROM inquiries i JOIN leads l ON l.id = i.lead_id WHERE ${where} AND i.received_at >= ${start} AND i.received_at < ${end} ${f.source ? Prisma.sql`AND i.channel = ${f.source}::"Channel"` : Prisma.empty}`),
+      this.d.prisma.lead.count({ where: { ...scope, stage: { notIn: ['WON', 'LOST'] } } }),
+      q<{ n: bigint }>(Prisma.sql`
+        SELECT count(*)::bigint AS n FROM conversations c JOIN leads l ON l.id = c.lead_id
+        WHERE ${where} AND l.stage NOT IN ('WON', 'LOST') AND c.last_inbound_at IS NOT NULL AND (c.last_human_reply_at IS NULL OR c.last_human_reply_at < c.last_inbound_at)`),
+      q<{ n: bigint }>(Prisma.sql`SELECT count(*)::bigint AS n FROM orders o JOIN leads l ON l.id = o.lead_id WHERE ${where} AND o.fulfillment_state = 'cancelled' AND o.cancelled_at >= ${start} AND o.cancelled_at < ${end}`),
+      wonIds.length
+        ? this.d.prisma.order.findMany({ where: { companyId: actor.companyId, leadId: { in: wonIds }, fulfillmentState: { not: 'cancelled' }, agreedAmountMinor: { not: null } }, select: { agreedAmountMinor: true, currency: true, ownerId: true, leadId: true } })
+        : Promise.resolve([]),
+      q<{ kind: string; currency: string; total: bigint }>(Prisma.sql`
+        SELECT p.kind, p.currency, sum(p.amount_minor)::bigint AS total FROM payments p JOIN orders o ON o.id = p.order_id JOIN leads l ON l.id = o.lead_id
+        WHERE ${where} AND p.status = 'confirmed' AND p.received_at >= ${start} AND p.received_at < ${end} GROUP BY p.kind, p.currency`),
+      q<{ firstInboundAt: Date; firstHumanReplyAt: Date | null }>(Prisma.sql`
+        SELECT c.first_inbound_at AS "firstInboundAt", c.first_human_reply_at AS "firstHumanReplyAt" FROM conversations c JOIN leads l ON l.id = c.lead_id
+        WHERE ${where} AND c.first_inbound_at >= ${start} AND c.first_inbound_at < ${end}`),
+      wonIds.length
+        ? this.d.prisma.leadEvent.findMany({ where: { companyId: actor.companyId, leadId: { in: wonIds }, newOwnerId: { not: null } }, select: { leadId: true, newOwnerId: true, effectiveAt: true }, orderBy: { effectiveAt: 'asc' } })
+        : Promise.resolve([]),
+    ]);
+    const inquiries = Number(inquiryRows[0]?.n ?? 0);
+    const awaiting = [{ n: awaitingRows[0]?.n ?? 0n }];
+    const lostCount = new Set(closeEvents.filter((e) => e.newStage === 'LOST' && inRange(e.effectiveAt) && leadById.get(e.leadId)?.stage === 'LOST').map((e) => e.leadId)).size;
     const salesByCurrency = sumByCurrency(wonOrders.filter((o) => o.currency).map((o) => ({ amountMinor: o.agreedAmountMinor!, currency: o.currency! })));
-
-    const scopedOrderIds = (await this.d.prisma.order.findMany({ where: { companyId: actor.companyId, lead: scope }, select: { id: true } })).map((o) => o.id);
-    const payments = scopedOrderIds.length ? await this.d.prisma.payment.findMany({ where: { companyId: actor.companyId, orderId: { in: scopedOrderIds }, status: 'confirmed', receivedAt: { gte: start, lt: end } }, select: { kind: true, amountMinor: true, currency: true } }) : [];
-
-    const convs = await this.d.prisma.conversation.findMany({
-      where: { companyId: actor.companyId, firstInboundAt: { gte: start, lt: end }, ...(scope.ownerId || scope.firstSource || scope.serviceType || scope.id ? { leadId: { in: (await this.d.prisma.lead.findMany({ where: scope, select: { id: true } })).map((x) => x.id) } } : {}) },
-      select: { firstInboundAt: true, firstHumanReplyAt: true },
-    });
-    const fr = firstResponseStats(convs.map((c) => ({ firstInboundAt: c.firstInboundAt!, firstHumanReplyAt: c.firstHumanReplyAt })));
+    const payments = paymentRows.map((r) => ({ kind: r.kind, amountMinor: BigInt(r.total), currency: r.currency }));
+    const ownerEventsByLead = new Map<string, Array<{ newOwnerId: string | null; effectiveAt: Date }>>();
+    for (const e of ownerEvents) ownerEventsByLead.set(e.leadId, [...(ownerEventsByLead.get(e.leadId) ?? []), e]);
+    const fr = firstResponseStats(convs.map((c) => ({ firstInboundAt: c.firstInboundAt, firstHumanReplyAt: c.firstHumanReplyAt })));
     const schedule = company.workSchedule as unknown as WeeklySchedule;
-    const slaMinutes = convs.filter((c) => c.firstHumanReplyAt).map((c) => workingMinutesBetween(schedule, c.firstInboundAt!, c.firstHumanReplyAt!));
+    const slaMinutes = convs.filter((c) => c.firstHumanReplyAt).map((c) => workingMinutesBetween(schedule, c.firstInboundAt, c.firstHumanReplyAt!));
+    const cancelledOrdersCount = Number(cancelledOrders[0]?.n ?? 0);
 
     // Manager results: current owner for workload, owner at close time for historical sales.
     const ownerAt = (leadId: string, at: Date) => {
       let owner: string | null = null;
-      for (const e of ownerEvents) if (e.leadId === leadId && e.effectiveAt <= at) owner = e.newOwnerId;
+      for (const e of ownerEventsByLead.get(leadId) ?? []) if (e.effectiveAt <= at) owner = e.newOwnerId;
       return owner;
     };
     const managers: Record<string, { newLeads: number; won: number; inProgress: number; sales: Record<string, bigint> }> = {};
@@ -171,7 +214,7 @@ export class DashboardService {
         processed: cohort.filter((l) => l.firstHumanActionAt || humanSet.has(l.id)).length,
         won: wonInPeriod(facts, start, end),
         lost: lostCount,
-        cancelledOrders,
+        cancelledOrders: cancelledOrdersCount,
         cohortConversion: cohortConversion(facts, start, end),
         closedConversion: closedConversion(facts, start, end),
         salesByCurrency: moneyMap(salesByCurrency),
@@ -180,6 +223,8 @@ export class DashboardService {
         firstResponse: { ...fr, slaWorkingMinutesMedian: median(slaMinutes) },
       },
       snapshot: { inProgress, awaitingReply: Number(awaiting[0]?.n ?? 0), asOf: this.d.clock.now().toISOString() },
+      generatedAt: this.d.clock.now().toISOString(),
+      cacheTtlSeconds: 20,
       funnel: Object.fromEntries(funnelRows.map((r) => [r.stage, r._count])),
       series: Object.entries(series).sort(([a], [b]) => a.localeCompare(b)).map(([bucket, v]) => ({ bucket, ...v })),
       managers: Object.entries(managers).map(([id, v]) => ({

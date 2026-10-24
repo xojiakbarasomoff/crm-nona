@@ -1,0 +1,56 @@
+[
+  {
+    "id": "G01",
+    "status": "blocked",
+    "detail": "APP_MODE=demo: demo adapters cannot prove live integration",
+    "at": "2026-10-24T08:52:39.302Z"
+  },
+  {
+    "id": "G02",
+    "status": "blocked",
+    "detail": "APP_MODE=demo: demo adapters cannot prove live integration",
+    "at": "2026-10-24T08:52:39.304Z"
+  },
+  {
+    "id": "G03",
+    "status": "blocked",
+    "detail": "APP_MODE=demo: demo adapters cannot prove live integration",
+    "at": "2026-10-24T08:52:39.304Z"
+  },
+  {
+    "id": "G04",
+    "status": "blocked",
+    "detail": "APP_MODE=demo: demo adapters cannot prove live integration",
+    "at": "2026-10-24T08:52:39.304Z"
+  },
+  {
+    "id": "G05",
+    "status": "blocked",
+    "detail": "APP_MODE=demo: demo adapters cannot prove live integration",
+    "at": "2026-10-24T08:52:39.304Z"
+  },
+  {
+    "id": "G06",
+    "status": "blocked",
+    "detail": "APP_MODE=demo: demo adapters cannot prove live integration",
+    "at": "2026-10-24T08:52:39.304Z"
+  },
+  {
+    "id": "G07",
+    "status": "blocked",
+    "detail": "APP_MODE=demo: demo adapters cannot prove live integration",
+    "at": "2026-10-24T08:52:39.304Z"
+  },
+  {
+    "id": "G08",
+    "status": "blocked",
+    "detail": "APP_MODE=demo: demo adapters cannot prove live integration",
+    "at": "2026-10-24T08:52:39.304Z"
+  },
+  {
+    "id": "G09",
+    "status": "blocked",
+    "detail": "APP_MODE=demo: demo adapters cannot prove live integration",
+    "at": "2026-10-24T08:52:39.304Z"
+  }
+]

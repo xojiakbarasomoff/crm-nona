@@ -26,9 +26,11 @@
     "db:seed": "tsx --conditions=development --env-file-if-exists=.env packages/database/src/seed.ts",
     "db:reset": "prisma migrate reset --force --skip-seed --schema packages/database/prisma/schema.prisma && npm run db:seed",
     "openapi": "tsx --conditions=development --env-file-if-exists=.env packages/contracts/src/openapi/generate.ts",
-    "amo-config": "tsx --conditions=development apps/worker/src/cli/amo-config.ts",
-    "smoke:live": "tsx --conditions=development apps/worker/src/cli/smoke-live.ts",
-    "perf:seed": "tsx --conditions=development packages/database/src/perf-seed.ts"
+    "amo-config": "tsx --conditions=development --env-file-if-exists=.env apps/worker/src/cli/amo-config.ts",
+    "smoke:live": "tsx --conditions=development --env-file-if-exists=.env apps/worker/src/cli/smoke-live.ts",
+    "perf:seed": "tsx --conditions=development --env-file-if-exists=.env packages/database/src/perf-seed.ts",
+    "perf:measure": "tsx --conditions=development apps/worker/src/cli/perf-measure.ts",
+    "perf:webhook": "tsx --conditions=development --env-file-if-exists=.env apps/worker/src/cli/perf-webhook.ts"
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",
