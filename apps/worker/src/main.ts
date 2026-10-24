@@ -1,9 +1,10 @@
-import { createCore, loadConfig } from '@crm/api/core';
+import { assertProductionSafety, createCore, loadConfig } from '@crm/api/core';
 import { WorkerRuntime } from './runtime';
 
 async function main() {
   const config = loadConfig();
   const core = createCore(config);
+  await assertProductionSafety(core);
   const runtime = new WorkerRuntime(core, { url: config.redisUrl, maxRetriesPerRequest: null } as never);
   await runtime.start();
   const shutdown = async (signal: string) => {

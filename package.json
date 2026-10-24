@@ -30,7 +30,8 @@
     "smoke:live": "tsx --conditions=development --env-file-if-exists=.env apps/worker/src/cli/smoke-live.ts",
     "perf:seed": "tsx --conditions=development --env-file-if-exists=.env packages/database/src/perf-seed.ts",
     "perf:measure": "tsx --conditions=development apps/worker/src/cli/perf-measure.ts",
-    "perf:webhook": "tsx --conditions=development --env-file-if-exists=.env apps/worker/src/cli/perf-webhook.ts"
+    "perf:webhook": "tsx --conditions=development --env-file-if-exists=.env apps/worker/src/cli/perf-webhook.ts",
+    "admin:invite": "tsx --conditions=development --env-file-if-exists=.env apps/worker/src/cli/admin-invite.ts"
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",

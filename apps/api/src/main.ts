@@ -1,9 +1,10 @@
 import { createApp } from './app';
-import { createCore, loadConfig } from './core';
+import { assertProductionSafety, createCore, loadConfig } from './core';
 
 async function main() {
   const config = loadConfig();
   const core = createCore(config);
+  await assertProductionSafety(core);
   const app = await createApp(core);
   await app.listen(config.apiPort, '0.0.0.0');
   core.deps.logger.info({ port: config.apiPort, mode: config.mode, adapters: core.deps.adapters.descriptors() }, 'API started');

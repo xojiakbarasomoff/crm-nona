@@ -23,22 +23,36 @@ const WORK_SCHEDULE = {
 };
 
 export async function seed(prisma: PrismaClient, opts: { demoData: boolean; key: Buffer }) {
-  const passwordHash = await hash(DEMO_PASSWORD, { algorithm: 2, memoryCost: 19_456, timeCost: 2, parallelism: 1 });
   const company = await prisma.company.upsert({
     where: { id: DEMO_COMPANY_ID },
     update: {},
     create: {
       id: DEMO_COMPANY_ID,
-      name: 'Demo Turizm (sun’iy)',
+      name: opts.demoData ? 'Demo Turizm (sun’iy)' : 'Kompaniya (sozlanmagan)',
       timezone: 'Asia/Tashkent',
       workSchedule: WORK_SCHEDULE,
       slaFirstResponseMinutes: 15,
       stickyOwner: true,
       phoneRule: { countryCode: '998', nationalLength: 9, confirmed: false },
-      settings: { amoRequiresResponsible: true, leadForms: {}, amoPriceCurrency: null },
+      settings: {
+        amoRequiresResponsible: true,
+        leadForms: {},
+        amoPriceCurrency: null,
+        // Proposed retention (TZ §21). Purge jobs run only after the company confirms it.
+        retention: { confirmed: false, rawWebhookDays: 30, technicalLogDays: 90, messageContentMonths: 12 },
+      },
     },
   });
 
+  for (const r of DEFAULT_MILESTONE_RULES) {
+    const exists = await prisma.reminderRule.findFirst({ where: { companyId: company.id, milestone: r.milestone } });
+    if (!exists) await prisma.reminderRule.create({ data: { companyId: company.id, milestone: r.milestone, offsetSeconds: r.offsetSeconds, enabled: r.enabled, escalateAfterMinutes: r.escalateAfterMinutes, version: 1, current: true } });
+  }
+  // Demo users exist ONLY in demo mode. Real deployments bootstrap the first admin with
+  // `npm run admin:invite` (one-time activation link, own password, MFA enrollment).
+  if (!opts.demoData) return { company, ids: {} as Record<string, string> };
+
+  const passwordHash = await hash(DEMO_PASSWORD, { algorithm: 2, memoryCost: 19_456, timeCost: 2, parallelism: 1 });
   const users = [
     { email: 'admin@demo.local', fullName: 'Admin (demo)', role: 'ADMIN' as const, amo: DEMO_AMO_USERS[0]!.id },
     { email: 'rahbar@demo.local', fullName: 'Rahbar (demo)', role: 'HEAD' as const, amo: DEMO_AMO_USERS[1]!.id },
@@ -75,12 +89,6 @@ export async function seed(prisma: PrismaClient, opts: { demoData: boolean; key:
     }
   }
 
-  for (const r of DEFAULT_MILESTONE_RULES) {
-    const exists = await prisma.reminderRule.findFirst({ where: { companyId: company.id, milestone: r.milestone } });
-    if (!exists) await prisma.reminderRule.create({ data: { companyId: company.id, milestone: r.milestone, offsetSeconds: r.offsetSeconds, enabled: r.enabled, escalateAfterMinutes: r.escalateAfterMinutes, version: 1, current: true } });
-  }
-
-  if (!opts.demoData) return { company, ids };
 
   // Demo integration connections (mode=demo). Real connections are created via OAuth.
   const conns = [

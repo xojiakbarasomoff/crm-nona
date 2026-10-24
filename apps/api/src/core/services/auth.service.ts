@@ -17,6 +17,7 @@ const INVITE_MS = 72 * 3600_000;
 const LOGIN_WINDOW_SEC = 15 * 60;
 const LOGIN_MAX = 10;
 
+export const DEMO_EMAIL_DOMAIN = '@demo.local';
 export const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 const newToken = () => randomBytes(32).toString('base64url');
 
@@ -43,7 +44,9 @@ export class AuthService {
     const attempts = await hitCounter(this.d.redis, `login:${email}:${input.ip ?? '-'}`, LOGIN_WINDOW_SEC);
     if (attempts > LOGIN_MAX) throw tooMany();
 
-    const user = await this.d.prisma.user.findUnique({ where: { email } });
+    // Demo accounts (@demo.local) never authenticate outside APP_MODE=demo.
+    const demoAccountBlocked = this.d.config.mode !== 'demo' && email.endsWith(DEMO_EMAIL_DOMAIN);
+    const user = demoAccountBlocked ? null : await this.d.prisma.user.findUnique({ where: { email } });
     // Constant-ish work even when the user does not exist.
     const ok = user?.passwordHash ? await verify(user.passwordHash, input.password).catch(() => false) : (await hash('dummy-password', ARGON), false);
     if (!user || !ok || user.status !== 'active') {

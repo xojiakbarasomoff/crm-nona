@@ -69,3 +69,16 @@ export function createCore(config: AppConfig, o: CoreOverrides = {}): Core {
     },
   };
 }
+
+/**
+ * Startup guard (TZ §25.1): outside demo mode the process refuses to start while demo accounts or
+ * demo-mode connections exist in the database.
+ */
+export async function assertProductionSafety(core: Core): Promise<void> {
+  if (core.deps.config.mode === 'demo') return;
+  const demoUsers = await core.deps.prisma.user.count({ where: { email: { endsWith: '@demo.local' }, status: { not: 'blocked' } } });
+  const demoConnections = await core.deps.prisma.integrationConnection.count({ where: { mode: 'demo', disconnectedAt: null } });
+  if (demoUsers || demoConnections) {
+    throw new Error(`Refusing to start in ${core.deps.config.mode}: ${demoUsers} demo account(s) and ${demoConnections} demo connection(s) present. Use a clean database.`);
+  }
+}
