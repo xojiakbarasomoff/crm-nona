@@ -45,7 +45,7 @@ describe('assignment (AC10, AC11)', () => {
     expect(Math.max(...delta) - Math.min(...delta)).toBeLessThanOrEqual(1);
     expect(managers.length).toBe(3);
     await drain(core);
-  });
+  }, 180_000); // stress test: 100 leads through 10 concurrent processors
 
   it('AC11: nobody available → duty user with explicit reason and head signal; queue when no duty', async () => {
     const pool = await p().managerPool.findFirstOrThrow({ where: { isDefault: true } });

@@ -52,8 +52,26 @@ export function leadAdsChannel(lead: MetaLeadData, mapping: LeadFormMapping | un
   return { channel: 'meta_lead_ads', placement: 'unknown' };
 }
 
+type PendingAssignment = { lead: Lead; args: Parameters<LeadsService['assignLead']>[2] };
+
+/** Intake transactions: generous timeout, bounded lock waits (fail fast and retry via inbox). */
+export const INTAKE_TX = { timeout: 20_000, maxWait: 10_000 } as const;
+
 export class IntakeService {
   private readonly leads: LeadsService;
+  /** Leads created in a transaction that still need round-robin assignment before commit. */
+  private readonly pending = new WeakMap<object, PendingAssignment[]>();
+
+  private async begin(tx: Tx) {
+    await tx.$executeRaw`SET LOCAL lock_timeout = '15s'`;
+    this.pending.set(tx, []);
+  }
+
+  /** Takes the manager-pool lock as the final step, so it is held only until commit. */
+  private async finishAssignments(tx: Tx) {
+    for (const a of this.pending.get(tx) ?? []) await this.leads.assignLead(tx, a.lead, a.args);
+    this.pending.delete(tx);
+  }
   constructor(private readonly d: CoreDeps) {
     this.leads = new LeadsService(d);
   }
@@ -94,6 +112,7 @@ export class IntakeService {
     const actor = integrationActor(companyId, 'meta_lead_ads');
 
     const result = await this.d.prisma.$transaction(async (tx) => {
+      await this.begin(tx);
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`inquiry:${companyId}:${eventKey}`}, 0))`;
       const existing = await tx.inquiry.findUnique({ where: { companyId_providerEventKey: { companyId, providerEventKey: eventKey } } });
       if (existing?.processedAt) return 'duplicate' as const;
@@ -154,8 +173,9 @@ export class IntakeService {
         await enqueueOutbox(tx, { companyId, operationKey: `inquiry.enrich:${inquiry.id}`, target: 'meta', action: 'meta.enrich', payload: { inquiryId: inquiry.id, adId, connectionId: conn.id } });
       }
       await audit(tx, actor, { entityType: 'inquiry', entityId: inquiry.id, action: 'lead_ads_processed', newValue: { contactId: identity.contactId, leadId: linked.lead?.id ?? null, createdLead: linked.created, channel, placement } });
+      await this.finishAssignments(tx);
       return 'processed' as const;
-    });
+    }, INTAKE_TX);
     return result;
   }
 
@@ -167,6 +187,7 @@ export class IntakeService {
     tx: Tx,
     p: { companyId: string; contactId: string; inquiryId: string; channel: Channel; placement: string; name: string; serviceType: string | null; at: Date; actor: ReturnType<typeof integrationActor>; preferredLeadId?: string | null },
   ): Promise<{ lead: Lead | null; created: boolean }> {
+    // New leads are assigned by the caller right before commit (see finishAssignments).
     const active = await this.leads.findActiveLeads(tx, p.companyId, p.contactId);
     if (p.preferredLeadId) {
       const preferred = active.find((l) => l.id === p.preferredLeadId);
@@ -178,7 +199,8 @@ export class IntakeService {
       if (owner) await notify(tx, { companyId: p.companyId, userId: owner, kind: 'inquiry_needs_lead', dedupeKey: `inquiry_needs_lead:${p.inquiryId}`, title: 'Yangi murojaat: qaysi safarga tegishli ekanini tanlang', link: `/contacts/${p.contactId}` });
       return { lead: null, created: false };
     }
-    const lead = await this.leads.createLead(tx, { companyId: p.companyId, contactId: p.contactId, name: p.name, channel: p.channel, placement: p.placement, inquiryId: p.inquiryId, serviceType: p.serviceType, at: p.at, actor: p.actor });
+    const lead = await this.leads.createLead(tx, { companyId: p.companyId, contactId: p.contactId, name: p.name, channel: p.channel, placement: p.placement, inquiryId: p.inquiryId, serviceType: p.serviceType, at: p.at, actor: p.actor, deferAssignment: true });
+    this.pending.get(tx)?.push({ lead, args: { companyId: p.companyId, contactId: p.contactId, name: p.name, serviceType: p.serviceType, at: p.at, actor: p.actor } });
     return { lead, created: true };
   }
 
@@ -193,6 +215,7 @@ export class IntakeService {
     const actor = integrationActor(companyId, 'instagram_direct');
 
     const out = await this.d.prisma.$transaction(async (tx) => {
+      await this.begin(tx);
       if (evt.mid) {
         const dup = await tx.message.findUnique({ where: { connectionId_providerMessageId: { connectionId: conn.id, providerMessageId: evt.mid } } });
         if (dup) return { state: 'duplicate' as const };
@@ -281,8 +304,9 @@ export class IntakeService {
       if (this.d.adapters.amoChats) {
         await enqueueOutbox(tx, { companyId, operationKey: `chat.import:${message.id}`, target: 'amocrm_chats', action: 'chat.import', payload: { messageId: message.id } });
       }
+      await this.finishAssignments(tx);
       return { state: 'processed' as const, conversationId: conversation.id, ownerLeadId: leadId };
-    });
+    }, INTAKE_TX);
     if (out.state === 'processed') {
       await publishEvent(this.d.redis, { companyId, entityType: 'conversation', entityId: out.conversationId, kind: 'message' });
     }

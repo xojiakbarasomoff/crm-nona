@@ -89,12 +89,15 @@ export function leadStateHash(l: { stage: Stage; ownerId: string | null; deleted
 export class LeadsService {
   constructor(private readonly d: CoreDeps) {}
 
-  /** Creates a NEW lead with assignment, audit, amoCRM create operation and SLA deadline. */
+  /**
+   * Creates a NEW lead with SLA deadline and the amoCRM create operation. Assignment runs at the
+   * very end (immediately, or deferred by the caller to just before commit) so that the manager
+   * pool row lock is held for as few statements as possible (AC10 under load).
+   */
   async createLead(
     tx: Tx,
-    p: { companyId: string; contactId: string; name: string; channel: Channel; placement: string; inquiryId: string | null; serviceType: string | null; at: Date; actor: Actor },
+    p: { companyId: string; contactId: string; name: string; channel: Channel; placement: string; inquiryId: string | null; serviceType: string | null; at: Date; actor: Actor; deferAssignment?: boolean },
   ): Promise<Lead> {
-    const decision = await assignNewLead(tx, { companyId: p.companyId, contactId: p.contactId, serviceType: p.serviceType, at: p.at });
     const company = await tx.company.findUniqueOrThrow({ where: { id: p.companyId } });
     const firstResponseDueAt = addWorkingMinutes(company.workSchedule as unknown as WeeklySchedule, p.at, company.slaFirstResponseMinutes);
     const lead = await tx.lead.create({
@@ -103,8 +106,7 @@ export class LeadsService {
         contactId: p.contactId,
         name: p.name,
         stage: 'NEW',
-        ownerId: decision.userId,
-        assignmentReason: decision.reason,
+        ownerId: null,
         serviceType: p.serviceType,
         firstSource: p.channel,
         firstPlacement: p.placement,
@@ -113,36 +115,26 @@ export class LeadsService {
         syncState: 'pending_create',
       },
     });
-    await tx.lead.update({ where: { id: lead.id }, data: { stateHash: leadStateHash(lead) } });
-    if (decision.userId) {
-      await tx.contact.updateMany({ where: { id: p.contactId, ownerId: null }, data: { ownerId: decision.userId } });
-    }
+    await enqueueOutbox(tx, { companyId: p.companyId, operationKey: `lead.create:${lead.id}`, target: 'amocrm', action: 'lead.create', payload: { leadId: lead.id } });
+    if (p.deferAssignment) return lead;
+    return this.assignLead(tx, lead, p);
+  }
+
+  /**
+   * Round-robin assignment (TZ §10). Takes the pool row lock (SELECT … FOR UPDATE) and must be the
+   * last step of the caller's transaction: everything after it only touches this lead.
+   */
+  async assignLead(tx: Tx, lead: Lead, p: { companyId: string; contactId: string; name: string; serviceType: string | null; at: Date; actor: Actor }): Promise<Lead> {
+    const decision = await assignNewLead(tx, { companyId: p.companyId, contactId: p.contactId, serviceType: p.serviceType, at: p.at });
+    const updated = await tx.lead.update({
+      where: { id: lead.id },
+      data: { ownerId: decision.userId, assignmentReason: decision.reason, stateHash: leadStateHash({ stage: lead.stage, ownerId: decision.userId }) },
+    });
+    if (decision.userId) await tx.contact.updateMany({ where: { id: p.contactId, ownerId: null }, data: { ownerId: decision.userId } });
     await tx.leadEvent.create({
-      data: {
-        companyId: p.companyId,
-        leadId: lead.id,
-        kind: 'created',
-        newStage: 'NEW',
-        newOwnerId: decision.userId,
-        reason: decision.reason,
-        origin: 'local',
-        algorithmVersion: decision.algorithm,
-        effectiveAt: p.at,
-      },
+      data: { companyId: p.companyId, leadId: lead.id, kind: 'created', newStage: 'NEW', newOwnerId: decision.userId, reason: decision.reason, origin: 'local', algorithmVersion: decision.algorithm, effectiveAt: p.at },
     });
-    await audit(tx, p.actor, {
-      entityType: 'lead',
-      entityId: lead.id,
-      action: 'assigned',
-      newValue: { ownerId: decision.userId, reason: decision.reason, algorithm: decision.algorithm, poolId: decision.poolId },
-    });
-    await enqueueOutbox(tx, {
-      companyId: p.companyId,
-      operationKey: `lead.create:${lead.id}`,
-      target: 'amocrm',
-      action: 'lead.create',
-      payload: { leadId: lead.id },
-    });
+    await audit(tx, p.actor, { entityType: 'lead', entityId: lead.id, action: 'assigned', newValue: { ownerId: decision.userId, reason: decision.reason, algorithm: decision.algorithm, poolId: decision.poolId } });
     if (decision.userId) {
       await notify(tx, { companyId: p.companyId, userId: decision.userId, kind: 'lead_assigned', dedupeKey: `lead_assigned:${lead.id}:${decision.userId}`, title: `Yangi lid: ${p.name}`, link: `/leads/${lead.id}` });
     }
@@ -158,7 +150,7 @@ export class LeadsService {
         });
       }
     }
-    return lead;
+    return updated;
   }
 
   async findActiveLeads(tx: Tx, companyId: string, contactId: string) {
