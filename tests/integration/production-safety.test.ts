@@ -3,7 +3,7 @@ import { assertProductionSafety } from '../../apps/api/src/core';
 import { DEMO_PASSWORD } from '../../packages/database/src/seed';
 import { makeCore } from './helpers';
 
-const staging = makeCore({ env: { APP_MODE: 'staging', COOKIE_SECURE: 'true', META_GRAPH_VERSION: 'v-test', AMO_CHAT_CHANNEL_ID: 'test-channel', SCANNER: 'clamav' } });
+const staging = makeCore({ env: { APP_MODE: 'staging', COOKIE_SECURE: 'true', META_GRAPH_VERSION: 'v-test', AMO_CHAT_CHANNEL_ID: 'test-channel', SCANNER: 'clamav', STORAGE_DRIVER: 's3', S3_BUCKET: 'b', S3_ACCESS_KEY_ID: 'k', S3_SECRET_ACCESS_KEY: 's', S3_ENDPOINT: 'http://127.0.0.1:1' } });
 const demo = makeCore();
 
 afterAll(async () => {
@@ -24,6 +24,10 @@ describe('demo credentials never work outside demo mode (TZ §25.1)', () => {
   it('API/worker refuse to start in staging while demo accounts or demo connections exist', async () => {
     await expect(assertProductionSafety(staging)).rejects.toThrow(/demo account/);
     await expect(assertProductionSafety(demo)).resolves.toBeUndefined();
+  });
+
+  it('staging refuses a local-disk file store (private object storage required)', () => {
+    expect(() => makeCore({ env: { APP_MODE: 'staging', COOKIE_SECURE: 'true', META_GRAPH_VERSION: 'v-test', AMO_CHAT_CHANNEL_ID: 'c', SCANNER: 'clamav', STORAGE_DRIVER: 'local' } })).toThrow(/local-private/);
   });
 
   it('staging adapters are live, never mocks', () => {

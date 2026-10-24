@@ -2,6 +2,7 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { connect } from 'node:net';
 import { isAbsolute, join, resolve, sep } from 'node:path';
+import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 
 /**
  * Private file storage, content sniffing, malware scanning and signed download URLs (TZ §21).
@@ -41,6 +42,68 @@ export class LocalPrivateStorage implements StorageDriver {
   }
   async delete(key: string) {
     await rm(this.path(key), { force: true });
+  }
+}
+
+export interface S3StorageConfig {
+  endpoint: string | null;
+  region: string;
+  bucket: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+  forcePathStyle: boolean;
+  /** Server-side encryption header, e.g. "AES256"; null when the provider encrypts by default. */
+  serverSideEncryption: 'AES256' | 'aws:kms' | null;
+}
+
+/**
+ * Private S3-compatible object storage (TZ §21). Objects are never public: downloads go through
+ * the API (session + RBAC + short-lived signed app URL + audit), not presigned bucket URLs.
+ */
+export class S3Storage implements StorageDriver {
+  readonly descriptor = { name: 's3-private', kind: 'object' as const };
+  private readonly client: S3Client;
+  constructor(private readonly cfg: S3StorageConfig) {
+    if (!cfg.bucket || !cfg.accessKeyId || !cfg.secretAccessKey) throw new Error('S3 storage requires S3_BUCKET, S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY');
+    this.client = new S3Client({
+      region: cfg.region,
+      ...(cfg.endpoint ? { endpoint: cfg.endpoint } : {}),
+      forcePathStyle: cfg.forcePathStyle,
+      credentials: { accessKeyId: cfg.accessKeyId, secretAccessKey: cfg.secretAccessKey },
+      maxAttempts: 3,
+    });
+  }
+  private key(key: string) {
+    if (!/^[a-f0-9]{2}\/[a-f0-9]{62}$/.test(key)) throw new Error('Invalid storage key');
+    return key;
+  }
+  async put(key: string, data: Buffer) {
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: this.cfg.bucket,
+        Key: this.key(key),
+        Body: data,
+        ContentType: 'application/octet-stream',
+        ...(this.cfg.serverSideEncryption ? { ServerSideEncryption: this.cfg.serverSideEncryption } : {}),
+      }),
+    );
+  }
+  async get(key: string) {
+    const r = await this.client.send(new GetObjectCommand({ Bucket: this.cfg.bucket, Key: this.key(key) }));
+    if (!r.Body) throw new Error('Empty object body');
+    return Buffer.from(await r.Body.transformToByteArray());
+  }
+  async delete(key: string) {
+    await this.client.send(new DeleteObjectCommand({ Bucket: this.cfg.bucket, Key: this.key(key) }));
+  }
+  /** Readiness probe: bucket reachable with these credentials. */
+  async ping(): Promise<boolean> {
+    try {
+      await this.client.send(new HeadBucketCommand({ Bucket: this.cfg.bucket }));
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 

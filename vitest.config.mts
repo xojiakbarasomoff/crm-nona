@@ -27,6 +27,20 @@ export default defineConfig({
           hookTimeout: 120_000,
         },
       },
+      {
+        extends: true,
+        test: {
+          name: 'services',
+          include: ['tests/services/**/*.test.ts'],
+          environment: 'node',
+          globalSetup: ['tests/integration/global-setup.ts'],
+          fileParallelism: false,
+          pool: 'forks',
+          maxWorkers: 1,
+          testTimeout: 120_000,
+          hookTimeout: 120_000,
+        },
+      },
     ],
   },
 });

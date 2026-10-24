@@ -1,0 +1,9 @@
+{
+  "identities": [
+    {
+      "name": "crm-local",
+      "credentials": [{ "accessKey": "crm_local_access", "secretKey": "crm_local_secret_only_for_dev" }],
+      "actions": ["Read", "Write", "List", "Tagging", "Admin"]
+    }
+  ]
+}

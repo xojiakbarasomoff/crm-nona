@@ -33,7 +33,9 @@
     "perf:webhook": "tsx --conditions=development --env-file-if-exists=.env apps/worker/src/cli/perf-webhook.ts",
     "admin:invite": "tsx --conditions=development --env-file-if-exists=.env apps/worker/src/cli/admin-invite.ts",
     "perf:monitor": "tsx --conditions=development apps/worker/src/cli/perf-monitor.ts",
-    "dev:backend": "concurrently -n api,worker -c blue,magenta \"npm run dev -w @crm/api\" \"npm run dev -w @crm/worker\""
+    "dev:backend": "concurrently -n api,worker -c blue,magenta \"npm run dev -w @crm/api\" \"npm run dev -w @crm/worker\"",
+    "test:services": "vitest run --project services",
+    "storage:init": "tsx --conditions=development --env-file-if-exists=.env apps/worker/src/cli/storage-init.ts"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

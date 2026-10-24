@@ -39,7 +39,18 @@ const schema = z.object({
   META_STANDARD_WINDOW_HOURS: z.coerce.number().default(24),
   META_HUMAN_AGENT_WINDOW_HOURS: optionalNumber,
   META_HUMAN_AGENT_GRANTED: z.string().default('false'),
+  STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
   STORAGE_LOCAL_DIR: z.string().default('./storage'),
+  S3_ENDPOINT: z.string().default(''),
+  S3_REGION: z
+    .string()
+    .default('')
+    .transform((v) => v || 'us-east-1'),
+  S3_BUCKET: z.string().default(''),
+  S3_ACCESS_KEY_ID: z.string().default(''),
+  S3_SECRET_ACCESS_KEY: z.string().default(''),
+  S3_FORCE_PATH_STYLE: z.string().default('true'),
+  S3_SSE: z.enum(['', 'AES256', 'aws:kms']).default(''),
   SCANNER: z.enum(['builtin', 'clamav']).default('builtin'),
   CLAMD_HOST: z.string().default('127.0.0.1'),
   CLAMD_PORT: z.coerce.number().default(3310),
@@ -79,6 +90,7 @@ export interface AppConfig {
     humanAgentGranted: boolean;
   };
   storageDir: string;
+  storage: { driver: 'local' | 's3'; s3: { endpoint: string | null; region: string; bucket: string; accessKeyId: string; secretAccessKey: string; forcePathStyle: boolean; serverSideEncryption: 'AES256' | 'aws:kms' | null } };
   scanner: { kind: 'builtin' | 'clamav'; host: string; port: number };
   downloadUrlTtlSeconds: number;
   slaWarnMinutes: number;
@@ -122,6 +134,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       humanAgentGranted: e.META_HUMAN_AGENT_GRANTED === 'true',
     },
     storageDir: e.STORAGE_LOCAL_DIR,
+    storage: {
+      driver: e.STORAGE_DRIVER,
+      s3: {
+        endpoint: e.S3_ENDPOINT || null,
+        region: e.S3_REGION,
+        bucket: e.S3_BUCKET,
+        accessKeyId: e.S3_ACCESS_KEY_ID,
+        secretAccessKey: e.S3_SECRET_ACCESS_KEY,
+        forcePathStyle: e.S3_FORCE_PATH_STYLE !== 'false',
+        serverSideEncryption: e.S3_SSE || null,
+      },
+    },
     scanner: { kind: e.SCANNER, host: e.CLAMD_HOST, port: e.CLAMD_PORT },
     downloadUrlTtlSeconds: e.DOWNLOAD_URL_TTL_SECONDS,
     slaWarnMinutes: e.SLA_WARN_MINUTES,

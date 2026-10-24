@@ -13,6 +13,7 @@ import {
   BuiltinTestScanner,
   ClamdScanner,
   LocalPrivateStorage,
+  S3Storage,
   ManualFlightProvider,
   type MalwareScanner,
   type StorageDriver,
@@ -53,7 +54,9 @@ export type TokenProviderFactory = (connectionId: string) => AmoTokenProvider;
 export function buildAdapters(config: AppConfig, redis: Redis, tokenProviderFor: TokenProviderFactory): Adapters {
   const limiter = new RedisRateLimiter(redis);
   const flight = new ManualFlightProvider();
-  const storage = new LocalPrivateStorage(config.storageDir);
+  const storage: StorageDriver = config.storage.driver === 's3' ? new S3Storage(config.storage.s3) : new LocalPrivateStorage(config.storageDir);
+  // TZ §21: files live in private object storage. A local directory is accepted only in demo mode.
+  const storageDescriptor = { name: storage.descriptor.name, kind: storage.descriptor.kind === 'local' ? ('mock' as const) : ('live' as const) };
   const scanner: MalwareScanner = config.scanner.kind === 'clamav' ? new ClamdScanner(config.scanner.host, config.scanner.port) : new BuiltinTestScanner();
   // The builtin scanner only knows the EICAR test signature: it counts as a mock outside demo.
   const scannerDescriptor = { name: scanner.descriptor.name, kind: scanner.descriptor.kind === 'builtin' ? ('mock' as const) : ('live' as const) };
@@ -72,7 +75,7 @@ export function buildAdapters(config: AppConfig, redis: Redis, tokenProviderFor:
       storage,
       scanner,
       amoRest: () => amo,
-      descriptors: () => [amo.descriptor, adapters.metaLeads.descriptor, adapters.metaDirect.descriptor, ...(adapters.amoChats ? [adapters.amoChats.descriptor] : []), { name: flight.name, kind: 'manual' }, scannerDescriptor],
+      descriptors: () => [amo.descriptor, adapters.metaLeads.descriptor, adapters.metaDirect.descriptor, ...(adapters.amoChats ? [adapters.amoChats.descriptor] : []), { name: flight.name, kind: 'manual' }, scannerDescriptor, storageDescriptor],
     };
     return adapters;
   }
@@ -101,6 +104,7 @@ export function buildAdapters(config: AppConfig, redis: Redis, tokenProviderFor:
       ...(amoChats ? [amoChats.descriptor] : []),
       { name: flight.name, kind: 'manual' },
       scannerDescriptor,
+      storageDescriptor,
     ],
   };
   assertAdaptersAllowed(config.mode, adapters.descriptors());

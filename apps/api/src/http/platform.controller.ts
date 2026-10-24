@@ -41,6 +41,8 @@ export class PlatformController {
     } catch {
       checks.redis = 'down';
     }
+    const storage = this.core.deps.adapters.storage as { ping?: () => Promise<boolean> };
+    if (storage.ping) checks.storage = (await storage.ping()) ? 'ok' : 'down';
     const ok = Object.values(checks).every((v) => v === 'ok');
     send(res, ok ? 200 : 503, { status: ok ? 'ready' : 'not_ready', checks });
   }

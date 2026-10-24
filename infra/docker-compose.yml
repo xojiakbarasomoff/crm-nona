@@ -24,6 +24,25 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+  # Local S3-compatible private object storage (profile: services). Not exposed beyond localhost.
+  seaweedfs:
+    profiles: ["services"]
+    image: chrislusf/seaweedfs:3.97
+    command: ["server", "-dir=/data", "-s3", "-s3.port=8333", "-s3.config=/etc/seaweedfs/s3.json", "-volume.max=0", "-master.volumeSizeLimitMB=256"]
+    ports: ["127.0.0.1:58333:8333"]
+    volumes: ["seaweeddata:/data", "./seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro"]
+  # Real ClamAV daemon (profile: services). First start downloads signatures (several minutes).
+  clamav:
+    profiles: ["services"]
+    image: clamav/clamav:1.4.3
+    ports: ["127.0.0.1:53310:3310"]
+    volumes: ["clamavdb:/var/lib/clamav"]
+    healthcheck:
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 40
+      start_period: 300s
   api:
     profiles: ["app"]
     build: { context: .., dockerfile: infra/Dockerfile, target: api }
@@ -51,3 +70,5 @@ services:
 volumes:
   pgdata:
   redisdata:
+  seaweeddata:
+  clamavdb:
