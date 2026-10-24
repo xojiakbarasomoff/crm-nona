@@ -59,7 +59,14 @@ interface FlightRow {
 /** Bugungi sana kompaniya vaqt zonasida (Asia/Tashkent), brauzer/UTC zonasida emas. */
 const tashkentToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tashkent' }).format(new Date());
 const mins = (s: number | null) => (s === null ? '—' : `${Math.round(s / 60)} daq`);
-const money = (m: Record<string, string>) => (Object.keys(m).length ? Object.entries(m).map(([c, v]) => `${v} ${c}`).join(' · ') : '—');
+const CURRENCY_LABEL: Record<string, string> = { UZS: 'so‘m', USD: '$' };
+/** "58500000.00" -> "58 500 000" (kasr faqat nolga teng bo‘lmasa ko‘rsatiladi). */
+const fmtAmount = (v: string) => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return v;
+  return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: Number.isInteger(n) ? 0 : 2 }).format(n);
+};
+const money = (m: Record<string, string>) => (Object.keys(m).length ? Object.entries(m).map(([c, v]) => `${fmtAmount(v)} ${CURRENCY_LABEL[c] ?? c}`).join(' · ') : '—');
 const initials = (name: string) =>
   name
     .replace(/\(.*?\)/g, '')
