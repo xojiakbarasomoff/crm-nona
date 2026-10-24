@@ -52,7 +52,22 @@ export function makeCore(opts: { clock?: Clock; fetchImpl?: FetchLike; env?: Rec
   return createCore(testConfig(opts.env), { clock: opts.clock, fetchImpl: opts.fetchImpl });
 }
 
+/** Per-file isolation: drop leftover demo failures and run pending work from earlier files. */
+export async function isolate(core: Core) {
+  const store = core.deps.adapters.demoStore!;
+  let cursor = '0';
+  do {
+    const [next, keys] = await core.deps.redis.scan(cursor, 'MATCH', 'demo:fail:*', 'COUNT', 500);
+    if (keys.length) await core.deps.redis.del(...keys);
+    cursor = next;
+  } while (cursor !== '0');
+  void store;
+  await core.deps.prisma.outboxOperation.updateMany({ where: { state: { in: ['failed', 'pending'] } }, data: { nextAttemptAt: new Date(0) } });
+  await drain(core, 50);
+}
+
 export async function makeApp(core: Core): Promise<INestApplication> {
+  await isolate(core);
   const app = await createApp(core);
   await app.init();
   return app;

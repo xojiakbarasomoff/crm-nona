@@ -15,7 +15,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import type { NextFunction, Request, Response } from 'express';
 import type { ZodTypeAny, z } from 'zod';
-import { sha256Hex, stableStringify } from '@crm/domain';
+import { CurrencyMismatchError, InvalidMoneyError, sha256Hex, stableStringify } from '@crm/domain';
 import { AppError, conflict, forbidden, notFound, unauthorized, unprocessable, type Core, type UserActor } from '../core';
 import type { SessionInfo } from '../core/services/auth.service';
 
@@ -92,6 +92,10 @@ export class ErrorFilter implements ExceptionFilter {
     const requestId = req.requestId ?? randomUUID();
     if (err instanceof AppError) {
       res.status(err.status).json({ error: { code: err.code, message: err.message, ...(err.fieldErrors ? { field_errors: err.fieldErrors } : {}), ...(err.details ? { details: err.details } : {}) }, request_id: requestId });
+      return;
+    }
+    if (err instanceof InvalidMoneyError || err instanceof CurrencyMismatchError) {
+      res.status(422).json({ error: { code: err instanceof InvalidMoneyError ? 'INVALID_AMOUNT' : 'CURRENCY_MISMATCH', message: err.message }, request_id: requestId });
       return;
     }
     if (err instanceof HttpException) {
