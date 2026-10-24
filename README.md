@@ -22,7 +22,7 @@ tests               contract fixture’lar, integration (real PG/Redis), E2E (Pl
 
 ## Talablar
 
-Node.js 22.11+ (LTS), npm 10, Docker Desktop. Portlar: PostgreSQL 55432, Redis 56379, API 4100, web 3100.
+Node.js **22.12 yoki yangiroq** (tavsiya: `.nvmrc` dagi 22.23.4; Prisma 7 eski Node’da o‘rnatilmaydi), npm 10, Docker Desktop. Portlar: PostgreSQL 55432, Redis 56379, API 4100, web 3100.
 
 ## Lokal ishga tushirish (demo)
 
@@ -50,6 +50,8 @@ Brauzer: http://localhost:3100. Demo foydalanuvchilar (**faqat demo**), parol `D
 
 Demo oqimini sinash: admin → Integratsiyalar → «DEMO simulyatorlari» (Lead Ads formasi, Direct xabar). Ular haqiqiy webhook yo‘li orqali sun’iy hodisa yuboradi.
 
+Haqiqiy (demo bo‘lmagan) muhit: `APP_MODE=staging|production`, `npm run db:migrate`, `SEED_ALLOW_NON_DEMO=1 npm run db:seed` (faqat kompaniya va qoidalar), so‘ng birinchi admin: `npm run admin:invite -- --email=admin@kompaniya.uz --name="Ism Familiya"` → bir martalik havola, parol va MFA. Demo loginlar (`@demo.local`) bu rejimda ishlamaydi; bazada demo akkaunt bo‘lsa API/worker ishga tushmaydi.
+
 Docker’da to‘liq stack: `docker compose -f infra/docker-compose.yml --profile app up --build` (oldin `.env` tayyorlang va migratsiyani bajaring).
 
 ## Buyruqlar
@@ -67,7 +69,10 @@ Docker’da to‘liq stack: `docker compose -f infra/docker-compose.yml --profil
 | `npm run amo-config [-- --apply]` | amoCRM voronka/maydonlarini tekshirish (dry-run) yoki yaratish |
 | `npm run smoke:live` | G01–G09 live sinovlari (credential bo‘lmasa `blocked`) |
 | `PERF_DATABASE_URL=... npm run perf:seed` | TZ §22.1 yuk dataset’i |
-| `npm run perf:measure` / `npm run perf:webhook` | API va webhook latency o‘lchovi |
+| `npm run perf:measure` / `npm run perf:webhook` / `npm run perf:monitor` | API latency, webhook yuk sinovi va backlog monitori |
+| `npm run admin:invite -- --email=... --name=...` | Birinchi administratorni yaratish (demo bo‘lmagan muhit) |
+| `bash infra/pitr/drill.sh` | Lokal PITR mashqi (WAL arxivi → vaqt nuqtasiga tiklash) |
+| `npm run dev:backend` | API + worker birga (E2E shu buyruq bilan ishga tushiradi) |
 
 ## Konfiguratsiya
 

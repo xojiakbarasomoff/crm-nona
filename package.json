@@ -20,11 +20,11 @@
     "test:integration": "vitest run --project integration",
     "test:e2e": "playwright test -c tests/e2e/playwright.config.ts",
     "test:all": "npm run test && npm run test:integration",
-    "db:generate": "prisma generate --schema packages/database/prisma/schema.prisma",
-    "db:migrate": "prisma migrate deploy --schema packages/database/prisma/schema.prisma",
-    "db:migrate:dev": "prisma migrate dev --schema packages/database/prisma/schema.prisma",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "db:migrate:dev": "prisma migrate dev",
     "db:seed": "tsx --conditions=development --env-file-if-exists=.env packages/database/src/seed.ts",
-    "db:reset": "prisma migrate reset --force --skip-seed --schema packages/database/prisma/schema.prisma && npm run db:seed",
+    "db:reset": "prisma migrate reset --force && npm run db:seed",
     "openapi": "tsx --conditions=development --env-file-if-exists=.env packages/contracts/src/openapi/generate.ts",
     "amo-config": "tsx --conditions=development --env-file-if-exists=.env apps/worker/src/cli/amo-config.ts",
     "smoke:live": "tsx --conditions=development --env-file-if-exists=.env apps/worker/src/cli/smoke-live.ts",
@@ -42,7 +42,7 @@
     "concurrently": "9.2.5",
     "eslint": "10.13.0",
     "globals": "17.13.0",
-    "prisma": "6.19.3",
+    "prisma": "7.10.1",
     "tsx": "4.23.15",
     "typescript": "5.9.3",
     "typescript-eslint": "8.72.0",
@@ -51,9 +51,9 @@
   "overrides": {
     "multer": "2.5.0",
     "postcss": "8.5.31",
-    "deepmerge-ts": "8.0.2",
     "tsup": {
       "esbuild": "0.28.2"
-    }
+    },
+    "vite": "6.4.5"
   }
 }

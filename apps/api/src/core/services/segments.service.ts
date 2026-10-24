@@ -1,5 +1,5 @@
-import type { FlightSegment, Prisma, Tx } from '@crm/database';
-import { can, localToUtc, maskReference, revisionChanged, utcToLocal } from '@crm/domain';
+import { Prisma, type FlightSegment, type Tx } from '@crm/database';
+import { can, formatLocalIso, localToUtc, maskReference, revisionChanged } from '@crm/domain';
 import { audit } from '../audit';
 import type { CoreDeps, UserActor } from '../context';
 import { notify, publishEvent } from '../events';
@@ -52,8 +52,8 @@ export function serializeSegment(s: FlightSegment, canSeeFull: boolean) {
   return {
     ...s,
     pnr: canSeeFull ? s.pnr : maskReference(s.pnr),
-    departureLocal: s.departureAtUtc ? utcToLocal(s.departureAtUtc, s.departureTimezone).local : null,
-    arrivalLocal: s.arrivalAtUtc ? utcToLocal(s.arrivalAtUtc, s.arrivalTimezone).local : null,
+    departureLocal: s.departureAtUtc ? formatLocalIso(s.departureAtUtc, s.departureTimezone) : null,
+    arrivalLocal: s.arrivalAtUtc ? formatLocalIso(s.arrivalAtUtc, s.arrivalTimezone) : null,
     dataSource: s.evidenceSource ?? 'manual',
     liveData: false,
   };
@@ -329,41 +329,63 @@ export class SegmentsService {
 
   // ---------------- Flights dashboard (TZ §15.3) ----------------
 
+  /**
+   * Single round trip (segments ⋈ orders ⋈ contacts ⋈ users) with keyset pagination on
+   * (departure_at_utc, id). Same scope rules: managers see only their own segments.
+   */
   async flightsBoard(actor: UserActor, q: { filter?: 'today' | '24h' | '7d' | 'overdue' | 'changed'; limit: number; cursor?: string }) {
     const now = this.d.clock.now();
-    const where: Prisma.FlightSegmentWhereInput = { companyId: actor.companyId, active: true, departureAtUtc: { gte: new Date(now.getTime() - 6 * 3600_000) } };
-    if (!can(actor.role, 'records.view_all')) where.ownerId = actor.id;
-    const dep = (ms: number) => ({ gte: now, lt: new Date(now.getTime() + ms) });
+    const conds: Prisma.Sql[] = [Prisma.sql`s.company_id = ${actor.companyId}::uuid`, Prisma.sql`s.active`];
+    let from = new Date(now.getTime() - 6 * 3600_000);
+    let to: Date | null = null;
     if (q.filter === 'today') {
       const { DateTime } = await import('luxon');
-      const end = DateTime.fromJSDate(now, { zone: 'Asia/Tashkent' }).endOf('day').toJSDate();
-      where.departureAtUtc = { gte: now, lte: end };
+      from = now;
+      to = DateTime.fromJSDate(now, { zone: 'Asia/Tashkent' }).endOf('day').toJSDate();
     }
-    if (q.filter === '24h') where.departureAtUtc = dep(24 * 3600_000);
-    if (q.filter === '7d') where.departureAtUtc = dep(7 * 24 * 3600_000);
-    if (q.filter === 'changed') where.operationalStatus = 'schedule_changed';
+    if (q.filter === '24h') [from, to] = [now, new Date(now.getTime() + 24 * 3600_000)];
+    if (q.filter === '7d') [from, to] = [now, new Date(now.getTime() + 7 * 24 * 3600_000)];
+    conds.push(Prisma.sql`s.departure_at_utc >= ${from}`);
+    if (to) conds.push(Prisma.sql`s.departure_at_utc < ${to}`);
+    if (!can(actor.role, 'records.view_all')) conds.push(Prisma.sql`s.owner_id = ${actor.id}::uuid`);
+    if (q.filter === 'changed') conds.push(Prisma.sql`s.operational_status = 'schedule_changed'`);
     if (q.filter === 'overdue') {
-      const overdue = await this.d.prisma.reminderOccurrence.findMany({ where: { companyId: actor.companyId, state: 'due', kind: 'milestone', dispatchedAt: { lt: new Date(now.getTime() - 15 * 60_000) } }, select: { segmentId: true } });
-      where.id = { in: overdue.map((o) => o.segmentId!).filter(Boolean) };
+      conds.push(Prisma.sql`EXISTS (SELECT 1 FROM reminder_occurrences r WHERE r.segment_id = s.id AND r.state = 'due' AND r.kind = 'milestone' AND r.dispatched_at < ${new Date(now.getTime() - 15 * 60_000)})`);
     }
-    const rows = await this.d.prisma.flightSegment.findMany({
-      where,
-      orderBy: [{ departureAtUtc: 'asc' }, { id: 'asc' }],
-      take: q.limit + 1,
-      ...(q.cursor ? { cursor: { id: q.cursor }, skip: 1 } : {}),
-      include: { order: { select: { id: true, orderNo: true, contactId: true, ownerId: true } } },
-    });
+    if (q.cursor) {
+      conds.push(Prisma.sql`(s.departure_at_utc, s.id) > (SELECT departure_at_utc, id FROM flight_segments WHERE id = ${q.cursor}::uuid AND company_id = ${actor.companyId}::uuid)`);
+    }
+    const rows = await this.d.prisma.$queryRaw<
+      Array<{
+        id: string; orderId: string; orderNo: string; customer: string | null; ownerId: string | null; ownerName: string | null; segmentNo: number; direction: string;
+        originIata: string; destinationIata: string; marketingCarrier: string; flightNumber: string; departureAtUtc: Date | null; departureTimezone: string;
+        arrivalAtUtc: Date | null; arrivalTimezone: string; pnr: string | null; operationalStatus: string; checkState: string; notificationState: string;
+        scheduleRevision: number; lastCheckedAt: Date | null; nextReminderAt: Date | null; evidenceSource: string | null;
+      }>
+    >(Prisma.sql`
+      SELECT s.id, s.order_id AS "orderId", o.order_no AS "orderNo", c.full_name AS customer, s.owner_id AS "ownerId", u.full_name AS "ownerName",
+             s.segment_no AS "segmentNo", s.direction, s.origin_iata AS "originIata", s.destination_iata AS "destinationIata",
+             s.marketing_carrier AS "marketingCarrier", s.flight_number AS "flightNumber", s.departure_at_utc AS "departureAtUtc",
+             s.departure_timezone AS "departureTimezone", s.arrival_at_utc AS "arrivalAtUtc", s.arrival_timezone AS "arrivalTimezone", s.pnr,
+             s.operational_status::text AS "operationalStatus", s.check_state::text AS "checkState", s.notification_state::text AS "notificationState",
+             s.schedule_revision AS "scheduleRevision", s.last_checked_at AS "lastCheckedAt", s.next_reminder_at AS "nextReminderAt", s.evidence_source AS "evidenceSource"
+      FROM flight_segments s
+      JOIN orders o ON o.id = s.order_id AND o.company_id = s.company_id
+      LEFT JOIN contacts c ON c.id = o.contact_id AND c.company_id = s.company_id
+      LEFT JOIN users u ON u.id = s.owner_id AND u.company_id = s.company_id
+      WHERE ${Prisma.join(conds, ' AND ')}
+      ORDER BY s.departure_at_utc ASC, s.id ASC
+      LIMIT ${q.limit + 1}`);
     const items = rows.slice(0, q.limit);
-    const contacts = await this.d.prisma.contact.findMany({ where: { id: { in: items.map((i) => i.order.contactId) } }, select: { id: true, fullName: true } });
-    const owners = await this.d.prisma.user.findMany({ where: { id: { in: items.map((i) => i.ownerId).filter((x): x is string => !!x) } }, select: { id: true, fullName: true } });
     const canFull = can(actor.role, 'reference.view_full');
     return {
-      items: items.map((s) => ({
-        ...serializeSegment(s, canFull || s.ownerId === actor.id),
-        orderNo: s.order.orderNo,
-        orderId: s.order.id,
-        customer: contacts.find((c) => c.id === s.order.contactId)?.fullName ?? null,
-        ownerName: owners.find((o) => o.id === s.ownerId)?.fullName ?? null,
+      items: items.map((r) => ({
+        ...r,
+        pnr: canFull || r.ownerId === actor.id ? r.pnr : maskReference(r.pnr),
+        departureLocal: r.departureAtUtc ? formatLocalIso(r.departureAtUtc, r.departureTimezone) : null,
+        arrivalLocal: r.arrivalAtUtc ? formatLocalIso(r.arrivalAtUtc, r.arrivalTimezone) : null,
+        dataSource: r.evidenceSource ?? 'manual',
+        liveData: false,
       })),
       nextCursor: rows.length > q.limit ? items[items.length - 1]!.id : null,
       generatedAt: now.toISOString(),

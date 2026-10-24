@@ -51,6 +51,8 @@ async function main() {
   const cookie = await login();
   const today = new Date().toISOString().slice(0, 10);
   const monthAgo = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10);
+  // Warm-up (JIT, connection pool, prepared plans) is excluded from the measurement.
+  for (const path of ['/api/v1/leads?limit=50', '/api/v1/orders?limit=50', '/api/v1/flights?limit=50&filter=7d']) for (let i = 0; i < 20; i++) await fetch(`${API}${path}`, { headers: { cookie } }).then((r) => r.arrayBuffer());
   const results = [];
   for (const path of ['/api/v1/leads?limit=50', '/api/v1/orders?limit=50', '/api/v1/flights?limit=50&filter=7d']) results.push(await bench(cookie, path));
   // Dashboard: distinct filters per request defeat the 20 s cache → uncached latency, 1 and 20 clients.

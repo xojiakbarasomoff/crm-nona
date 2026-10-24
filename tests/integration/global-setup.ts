@@ -2,7 +2,7 @@ import { execSync } from 'node:child_process';
 import { join } from 'node:path';
 import { Redis } from 'ioredis';
 import type { TestProject } from 'vitest/node';
-import { PrismaClient } from '@prisma/client';
+import { createPrisma } from '../../packages/database/src';
 
 declare module 'vitest' {
   export interface ProvidedContext {
@@ -26,11 +26,11 @@ export default async function setup(project: TestProject) {
   url.pathname = `/${name}`;
   const dbUrl = url.toString();
 
-  const admin = new PrismaClient({ datasources: { db: { url: base } } });
+  const admin = createPrisma(base);
   await admin.$executeRawUnsafe(`CREATE DATABASE "${name}"`);
   const root = join(__dirname, '..', '..');
   const env = { ...process.env, DATABASE_URL: dbUrl, APP_MODE: 'demo' };
-  execSync('npx prisma migrate deploy --schema packages/database/prisma/schema.prisma', { cwd: root, env, stdio: 'pipe' });
+  execSync('npx prisma migrate deploy', { cwd: root, env, stdio: 'pipe' });
   execSync('npx tsx --conditions=development packages/database/src/seed.ts', { cwd: root, env, stdio: 'pipe' });
   const redis = new Redis(redisUrl);
   await redis.flushdb();

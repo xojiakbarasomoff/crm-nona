@@ -10,11 +10,11 @@ Haqiqiy holat uchun `docs/acceptance-matrix.md` va `KNOWN_LIMITATIONS.md` ga qar
 | --- | --- | --- |
 | B0 | ⛔ | Credential yo‘q; adapterlar, contract fixture’lar va `npm run smoke:live` tayyor |
 | B1 | ✅ | Monorepo, Compose, migratsiyalar (kompozit tenant FK, partial unique, audit trigger), auth (Argon2id, sessiya, CSRF, rate limit, admin TOTP, aktivlashtirish), RBAC, audit, seed, OpenAPI, CI |
-| B2 | 🟡 | OAuth (refresh lock), CRM webhook, inbox/outbox, dedupe, taqsimlash, status/mas’ul proyeksiyasi, anomaliya, reconciliation, `amo-config` — demo adapter bilan; boshlang‘ich import va kunlik nazorat yo‘q |
-| B3 | 🟡 | Lead Ads, Direct inbound/echo/read, amoCRM chat javobi, policy, unknown outbound — demo bilan; live ⛔; Lead Ads reconciliation yo‘q |
-| B4 | ✅ | Talablar, taklif versiyalari, buyurtma, to‘lov, yo‘lovchi, chipta, multi-segment, DST, manual check; fayl biriktirish yo‘q |
+| B2 | ✅ (live ⛔) | OAuth, CRM webhook, inbox/outbox, dedupe, taqsimlash, proyeksiya, anomaliya, boshlang‘ich import, incremental (lid+kontakt) va kunlik nazorat, `amo-config` — demo adapter va contract testlar bilan |
+| B3 | 🟡 (live ⛔) | Lead Ads (+ tarixni qayta olish), Direct inbound/echo/read, chat javobi, policy, unknown outbound — demo bilan; AC06 live talab qiladi |
+| B4 | ✅ | Talablar, taklif versiyalari, buyurtma, to‘lov, yo‘lovchi, chipta, multi-segment, DST, manual check, fayllar (skan, signed URL) |
 | B5 | ✅ | DB scheduler, milestone/urgent, revision, bekor qilish, eskalatsiya, missed, CRM task mapping, qo‘lda recurrence/snooze, reyslar dashboard’i, SSE + polling |
-| B6 | 🟡 | KPI, filtrlar, menejer statistikasi, RBAC eksport, perf o‘lchovi, lokal restore mashqi; PITR, staging UAT, alerting yo‘q |
+| B6 | 🟡 (infra ⛔) | KPI, filtrlar, eksport, SLA signallari, retention/PII, perf (lokal), 15 daq webhook sinovi, lokal PITR mashqi; production PITR, staging UAT, alerting yo‘q |
 
 Batafsil: `docs/acceptance-matrix.md`, `KNOWN_LIMITATIONS.md`.
 

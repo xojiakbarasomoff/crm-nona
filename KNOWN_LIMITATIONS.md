@@ -1,42 +1,39 @@
 # Known limitations
 
-Holat: 2026-10-24. Tizim **production tayyor emas**. Quyidagilar bajarilmagan yoki tashqi dalil talab qiladi.
+Holat: 2026-10-24. Tizim **production tayyor emas** — quyidagi bloklar tashqi akkaunt yoki infratuzilmaga bog‘liq. Credential talab qilmaydigan majburiy funksiyalar kod va testlar bilan yopilgan (`docs/acceptance-matrix.md`).
 
-## 1. Tashqi integratsiyalar (bloklangan)
+## 1. Tashqi akkauntga bog‘liq (⛔)
 
-- G01–G09 live sinovlarining hech biri bajarilmagan: amoCRM test akkaunti, OAuth integratsiya, Meta App / Page / Instagram professional akkaunt, amoCRM Chats kanali mavjud emas (`docs/feasibility.md`).
-- amoCRM REST, Chats API va Meta Graph adapterlari hujjatdagi shakllar bo‘yicha yozilgan, lekin **real javob bilan tasdiqlanmagan**. Xususan: Chats API imzo formati, `scope_id` olish, amojo sender ID ↔ amoCRM `user_id` xaritasi, `leads?query=` bilan operation ID qidiruvi, Lead objektidagi `platform` maydoni, Instagram referral shakli.
-- Direct yo‘li vaqtinchalik `custom_channel` (ADR 0002); yakuniy tanlov G08 dan keyin.
-- Meta javob oynasi (24 soat) va Human Agent oynasi konfiguratsiya; G07 da tasdiqlanishi kerak.
-- AC06 (Instagram’da haqiqiy qabul) va AC36 (staging E2E) bajarilmagan.
-- amoCRM native rollarini menejerlar faqat o‘z chatini ko‘radigan qilib sozlash akkaunt darajasida qo‘lda bajarilishi va tekshirilishi kerak (TZ §6.1).
-- Lead Ads reconciliation (token uzilgan davrdagi lidlarni qayta olish, TZ §8.3) implement qilinmagan; Direct tarixini import qilish (G09) yo‘q.
+- **G01–G09 live sinovlari bajarilmagan** — amoCRM test akkaunti va integratsiya kalitlari, Meta App / Page / Instagram professional akkaunt / test lead-forma, amoCRM Chats kanali (`channel_id`, `secret`) yo‘q (`docs/feasibility.md`). `npm run smoke:live` haqiqiy javobsiz hech qachon «passed» demaydi.
+- Shu sababli tasdiqlanmagan: amoCRM REST/Chats va Meta Graph javob shakllari (contract testlar sintetik fixture’larda), Chats API imzo formati va `scope_id`, amojo sender ID ↔ `user_id` xaritasi, `leads?query=` bilan operation ID qidiruvi, Lead objektidagi `platform`, referral shakli, Lead Ads saqlanish oynasi (`META_LEADS_RETENTION_DAYS=90` taxmin), Meta javob oynalari (G07).
+- AC06 (Instagram’da haqiqiy javob qabul qilinishi), AC36 (staging end-to-end).
+- Direct yo‘li vaqtinchalik `custom_channel` (ADR 0002) — yakuniy tanlov G08 dan keyin.
+- amoCRM native rollarini menejer faqat o‘z chatini ko‘radigan qilib sozlash — akkauntda qo‘lda.
+- Direct tarixini import qilish chuqurligi (G09).
 
-## 2. Funksional bo‘shliqlar
+## 2. Infratuzilmaga bog‘liq (⛔)
 
-- Fayllar/attachment: jadval bor, lekin yuklash, MIME/hajm tekshiruvi, virus skaner holati va signed URL endpoint’lari implement qilinmagan (TZ §12.2, §21). Taklifga xavfsiz ilova biriktirib bo‘lmaydi.
-- Instagram media attachment’lari faqat metadata sifatida saqlanadi; backend media yuklamaydi (SSRF himoyasi kerak bo‘lmaydi, lekin ko‘rsatish ham yo‘q).
-- SLA: birinchi javob muddati hisoblanadi va `first_contact` vazifasining muddati sifatida ishlatiladi, lekin «muddat yaqinlashmoqda / kechikdi» bildirishnomalari uchun alohida scheduler yo‘q.
-- amoCRM kunlik «yo‘qolgan/o‘chirilgan yozuvlar» nazorati (TZ §5.2) yo‘q; 5 daqiqalik incremental reconciliation faqat lidlar uchun (kontaktlar emas). Boshlang‘ich import (mavjud kontakt/lidlar) CLI sifatida yo‘q.
-- Kontakt/lidni web’dan tahrirlash: lokal turizm maydonlari va bosqich/mas’ul bor; kontakt ismi/telefonini amoCRM’ga yozish yo‘li yo‘q.
-- Dublikat merge: amoCRM tomonida ikki kontakt bo‘lsa holat `merge_pending_amocrm` bo‘lib qoladi — amoCRM merge’ini tasdiqlash oqimi yo‘q.
-- Mas’ul o‘zgarganda amoCRM vazifalarini qayta biriktirish outbox’ga qo‘yiladi; amoCRM task yopilishini (native) webhook orqali kuzatish yo‘q.
-- Kompaniya sozlamalari UI’si (ish jadvali, SLA, sticky owner, navbatchi, telefon qoidasi, lead-form xaritasi, retention) yo‘q — hozircha DB/seed orqali.
-- PII o‘chirish/anonimlashtirish va retention tozalash job’lari (raw webhook 30 kun va h.k.) implement qilinmagan; muddatlar kompaniya tomonidan tasdiqlanmagan.
-- Monitoring: metrikalar Redis hisoblagichlari va `/integrations/health` sahifasida; Prometheus/alerting eksporti, tashqi bildirishnoma kanali yo‘q. Heartbeat bor, lekin «kanal oqimi uzildi» detektori yo‘q.
-- CPL/ROAS: reklama sarfi ma’lumoti olinmaydi, shuning uchun hisoblanmaydi (TZ §2.2 bo‘yicha to‘g‘ri xatti-harakat).
-- Login rate limit email+IP bo‘yicha; IP-only global limit va hisobni vaqtincha qulflash yo‘q.
+- **ClamAV (clamd)**: protokol implement qilingan va soxta clamd bilan contract-testlangan; haqiqiy clamd bilan sinalmagan. Production’da `SCANNER=clamav` majburiy (builtin faqat EICAR’ni taniydi va demo’dan tashqarida rad etiladi).
+- **Object storage**: faqat lokal private katalog adapteri bor. S3-mos storage adapteri yozilmagan; production uchun shifrlangan, backup qilinadigan volume yoki adapter qo‘shish kerak.
+- **PITR production**: konfiguratsiya va yo‘riqnoma bor, lokal mashq o‘tgan; off-site (object storage) WAL arxivi, haqiqiy hajmdagi RTO ≤ 4 soat mashqi, boshqariladigan PostgreSQL bajarilmagan.
+- Staging/production deploy, TLS, secret manager, hosting hududi, Docker registry, image imzolash va zaiflik skanerlash.
+- Unumdorlikni ajratilgan 4 vCPU/8 GB muhitda qayta o‘lchash (hozirgi raqamlar noutbukda).
+- Tashqi alerting kanali (metrikalar `/integrations` sahifasida va Redis hisoblagichlarida; Prometheus eksporti yo‘q).
 
-## 3. Infratuzilma
+## 3. Kompaniya qarori kerak
 
-- Staging/production deploy konfiguratsiyasi, TLS, secret manager, private object storage, hosting hududi tanlanmagan.
-- Backup: lokal `pg_dump`/`pg_restore` mashqi bajarilgan; RPO 15 daqiqa uchun PITR/WAL arxivi va RTO 4 soat mashqi alohida muhitda bajarilmagan (AC35).
-- Unumdorlik o‘lchovi lokal noutbukda; ajratilgan 4 vCPU/8 GB muhitda qayta o‘lchanmagan. 15 daqiqalik webhook sig‘im testi bajarilmagan (60 s bajarildi).
-- Docker image’lar lokal build qilingan; registry, imzolash va zaiflik skanerlash yo‘q.
+- Retention muddatlari: taklif (webhook 30 kun, texnik log 90 kun, yozishma 12 oy) kiritilgan, lekin **kompaniya tasdiqlamaguncha tozalash o‘chirilgan**. Audit, buyurtma va to‘lov saqlash muddati siyosati.
+- Telefon raqami uchun standart mamlakat qoidasi (`phoneRule.confirmed=false`), ish jadvali, SLA, sticky owner, navbatchi — hozir seed qiymatlari; sozlamalar UI’si yo‘q.
+- Hosting hududi va Meta/amoCRM’ga uzatiladigan shaxsiy ma’lumotlar doirasi.
 
-## 4. Texnik qarz
+## 4. Ma’lum texnik cheklovlar
 
-- Stack versiyalari: NestJS 11, Next.js 15, Prisma 6, ESLint 9 ataylab tanlangan (ADR 0005). ESLint 9 rasmiy qo‘llab-quvvatlash muddati tugagan; production’dan oldin yangi major’larga o‘tish va xavfsizlik yangilanishlarini tekshirish kerak.
-- Prisma migratsiyalari qo‘lda boshqariladi (`migrate deploy`), chunki partial unique va kompozit FK’lar raw SQL’da. Yangi migratsiyani `prisma migrate diff` bilan yaratib, raw SQL obyektlarini o‘chiruvchi qatorlarni olib tashlash shart (`docs/runbook.md`).
-- Integration testlar har ishga tushganda yangi `crm_it_<timestamp>` bazasini yaratadi va o‘zi yaratganini o‘chiradi; Prisma’ning `migrate reset` AI-guard’i chetlab o‘tilmagan.
-- Dashboard 20 soniyalik Redis kesh va in-process single-flight ishlatadi; bir nechta API instansiyada stampede himoyasi faqat instansiya ichida.
+- Audit yozuvlari o‘zgarmas: PII o‘chirishda audit `old/new` qiymatlaridagi shaxsiy ma’lumot qoladi (siyosat bo‘yicha saqlanadi).
+- PII o‘chirilgandan keyin amoCRM kontakti va chat tarixi avtomatik o‘chirilmaydi — operator vazifasi ochiladi.
+- Dublikat merge: amoCRM’da ikki kontakt bo‘lsa `merge_pending_amocrm` holatida qoladi.
+- Kontakt ismi/telefonini web’dan amoCRM’ga yozish yo‘li yo‘q (faqat amoCRM’da tahrirlanadi va proyeksiyalanadi).
+- `ENCRYPTION_KEY` rotatsiyasi uchun qayta shifrlash skripti yo‘q.
+- Prisma 7: so‘rov rejasi va natijani map qilish Node process’ida — dashboard 20 parallelda 1,7–1,8 s (maqsad 2 s, zaxira kam). `$queryRaw` `void` ustunni o‘qimaydi.
+- Mahalliy ishlab chiqish uchun Node ≥ 22.12 kerak (tavsiya 22.23.4).
+- Next.js 15 va NestJS 11 hali patch oladi; 16/12 major’ga o‘tish alohida vazifa.
+- AC10 bir marta yuklangan mashinada to‘liq suite’da muvaffaqiyatsiz bo‘ldi va qayta tiklanmadi; test diagnostika bilan kuchaytirilgan.

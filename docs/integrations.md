@@ -56,3 +56,14 @@ Dry-run: yetishmayotgan status va maydonlarni ko‘rsatadi. `--apply`: faqat yet
 
 - Umumiy Redis limiter: `amo:<account_id>` kaliti bo‘yicha `AMO_RATE_LIMIT_RPS` (default 5) — barcha API/worker process’lari uchun bitta.
 - Retry jadvali (TZ §19.3): `packages/domain/src/misc.ts` `decideRetry`; maks 8 urinish / 24 soat, keyin `dead`; `unknown` holat avtomatik qayta yaratilmaydi; 401 → bitta sinxron refresh; 403/billing → connection `paused`.
+
+## Sinxronlash va tarixni qayta olish (2026-10-24 qo‘shildi)
+
+| Jarayon | Kod | Ishga tushirish | Dalil |
+| --- | --- | --- | --- |
+| amoCRM boshlang‘ich importi (foydalanuvchi xaritasi, kontaktlar, faol lidlar; sahifa checkpoint’i, idempotent) | `core/services/amo-sync.service.ts` `importInitial` | `POST /api/v1/integrations/amocrm/import` (worker’da, 202) | `compliance.test.ts` (demo adapter) |
+| Incremental reconciliation (lid + kontakt, 10 daq overlap, amoCRM’da native yaratilgan lidlar ham) | `reconcile` | worker, har `RECONCILE_INTERVAL_MS` (5 daq) | `compliance.test.ts` |
+| Kunlik nazorat (amoCRM’dan yo‘qolgan lid → tombstone; yo‘q faol lid → import) | `dailyAudit` | worker, 24 soatda bir | `compliance.test.ts` |
+| Lead Ads tarixi (`/{form-id}/leads`, cursor, checkpoint, webhook bilan bir xil dedupe kaliti, bo‘shliq hisoboti) | `lead-ads-backfill.service.ts` | `POST /api/v1/integrations/lead-ads/backfill` | `compliance.test.ts`; contract: `tests/contract/pagination-files.test.ts` |
+
+Contract testlar sintetik fixture’lar bilan sahifalash, 204 javob, 401→refresh, `time_created` filtri va `after` cursor’ni tekshiradi. **Ular live API dalili emas.** `META_LEADS_RETENTION_DAYS` (default 90) — G09 da tasdiqlanadigan taxmin.

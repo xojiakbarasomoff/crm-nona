@@ -41,9 +41,19 @@ Signal qoidalari (qo‘lda kuzatiladi; tashqi alerting yo‘q — KNOWN_LIMITATI
 - Yangi migratsiya: `npx prisma migrate diff --from-migrations packages/database/prisma/migrations --to-schema-datamodel packages/database/prisma/schema.prisma --shadow-database-url <tmp> --script`; natijadan raw SQL obyektlarini (kompozit FK `*_fk`, partial index’lar, trigger’lar) o‘chiruvchi qatorlarni olib tashlang.
 - Deploy’dan keyin outbox/inbox backlog DB’da saqlanadi va yangi worker davom ettiradi.
 
-## 6. Backup va restore
+## 6. Backup va restore (PITR)
 
-Maqsad: RPO ≤ 15 daq, RTO ≤ 4 soat — boshqariladigan PostgreSQL PITR yoki WAL arxivlash talab qilinadi (staging/prod infra’da hali sozlanmagan).
+Maqsad: RPO ≤ 15 daq, RTO ≤ 4 soat.
+
+Konfiguratsiya: `infra/pitr/postgresql.pitr.conf` (`wal_level=replica`, `archive_mode=on`, `archive_timeout=300` → RPO ≤ 5 daq + arxiv kechikishi). Production’da `archive_command` ni off-site, shifrlangan nishonga (wal-g/pgBackRest → object storage) yoki PITR yoqilgan boshqariladigan PostgreSQL’ga almashtiring; bazaviy backup kamida kuniga bir.
+
+PITR tiklash tartibi:
+1. Yangi (bo‘sh) data katalogiga oxirgi base backup’ni oching (`base.tar.gz`, `pg_wal.tar.gz`).
+2. `postgresql.auto.conf`: `restore_command = 'cp /wal-archive/%f %p'` (yoki wal-g fetch), `recovery_target_time = '<UTC vaqt>'`, `recovery_target_action = 'promote'`; `recovery.signal` yarating.
+3. PostgreSQL’ni ishga tushiring; logda `recovery stopping before ...` va `archive recovery complete` ni tekshiring.
+4. Ilova: `migrate deploy` holati, so‘ng worker — u `reapplyTombstones` ni kunlik bajaradi (PII o‘chirishlar qayta qo‘llanadi); amoCRM reconciliation 10 daq overlap bilan yo‘qolgan o‘zgarishlarni oladi.
+
+**Lokal PITR mashqi** (`bash infra/pitr/drill.sh`, 2026-10-24): base backup → 1000 yozuv → maqsad vaqt → 500 yozuv + 1000 tasini o‘chirish → maqsad vaqtga tiklash: `before=1000, after=0`, tiklash 4 s, `archive_failures=0` — `docs/perf/pitr-drill-last-run.txt`. **Sinalmagan:** off-site arxiv, haqiqiy hajmdagi RTO, boshqariladigan PostgreSQL’da PITR.
 
 Lokal mashq (2026-10-24, AC35 qisman dalil):
 
@@ -60,3 +70,11 @@ Restore’dan keyin: (1) `migrate deploy` holatini tekshiring; (2) worker’ni i
 
 - Windows’da `prisma generate` EPERM: ishlab turgan api/worker query engine DLL’ni band qiladi — ularni to‘xtatib qayta ishga tushiring.
 - 5432/3000 portlari band bo‘lishi mumkin: loyiha 55432 (PG), 56379 (Redis), 4100 (API), 3100 (web) ishlatadi.
+
+## 8. Fayllar, SLA, retention, PII
+
+- Fayllar: `STORAGE_LOCAL_DIR` — production’da absolyut yo‘l (shifrlangan, backup qilinadigan private volume). Skaner: production’da `SCANNER=clamav` (`CLAMD_HOST/PORT`) majburiy — builtin (faqat EICAR) demo’dan tashqarida ishga tushmaydi. Skan kutayotgan fayllar `/integrations` da; clamd ishlamasa fayl `pending` qoladi va ochilmaydi.
+- SLA: worker har daqiqada; `SLA_WARN_MINUTES` (default 5). Buzilish rahbarga bildirishnoma, avtomatik qayta biriktirish yo‘q.
+- Retention: admin `/integrations` → «Retention siyosatini tasdiqlash». Tasdiqlanmaguncha tozalash ishlamaydi (`not_confirmed_purge_disabled`). Texnik loglar muddati log infratuzilmasida sozlanadi.
+- PII o‘chirish: mijoz kartasi → «Shaxsiy ma’lumotlarni o‘chirish» (admin). Natija: kontakt/identifikator/yozishma/yo‘lovchi/fayllar anonimlanadi, to‘lovlar saqlanadi, tombstone yoziladi, amoCRM/Instagram nusxalari uchun operator vazifasi ochiladi. Audit yozuvlari o‘zgarmaydi (siyosat bo‘yicha saqlanadi).
+- Birinchi admin: `npm run admin:invite`.

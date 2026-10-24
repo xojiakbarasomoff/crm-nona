@@ -12,3 +12,4 @@ test-results/
 *.log
 packages/database/generated/
 storage/
+packages/database/src/generated/

@@ -104,3 +104,20 @@ export function bucketKey(utc: Date, bucket: Bucket, zone = COMPANY_DEFAULT_TIME
   const start = bucket === 'day' ? dt.startOf('day') : bucket === 'week' ? dt.startOf('week') : dt.startOf('month');
   return start.toFormat('yyyy-MM-dd');
 }
+
+const localFormatters = new Map<string, Intl.DateTimeFormat>();
+
+/**
+ * Fast "YYYY-MM-DDTHH:mm" wall-clock rendering for list views (cached Intl formatter per zone).
+ * Equivalent to utcToLocal(...).local.
+ */
+export function formatLocalIso(utc: Date, zone: string): string {
+  let f = localFormatters.get(zone);
+  if (!f) {
+    f = new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    localFormatters.set(zone, f);
+  }
+  const parts: Record<string, string> = {};
+  for (const p of f.formatToParts(utc)) parts[p.type] = p.value;
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+}

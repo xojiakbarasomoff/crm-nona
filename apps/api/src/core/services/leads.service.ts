@@ -174,8 +174,10 @@ export class LeadsService {
       ...(q.ownerId && actor.role !== 'MANAGER' ? { ownerId: q.ownerId } : {}),
       ...(q.search ? { name: { contains: q.search, mode: 'insensitive' } } : {}),
     });
+    // List view: only the columns the table needs (less mapping work per row).
     const rows = await this.d.prisma.lead.findMany({
       where,
+      select: { id: true, name: true, stage: true, firstSource: true, syncState: true, createdAt: true, ownerId: true, anomaly: true, slaBreachedAt: true, firstHumanActionAt: true, amoLeadId: true, contactId: true, version: true },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: q.limit + 1,
       ...(q.cursor ? { cursor: { id: q.cursor }, skip: 1 } : {}),

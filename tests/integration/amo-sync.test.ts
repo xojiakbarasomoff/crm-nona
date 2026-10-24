@@ -33,7 +33,12 @@ describe('assignment (AC10, AC11)', () => {
     const ids = await core.processing.claimInboxBatch(200);
     // 10 concurrent processors compete for the pool lock.
     const chunks = Array.from({ length: 10 }, (_, k) => ids.filter((_, i) => i % 10 === k));
-    await Promise.all(chunks.map(async (c) => { for (const id of c) await core.processing.processInbox(id); }));
+    const outcomes: string[] = [];
+    await Promise.all(chunks.map(async (c) => { for (const id of c) outcomes.push(await core.processing.processInbox(id)); }));
+    // Diagnostic: any failed/retried inbox row shows its stored error instead of a bare count mismatch.
+    const failed = await p().webhookInbox.findMany({ where: { id: { in: ids }, state: { notIn: ['done'] } }, select: { state: true, lastError: true } });
+    expect(failed).toEqual([]);
+    expect(outcomes.every((o) => o === 'processed')).toBe(true);
     const after = await p().lead.groupBy({ by: ['ownerId'], where: { assignmentReason: 'round_robin' }, _count: true });
     const delta = memberIds.map((uid) => (after.find((a) => a.ownerId === uid)?._count ?? 0) - (before.find((b) => b.ownerId === uid)?._count ?? 0));
     expect(delta.reduce((a, b) => a + b, 0)).toBe(100);

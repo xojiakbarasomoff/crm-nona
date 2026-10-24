@@ -126,3 +126,13 @@ describe('manual recurrence (AC24)', () => {
     expect(nthOccurrence('2026-10-24T09:00', 'Asia/Tashkent', r, 3)).toBeNull();
   });
 });
+
+describe('formatLocalIso (list fast path)', () => {
+  it('matches utcToLocal across zones and DST transitions', async () => {
+    const { formatLocalIso, utcToLocal } = await import('../src');
+    const zones = ['Asia/Tashkent', 'Europe/Berlin', 'America/New_York', 'Asia/Kolkata', 'Australia/Adelaide'];
+    for (let t = Date.UTC(2026, 0, 1); t < Date.UTC(2027, 0, 1); t += 7 * 3600_000 + 13 * 60_000) {
+      for (const z of zones) expect(formatLocalIso(new Date(t), z)).toBe(utcToLocal(new Date(t), z).local);
+    }
+  });
+});

@@ -17,7 +17,7 @@ RUN npm ci --no-audit --no-fund
 
 FROM deps AS build
 COPY . .
-RUN npx prisma generate --schema packages/database/prisma/schema.prisma \
+RUN npx prisma generate \
  && npm run build -w @crm/api -w @crm/worker \
  && NEXT_TELEMETRY_DISABLED=1 npm run build -w @crm/web
 
@@ -26,13 +26,14 @@ ENV NODE_ENV=production
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/packages/database/prisma ./packages/database/prisma
+COPY --from=build /app/prisma.config.ts ./prisma.config.ts
 USER node
 
 FROM runtime-node AS api
 COPY --from=build /app/apps/api/dist ./apps/api/dist
 EXPOSE 4100
 HEALTHCHECK --interval=15s --timeout=3s CMD wget -qO- http://127.0.0.1:4100/health || exit 1
-# Migrations run as a separate release step: `npx prisma migrate deploy --schema packages/database/prisma/schema.prisma`
+# Migrations run as a separate release step: `npx prisma migrate deploy` (uses prisma.config.ts)
 CMD ["node", "apps/api/dist/main.js"]
 
 FROM runtime-node AS worker
