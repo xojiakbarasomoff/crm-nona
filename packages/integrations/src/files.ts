@@ -21,7 +21,9 @@ export class LocalPrivateStorage implements StorageDriver {
   readonly descriptor = { name: 'local-private', kind: 'local' as const };
   private readonly root: string;
   constructor(root: string) {
-    this.root = resolve(isAbsolute(root) ? root : join(process.cwd(), root));
+    // Relative paths resolve against the directory npm was started from (repo root for workspace
+    // scripts), so API and worker share one directory. Production should use an absolute path.
+    this.root = resolve(isAbsolute(root) ? root : join(process.env.INIT_CWD ?? process.cwd(), root));
   }
   private path(key: string) {
     if (!/^[a-f0-9]{2}\/[a-f0-9]{62}$/.test(key)) throw new Error('Invalid storage key');

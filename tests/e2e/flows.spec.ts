@@ -135,3 +135,39 @@ test('order flow: lead → order → segment → confirm → manual flight check
   await expect(page.getByRole('heading', { name: 'Reyslar' })).toBeVisible();
   await expect(page.getByText('TK 371').first()).toBeVisible();
 });
+
+test('attachment: upload in the lead card, virus scan by the worker, signed download', async ({ page, browser }) => {
+  test.setTimeout(150_000);
+  const adminCtx = await browser.newContext();
+  const admin = await adminCtx.newPage();
+  await login(admin, 'admin@demo.local');
+  const name = `E2E Fayl ${Date.now()}`;
+  const lead = await createLeadViaDemo(admin, name);
+  await admin.goto('/integrations');
+  await expect(admin.getByRole('heading', { name: 'Xavfsizlik va saqlash' })).toBeVisible();
+  await expect(admin.getByRole('heading', { name: 'Sinxronlash va tarixni qayta olish' })).toBeVisible();
+  await adminCtx.close();
+
+  await login(page, 'rahbar@demo.local');
+  await page.goto(`/leads/${lead.id}`);
+  await page.getByLabel('Fayl yuklash').setInputFiles({ name: 'shartnoma.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\n% e2e test\n%%EOF') });
+  await expect(page.getByText('shartnoma.pdf')).toBeVisible();
+  await expect(page.getByText('Virus tekshiruvi kutilmoqda')).toBeVisible();
+  // The worker housekeeping loop scans pending files (≤ 60 s); the list refreshes every 10 s.
+  await expect(page.getByText('Tekshirildi')).toBeVisible({ timeout: 100_000 });
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Yuklab olish' }).click();
+  expect((await download).suggestedFilename()).toBe('shartnoma.pdf');
+});
+
+test('attachment: a disguised executable is rejected with a clear message', async ({ page, browser }) => {
+  const adminCtx = await browser.newContext();
+  const admin = await adminCtx.newPage();
+  await login(admin, 'admin@demo.local');
+  const lead = await createLeadViaDemo(admin, `E2E Spoof ${Date.now()}`);
+  await adminCtx.close();
+  await login(page, 'rahbar@demo.local');
+  await page.goto(`/leads/${lead.id}`);
+  await page.getByLabel('Fayl yuklash').setInputFiles({ name: 'rasm.pdf', mimeType: 'application/pdf', buffer: Buffer.from('MZ\x90\x00 not a pdf') });
+  await expect(page.getByText('Fayl turi ruxsat etilmagan')).toBeVisible();
+});
