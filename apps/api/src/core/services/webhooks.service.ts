@@ -18,19 +18,38 @@ export class WebhooksService {
     return r.challenge;
   }
 
+  /**
+   * Har bir webhook obyekti uchun BITTA imzo siri (zaxira yo'q):
+   * - `object: "instagram"` (Instagram Login, Direct) → Instagram app secret (INSTAGRAM_APP_SECRET). Haqiqiy Meta test hodisasi
+   *   (2026-10-25) aynan shu sir bilan imzolangani log orqali tasdiqlandi. INSTAGRAM_APP_SECRET sozlanmagan bo'lsa (demo/eski muhit) — META_APP_SECRET.
+   * - boshqa obyektlar (Lead Ads, `page`) → META_APP_SECRET.
+   * Obyekt turi faqat kalitni tanlaydi; hodisa baribir shu kalit bilan imzo o'tmaguncha qabul qilinmaydi.
+   */
+  signingSecretFor(rawBody: Buffer): { secret: string; kind: 'instagram' | 'meta' } {
+    const m = this.d.config.meta;
+    let object: unknown;
+    try {
+      object = (JSON.parse(rawBody.toString('utf8')) as { object?: unknown }).object;
+    } catch {
+      object = undefined;
+    }
+    return object === 'instagram' && m.instagram.appSecret ? { secret: m.instagram.appSecret, kind: 'instagram' } : { secret: m.appSecret, kind: 'meta' };
+  }
+
   async metaReceive(rawBody: Buffer, signature: string | undefined) {
-    // Hujjat (Meta, Set up Instagram Webhooks): imzo ilovaning App Secret'i bilan; bitta, sozlangan qiymat. Zaxira sir yo'q.
-    if (!verifyMetaSignature(rawBody, signature, this.d.config.meta.appSecret)) {
+    const { secret, kind } = this.signingSecretFor(rawBody);
+    if (!verifyMetaSignature(rawBody, signature, secret)) {
       await this.d.redis.incr('metrics:signature_failures').catch(() => undefined);
-      // Diagnostika (hodisa BARIBIR rad etiladi): sarlavha shakli va Instagram app secret bilan mos kelish-kelmasligi. Sirlar logga chiqmaydi.
-      const igSecret = this.d.config.meta.instagram.appSecret;
+      // Diagnostika (hodisa BARIBIR rad etiladi): sirlar logga chiqmaydi, faqat tanlangan tur va boshqa sir bilan mos kelish-kelmasligi.
+      const other = kind === 'instagram' ? this.d.config.meta.appSecret : this.d.config.meta.instagram.appSecret;
       const hex = signature?.startsWith('sha256=') ? signature.slice(7) : null;
       this.d.logger.warn(
         {
+          selectedSecret: kind,
           signatureHeaderPresent: !!signature,
           signatureHeaderFormatOk: !!hex && /^[0-9a-f]{64}$/i.test(hex),
           bodyBytes: rawBody.length,
-          wouldMatchInstagramAppSecret: !!(hex && igSecret && createHmac('sha256', igSecret).update(rawBody).digest('hex') === hex.toLowerCase()),
+          wouldMatchOtherSecret: !!(hex && other && createHmac('sha256', other).update(rawBody).digest('hex') === hex.toLowerCase()),
         },
         'meta webhook signature rejected',
       );

@@ -11,8 +11,8 @@ import { alwaysOnDuty, drain, login, makeApp, makeCore, sendChatReply, type Sess
  * fetch'i bilan almashtirilgan (Meta javoblari hujjatdagi shaklda). Bu haqiqiy akkauntda tasdiqlash EMAS.
  */
 const IG_ID = '17841400000000001';
-const IG_SECRET = 'ig-test-secret'; // faqat OAuth (token almashish) uchun
-const APP_SECRET = 'meta-app-secret'; // webhook imzosi: hujjatdagi «your app's App Secret» (META_APP_SECRET)
+const IG_SECRET = 'ig-test-secret'; // Instagram app secret: OAuth + `object: instagram` webhook imzosi (haqiqiy Meta test hodisasi bilan tasdiqlangan)
+const APP_SECRET = 'meta-app-secret'; // META_APP_SECRET: Lead Ads (`page`) webhook imzosi va signed_request
 const calls: Array<{ url: string; method: string; body: string | null }> = [];
 let behavior: 'ok' | 'personal' = 'ok';
 
@@ -120,23 +120,27 @@ describe('Instagram Login: ulash (OAuth)', () => {
 
 describe('Instagram Login: kiruvchi Direct → kontakt/lid → mas’ul → javob', () => {
   const sender = `ig_${Date.now()}`;
-  const hook = (mid: string, text: string, secret = APP_SECRET, accountId = IG_ID) => {
+  const hook = (mid: string, text: string, secret = IG_SECRET, accountId = IG_ID) => {
     const body = Buffer.from(JSON.stringify({ object: 'instagram', entry: [{ id: accountId, time: Date.now(), messaging: [{ sender: { id: sender }, recipient: { id: accountId }, timestamp: Date.now(), message: { mid, text } }] }] }));
     return request(app.getHttpServer()).post('/webhooks/meta').set('Content-Type', 'application/json').set('X-Hub-Signature-256', signMetaBody(body, secret)).send(body.toString());
   };
   const subscribe = (q: Record<string, string>) => request(app.getHttpServer()).get('/webhooks/meta').query(q);
 
-  it('webhook imzosi: faqat hujjatlashtirilgan App Secret (META_APP_SECRET); boshqa sir (jumladan Instagram app secret) rad etiladi va hodisa saqlanmaydi', async () => {
+  it('webhook imzosi: `instagram` obyekti faqat Instagram app secret bilan; boshqa sir (jumladan META_APP_SECRET) rad etiladi va hodisa saqlanmaydi; Lead Ads `page` aksincha', async () => {
     const before = await p().webhookInbox.count();
     expect((await hook('m0', 'x', 'wrong-secret')).status).toBe(401);
-    expect((await hook('m0b', 'x', IG_SECRET)).status).toBe(401); // zaxira sir yo'q
+    expect((await hook('m0b', 'x', APP_SECRET)).status).toBe(401); // zaxira sir yo'q
     expect(await p().webhookInbox.count()).toBe(before);
-    expect((await hook(`mid.sig.${sender}`, 'imzo', APP_SECRET)).status).toBe(200);
+    expect((await hook(`mid.sig.${sender}`, 'imzo', IG_SECRET)).status).toBe(200);
+    const page = Buffer.from(JSON.stringify({ object: 'page', entry: [{ id: '1', changes: [{ field: 'leadgen', value: { leadgen_id: 'x', page_id: '1' } }] }] }));
+    const post = (secret: string) => request(app.getHttpServer()).post('/webhooks/meta').set('Content-Type', 'application/json').set('X-Hub-Signature-256', signMetaBody(page, secret)).send(page.toString());
+    expect((await post(IG_SECRET)).status).toBe(401);
+    expect((await post(APP_SECRET)).status).toBe(200);
   });
 
   it('akkaunt ID mos kelmasa (entry.id ≠ ulangan IG user_id) hodisa saqlanmaydi va qayta ishlanmaydi', async () => {
     const before = await p().webhookInbox.count();
-    const r = await hook(`mid.foreign.${sender}`, 'begona akkaunt', APP_SECRET, '17841499999999999');
+    const r = await hook(`mid.foreign.${sender}`, 'begona akkaunt', IG_SECRET, '17841499999999999');
     expect(r.status).toBe(200);
     expect(r.body).toMatchObject({ received: 1, stored: 0 });
     await drain(core);

@@ -311,7 +311,7 @@ export class PlatformController {
       fields: { full_name: input.fullName, ...(input.phone ? { phone_number: input.phone } : {}), ...(input.email ? { email: input.email } : {}), ...(input.destination ? { destination: input.destination } : {}) },
     });
     const payload = Buffer.from(JSON.stringify({ object: 'page', entry: [{ id: conn.accountId, time: Math.floor(Date.now() / 1000), changes: [{ field: 'leadgen', value: { leadgen_id: leadgenId, page_id: conn.accountId, form_id: 'demo_form_1', ad_id: input.adId ?? undefined, created_time: Math.floor(Date.now() / 1000) } }] }] }));
-    send(res, 202, { leadgenId, ...(await this.core.webhooks.metaReceive(payload, signMetaBody(payload, this.core.deps.config.meta.appSecret))) });
+    send(res, 202, { leadgenId, ...(await this.core.webhooks.metaReceive(payload, signMetaBody(payload, this.core.webhooks.signingSecretFor(payload).secret))) });
   }
 
   @Post('api/v1/demo/direct')
@@ -327,7 +327,7 @@ export class PlatformController {
         entry: [{ id: conn.accountId, time: Date.now(), messaging: [{ sender: { id: input.scopedSenderId }, recipient: { id: conn.accountId }, timestamp: Date.now(), message: { mid, text: input.text, ...(input.referralAdId ? { referral: { source: 'ADS', type: 'OPEN_THREAD', ad_id: input.referralAdId } } : {}) } }] }],
       }),
     );
-    send(res, 202, { mid, ...(await this.core.webhooks.metaReceive(payload, signMetaBody(payload, this.core.deps.config.meta.appSecret))) });
+    send(res, 202, { mid, ...(await this.core.webhooks.metaReceive(payload, signMetaBody(payload, this.core.webhooks.signingSecretFor(payload).secret))) });
   }
 
   /** Simulates a manager reply typed in the amoCRM chat (signed like the Chats API webhook). */
