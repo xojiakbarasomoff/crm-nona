@@ -4,7 +4,16 @@
  * KIRITILMAGAN (noma'lum): ular `COMPANY` va `RETENTION` ichida null bo'lib turadi va sahifada ochiq «kiritilishi kerak» deb ko'rinadi.
  * Ularni tasdiqlangan qiymatlar bilan to'ldirmaguncha sahifa nashrga tayyor hisoblanmaydi.
  */
-const COMPANY: { legalName: string | null; address: string | null; contact: string | null } = { legalName: null, address: null, contact: null };
+// Tasdiqlangan (foydalanuvchi bergan): brend nomi, tuman, Instagram akkaunti. Yuridik nom, shahar, telefon, email — NOMA'LUM, kiritilmagan.
+const COMPANY: { brand: string; legalName: string | null; district: string; city: string | null; instagram: string; phone: string | null; email: string | null } = {
+  brand: 'NONA Travel',
+  legalName: null,
+  district: 'Mirzo Ulug‘bek tumani',
+  city: null,
+  instagram: '@nonatravel.uz',
+  phone: null,
+  email: null,
+};
 const RETENTION: { messageContentMonths: number | null; rawWebhookDays: number | null; technicalLogDays: number | null } = { messageContentMonths: null, rawWebhookDays: null, technicalLogDays: null };
 
 const TBD = (what: string) => <mark>[{what} — kompaniya tomonidan kiritilishi kerak]</mark>;
@@ -22,9 +31,11 @@ export default function PrivacyPage() {
 
       <h2>1. Ma’lumotlar egasi</h2>
       <ul>
-        <li>Nomi: {COMPANY.legalName ?? TBD('kompaniyaning rasmiy nomi')}</li>
-        <li>Manzil: {COMPANY.address ?? TBD('kompaniya manzili')}</li>
-        <li>Maxfiylik masalalari bo‘yicha aloqa: {COMPANY.contact ?? TBD('aloqa manzili (email yoki telefon)')}</li>
+        <li>Brend nomi: {COMPANY.brand}</li>
+        <li>Yuridik nomi: {COMPANY.legalName ?? TBD('kompaniyaning yuridik nomi')}</li>
+        <li>Manzil: {COMPANY.district}, {COMPANY.city ?? TBD('shahar')}</li>
+        <li>Instagram: {COMPANY.instagram}</li>
+        <li>Telefon / email: {COMPANY.phone || COMPANY.email ? [COMPANY.phone, COMPANY.email].filter(Boolean).join(' · ') : TBD('telefon yoki email (ixtiyoriy, hozircha ko‘rsatilmagan)')}</li>
       </ul>
 
       <h2>2. Qanday ma’lumotlar olinadi</h2>
@@ -76,7 +87,8 @@ export default function PrivacyPage() {
           va administratorga bildirishnoma yuboradi.
         </li>
         <li>
-          <b>To‘g‘ridan-to‘g‘ri:</b> kompaniyaga murojaat qiling: {COMPANY.contact ?? TBD('aloqa manzili')}. Administrator mijoz kartasini topib «Shaxsiy ma’lumotlarni o‘chirish» amalini bajaradi.
+          <b>Instagram Direct orqali:</b> {COMPANY.instagram} akkauntiga xabar yozing va «ma’lumotimni o‘chiring» deb ko‘rsating. Xabar kompaniya akkauntining Direct inbox’iga tushadi; kompaniyani kuzatmaydigan akkauntlardan yozilgan xabarlar «Message requests»
+          bo‘limida turadi. Administrator mijoz kartasini topib «Shaxsiy ma’lumotlarni o‘chirish» amalini bajaradi.
         </li>
       </ol>
       <p>
@@ -88,7 +100,7 @@ export default function PrivacyPage() {
       <h2>7. Xavfsizlik</h2>
       <p>
         Instagram tokenlari shifrlangan holda saqlanadi, Tizimga kirish rollar bo‘yicha cheklangan, muhim amallar audit jurnaliga yoziladi. Ma’lumotlar HTTPS orqali uzatiladi. Hech bir himoya to‘liq kafolat bermaydi; xavfsizlik hodisalari
-        haqida xabar berish uchun yuqoridagi aloqa manziliga murojaat qiling.
+        haqida xabar berish uchun yuqoridagi Instagram akkauntiga murojaat qiling.
       </p>
 
       <h2>8. O‘zgarishlar</h2>
