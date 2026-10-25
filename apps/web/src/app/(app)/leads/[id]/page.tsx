@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { api, fmtDateTime, newKey, SOURCE_LABELS, STAGE_LABELS, useApi, type ApiError } from '../../../../lib/api';
-import { Async, Badge, Field, FormError, Section, SyncBadge } from '../../../../components/ui';
+import { Async, Badge, Field, FormError, InstagramLink, Section, SyncBadge } from '../../../../components/ui';
 import { canDo, useMe } from '../../../../components/shell';
 import { Attachments } from '../../../../components/attachments';
 
@@ -38,7 +38,7 @@ interface LeadDetail {
   events: Array<{ id: string; kind: string; oldStage: string | null; newStage: string | null; oldOwnerId: string | null; newOwnerId: string | null; origin: string; reason: string | null; effectiveAt: string }>;
   offers: Array<{ id: string; version: number; content: string; amount: string; currency: string; sentAt: string | null; acceptedAt: string | null; validUntil: string | null }>;
   orders: Array<{ id: string; orderNo: string; fulfillmentState: string }>;
-  contact: { id: string; fullName: string | null; primaryPhone: string | null } | null;
+  contact: { id: string; fullName: string | null; primaryPhone: string | null; instagramUsername: string | null; instagramName: string | null } | null;
   pendingOperations: Array<{ id: string; action: string; state: string; lastError: string | null }>;
   tourOperator: { id: string; name: string; status: string } | null;
   /** Faol buyurtma bo'lsa turoperator buyurtmaniki (tarixiy bog'lanish): lid kartasida o'zgartirilmaydi. */
@@ -73,6 +73,12 @@ export default function LeadPage() {
             <h1>
               {l.name} <SyncBadge state={l.syncState} />
             </h1>
+            {d.contact?.instagramUsername && (
+              <p>
+                Instagram: <b>@{d.contact.instagramUsername}</b> <InstagramLink username={d.contact.instagramUsername} withHandle={false} />
+                {d.contact.instagramName ? <span className="muted"> · {d.contact.instagramName}</span> : null}
+              </p>
+            )}
             <p className="muted">
               Bosqich: <b>{STAGE_LABELS[l.stage]}</b>
               {l.pendingChange && (

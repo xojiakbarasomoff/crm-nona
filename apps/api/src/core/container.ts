@@ -17,6 +17,7 @@ import { IntakeService } from './services/intake.service';
 import { LeadsService } from './services/leads.service';
 import { OAuthService } from './services/oauth.service';
 import { InstagramService } from './services/instagram.service';
+import { InstagramProfileService } from './services/instagram-profile.service';
 import { OrdersService } from './services/orders.service';
 import { ProcessingService } from './services/processing.service';
 import { RemindersService } from './services/reminders.service';
@@ -36,6 +37,7 @@ export interface Core {
   processing: ProcessingService;
   oauth: OAuthService;
   instagram: InstagramService;
+  instagramProfiles: InstagramProfileService;
   dashboard: DashboardService;
   webhooks: WebhooksService;
   admin: AdminService;
@@ -62,7 +64,7 @@ export function createCore(config: AppConfig, o: CoreOverrides = {}): Core {
   const logger = o.logger ?? createLogger(config.logLevel);
   let oauth: OAuthService | null = null;
   const adapters = buildAdapters(config, redis, (id) => oauth!.tokenProvider(id));
-  const deps: CoreDeps = { prisma, redis, config, adapters, clock: o.clock ?? systemClock, logger, encryptionKey: loadEncryptionKey(config.encryptionKey) };
+  const deps: CoreDeps = { prisma, redis, config, adapters, clock: o.clock ?? systemClock, logger, encryptionKey: loadEncryptionKey(config.encryptionKey), ...(o.fetchImpl ? { fetchImpl: o.fetchImpl } : {}) };
   oauth = new OAuthService(deps, o.fetchImpl);
   return {
     deps,
@@ -76,6 +78,7 @@ export function createCore(config: AppConfig, o: CoreOverrides = {}): Core {
     processing: new ProcessingService(deps),
     oauth,
     instagram: new InstagramService(deps, o.fetchImpl),
+    instagramProfiles: new InstagramProfileService(deps),
     dashboard: new DashboardService(deps),
     webhooks: new WebhooksService(deps),
     admin: new AdminService(deps),

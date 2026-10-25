@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { SOURCE_LABELS, STAGE_LABELS, fmtDateTime, useApi } from '../../../lib/api';
-import { Async, Badge, Field, Section, SyncBadge } from '../../../components/ui';
+import { Async, Badge, Field, InstagramLink, Section, SyncBadge } from '../../../components/ui';
 
 interface LeadRow {
   id: string;
@@ -16,6 +16,7 @@ interface LeadRow {
   anomaly: unknown;
   slaBreachedAt: string | null;
   firstHumanActionAt: string | null;
+  contactInstagramUsername: string | null;
 }
 
 export default function LeadsPage() {
@@ -71,7 +72,14 @@ export default function LeadsPage() {
                 {d.items.map((l) => (
                   <tr key={l.id}>
                     <td>
-                      <Link href={`/leads/${l.id}`}>{l.name}</Link> {l.anomaly ? <Badge tone="warn">Anomaliya</Badge> : null} {l.slaBreachedAt && !l.firstHumanActionAt ? <Badge tone="bad">SLA buzildi</Badge> : null}
+                      <Link href={`/leads/${l.id}`}>{l.name}</Link>{' '}
+                      {l.contactInstagramUsername && (
+                        <span className="muted">
+                          {l.name !== `@${l.contactInstagramUsername}` ? `@${l.contactInstagramUsername} · ` : ''}
+                          <InstagramLink username={l.contactInstagramUsername} withHandle={false} />
+                        </span>
+                      )}{' '}
+                      {l.anomaly ? <Badge tone="warn">Anomaliya</Badge> : null} {l.slaBreachedAt && !l.firstHumanActionAt ? <Badge tone="bad">SLA buzildi</Badge> : null}
                     </td>
                     <td>{STAGE_LABELS[l.stage]}</td>
                     <td>{SOURCE_LABELS[l.firstSource] ?? l.firstSource}</td>

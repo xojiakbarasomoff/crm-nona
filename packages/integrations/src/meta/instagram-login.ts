@@ -94,6 +94,23 @@ export async function fetchInstagramProfile(cfg: Pick<InstagramLoginConfig, 'gra
   return { userId, appScopedId: typeof raw.id === 'string' && raw.id !== userId ? raw.id : null, username: typeof raw.username === 'string' ? raw.username : null, accountType: typeof raw.account_type === 'string' ? raw.account_type : null };
 }
 
+export interface InstagramUserProfile {
+  username: string | null;
+  name: string | null;
+}
+
+/**
+ * Instagram Login «User Profile API» (Meta docs, read 2026-10-25): `GET graph.instagram.com/<ver>/<INSTAGRAM_SCOPED_ID>?fields=name,username`.
+ * Mijozning (xabar yozgan shaxs) profili; kompaniyaning `/me` profili bilan adashtirilmasin. Ruxsat: instagram_business_basic +
+ * instagram_business_manage_messages; foydalanuvchi roziligi faqat u kompaniyaga xabar yozganda o'rnatiladi.
+ */
+export async function fetchInstagramUserProfile(cfg: Pick<InstagramLoginConfig, 'graphVersion'>, scopedId: string, token: string, fetchImpl: FetchLike = fetch): Promise<InstagramUserProfile> {
+  const raw = await requestJson<Json>(`https://graph.instagram.com/${cfg.graphVersion}/${encodeURIComponent(scopedId)}?fields=name,username`, { headers: { Authorization: `Bearer ${token}` } }, fetchImpl);
+  const username = typeof raw.username === 'string' && raw.username.trim() ? raw.username.trim().replace(/^@/, '') : null;
+  const name = typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : null;
+  return { username, name };
+}
+
 /**
  * Enables webhook notifications for the authorizing account. Documented (Meta "Set up Instagram Webhooks", read
  * 2026-10-25): `POST https://graph.instagram.com/<ver>/<INSTAGRAM_ACCOUNT_ID>/subscribed_apps` with `subscribed_fields`
