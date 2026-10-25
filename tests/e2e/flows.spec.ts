@@ -195,8 +195,8 @@ test('finance: turoperator → sotuv/tannarx → avtomatik foyda → paketga kir
   await page.getByLabel('Tannarx (turoperatordan, net price)').fill('1000.00');
   await page.getByRole('button', { name: 'Saqlash', exact: true }).click();
   const finance = page.locator('section', { has: page.getByRole('heading', { name: 'Foyda hisobi (valyutalar alohida)' }) });
-  await expect(finance.getByText('200 $', { exact: true })).toBeVisible();
-  await expect(finance.getByText('Foyda = sotuv narxi − tannarx')).toBeVisible();
+  await expect(finance.getByText('200 $', { exact: true }).first()).toBeVisible();
+  await expect(finance.getByText('Dastlabki foyda = sotuv narxi − tannarx')).toBeVisible();
 
   // Paketga kiritilgan mehmonxona: jamiga qo'shilmaydi
   await page.getByLabel('Tavsif').fill('Hilton Dubai');
@@ -209,7 +209,7 @@ test('finance: turoperator → sotuv/tannarx → avtomatik foyda → paketga kir
   await page.getByLabel('Paket narxiga kiritilgan').check();
   await page.getByRole('button', { name: 'Xizmatni saqlash' }).click();
   await expect(page.getByText('Paketga kiritilgan — jamiga qo‘shilmaydi')).toBeVisible();
-  await expect(finance.getByText('200 $', { exact: true })).toBeVisible(); // o'zgarmadi
+  await expect(finance.getByText('200 $', { exact: true }).first()).toBeVisible(); // o'zgarmadi
 
   // Paketdan tashqari viza: +100 sotuv, +60 tannarx -> foyda 240
   await page.getByLabel('Qator turi').selectOption('visa');
@@ -217,8 +217,8 @@ test('finance: turoperator → sotuv/tannarx → avtomatik foyda → paketga kir
   await page.locator('form.service-form').getByLabel('Sotuv narxi').fill('100.00');
   await page.locator('form.service-form').getByLabel('Tannarx').fill('60.00');
   await page.getByRole('button', { name: 'Xizmatni saqlash' }).click();
-  await expect(finance.getByText('240 $', { exact: true })).toBeVisible();
-  await expect(finance.getByText('1 300 $', { exact: true })).toBeVisible();
+  await expect(finance.getByText('240 $', { exact: true }).first()).toBeVisible();
+  await expect(finance.getByText('1 300 $', { exact: true }).first()).toBeVisible();
 
   // Sotuv yopiladi (amoCRM'da), dashboard shu turoperator bo'yicha 240 foydani ko'rsatadi
   const won = await apiCall(admin, '/api/v1/demo/amo-native-edit', 'POST', { leadId: lead.id, stage: 'WON' });
@@ -227,6 +227,6 @@ test('finance: turoperator → sotuv/tannarx → avtomatik foyda → paketga kir
   await page.goto('/dashboard');
   await page.getByRole('combobox', { name: 'Turoperator', exact: true }).selectOption(op.body.id);
   const block = page.locator('section.finance-block');
-  await expect(block.getByText('Hisoblangan foyda').first()).toBeVisible({ timeout: 60_000 });
+  await expect(block.getByText('Dastlabki foyda').first()).toBeVisible({ timeout: 60_000 });
   await expect(block.getByText('240 $', { exact: true }).first()).toBeVisible({ timeout: 60_000 });
 });

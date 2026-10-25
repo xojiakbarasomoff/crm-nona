@@ -219,6 +219,8 @@ model User {
   amoUserId    String?    @map("amo_user_id")
   mfaSecretEnc String?    @map("mfa_secret_enc")
   mfaEnabled   Boolean    @default(false) @map("mfa_enabled")
+  /// Qo‘shimcha shaxsiy huquqlar (hozircha: 'finance.cost.view' — tannarx va foydani ko‘rish). Standart: bo‘sh.
+  extraCapabilities String[] @default([]) @map("extra_capabilities")
   lastLoginAt  DateTime?  @map("last_login_at") @db.Timestamptz(3)
   blockedAt    DateTime?  @map("blocked_at") @db.Timestamptz(3)
   version      Int        @default(1)
@@ -643,6 +645,27 @@ model Supplier {
   @@map("suppliers")
 }
 
+/// Yetkazib beruvchidan qaytgan summa (mijozga qaytarim — `payments.kind = 'refund'` — alohida). O‘chirilmaydi.
+model SupplierRefund {
+  id           String   @id @default(uuid()) @db.Uuid
+  companyId    String   @map("company_id") @db.Uuid
+  orderId      String   @map("order_id") @db.Uuid
+  serviceId    String?  @map("service_id") @db.Uuid
+  supplierId   String?  @map("supplier_id") @db.Uuid
+  amountMinor  BigInt   @map("amount_minor")
+  currency     String   @db.Char(3)
+  receivedAt   DateTime @map("received_at") @db.Timestamptz(3)
+  reference    String?
+  note         String?
+  businessKey  String   @map("business_key")
+  recordedById String   @map("recorded_by_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([companyId, businessKey])
+  @@index([companyId, orderId])
+  @@map("supplier_refunds")
+}
+
 model OrderSequence {
   companyId String @map("company_id") @db.Uuid
   year      Int
@@ -662,6 +685,8 @@ model Order {
   agreedAmountMinor BigInt?          @map("agreed_amount_minor")
   /// Paket darajasidagi tannarx (net price); sotuv narxi bilan bir valyutada. NULL = noma’lum (0 emas).
   netPriceMinor     BigInt?          @map("net_price_minor")
+  /// Buyurtma turoperatori — tarixiy bog‘lanish: yaratilganda lidnikidan olinadi, keyin lid o‘zgarsa ham saqlanadi; faqat auditli o‘zgartiriladi.
+  tourOperatorId    String?          @map("tour_operator_id") @db.Uuid
   currency          String?          @db.Char(3)
   offerVersionId    String?          @map("offer_version_id") @db.Uuid
   confirmedAt       DateTime?        @map("confirmed_at") @db.Timestamptz(3)
@@ -685,6 +710,7 @@ model Order {
   @@unique([companyId, id])
   @@unique([companyId, orderNo])
   @@index([companyId, ownerId])
+  @@index([companyId, tourOperatorId])
   @@map("orders")
 }
 

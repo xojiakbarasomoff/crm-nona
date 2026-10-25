@@ -102,6 +102,9 @@ export const OrderPatchSchema = z
     agreedAmount: decimal.optional(),
     /** Paket darajasidagi tannarx (net price); null — «noma’lum»ga qaytarish. Sotuv narxi bilan bir valyutada. */
     netPrice: decimal.nullable().optional(),
+    /** Buyurtma turoperatori (tarixiy bog'lanish). Lid operatoridan alohida; tasdiqlangan buyurtmada sabab majburiy, audit bilan. */
+    tourOperatorId: id.nullable().optional(),
+    tourOperatorReason: z.string().max(500).nullable().optional(),
     currency: currency.optional(),
     saleEvidence: z.string().max(2000).nullable().optional(),
     note: z.string().max(4000).nullable().optional(),
@@ -115,6 +118,13 @@ export const PaymentSchema = z
   .object({ kind: z.enum(['payment', 'refund']), amount: decimal, currency, receivedAt: isoDateTime, method: z.enum(['cash', 'card', 'bank_transfer', 'online', 'other']), evidence: z.string().max(2000).nullable().optional(), reference: z.string().max(200).nullable().optional() })
   .strict()
   .openapi('PaymentCreate');
+/** Yetkazib beruvchidan qaytgan summa (mijozga qaytarim — PaymentCreate kind=refund — alohida). Idempotency-Key majburiy. */
+export const SupplierRefundSchema = z
+  .object({ amount: decimal, currency, receivedAt: isoDateTime, supplierId: id.nullable().optional(), serviceId: id.nullable().optional(), reference: z.string().max(200).nullable().optional(), note: z.string().max(2000).nullable().optional() })
+  .strict()
+  .openapi('SupplierRefundCreate');
+/** Menejerga tannarx va foydani ko'rish huquqini yoqish/o'chirish (administrator). */
+export const FinanceAccessSchema = z.object({ enabled: z.boolean() }).strict().openapi('FinanceAccess');
 export const PassengerSchema = z.object({ fullName: z.string().min(1).max(200), type: z.enum(['adult', 'child', 'infant']), birthDate: date.nullable().optional() }).strict();
 const mealPlan = z.enum(['RO', 'BB', 'HB', 'FB', 'AI', 'UAI', 'other']);
 export const HotelDetailsSchema = z

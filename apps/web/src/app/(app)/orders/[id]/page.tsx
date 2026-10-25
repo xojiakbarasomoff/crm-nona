@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { api, CHECK_LABELS, fmtDateTime, newKey, OP_STATUS_LABELS, useApi, type ApiError } from '../../../../lib/api';
 import { Async, Badge, Field, FormError, Section } from '../../../../components/ui';
 import { Attachments, type DocOwner } from '../../../../components/attachments';
-import { FinanceSummary, PricingForm, ServicesSection, type FinanceView, type ServiceView, type SupplierRef } from '../../../../components/order-finance';
+import { FinanceSummary, PricingForm, ServicesSection, SupplierRefundsSection, type FinanceView, type ServiceView, type SupplierRef, type SupplierRefundView } from '../../../../components/order-finance';
 import { SERVICE_TYPE_LABELS } from '../../../../lib/format';
 
 interface Segment {
@@ -41,6 +41,7 @@ interface OrderView {
     version: number;
     agreedAmount: string | null;
     netPrice: string | null;
+    tourOperatorId: string | null;
     currency: string | null;
     paymentState: string;
     ticketingState: string;
@@ -56,7 +57,9 @@ interface OrderView {
   contact: { id: string; fullName: string | null; primaryPhone: string | null; primaryEmail: string | null } | null;
   reminders: Array<{ id: string; kind: string; milestone: string | null; title: string; dueAt: string; state: string; scheduleRevision: number | null; escalatedAt: string | null }>;
   audit: Array<{ id: string; action: string; createdAt: string; actorType: string; oldValue: unknown; newValue: unknown }>;
+  canCost: boolean;
   finance: FinanceView;
+  supplierRefunds?: SupplierRefundView[];
   suppliers: Record<string, SupplierRef>;
   tourOperator: SupplierRef | null;
 }
@@ -67,6 +70,8 @@ export default function OrderPage() {
   const supplierList = useApi<{ items: SupplierRef[] }>('/api/v1/suppliers?status=active');
   const [error, setError] = useState<ApiError | null>(null);
   const [serviceError, setServiceError] = useState<ApiError | null>(null);
+  const [refundError, setRefundError] = useState<ApiError | null>(null);
+  const [operatorReason, setOperatorReason] = useState('');
   const run = async (fn: () => Promise<unknown>) => {
     setError(null);
     try {
@@ -99,7 +104,8 @@ export default function OrderPage() {
         for (const s of supplierList.data?.items ?? []) known.set(s.id, s);
         for (const s of Object.values(d.suppliers)) known.set(s.id, s);
         const suppliers = [...known.values()];
-        const operators = suppliers.filter((s) => s.kind === 'tour_operator' && (s.status === 'active' || s.id === d.lead?.tourOperatorId));
+        const operators = suppliers.filter((s) => s.kind === 'tour_operator' && (s.status === 'active' || s.id === o.tourOperatorId));
+        const canCost = d.canCost;
         const docOwners: DocOwner[] = [
           { type: 'order', id, label: `Buyurtma ${o.orderNo}` },
           ...o.passengers.map((p) => ({ type: 'passenger' as const, id: p.id, label: `Yo‘lovchi: ${p.fullName}` })),
@@ -141,11 +147,11 @@ export default function OrderPage() {
 
             <Section title="Turpaket, turoperator va narx">
               <div className="row">
-                <Field label="Turoperator (yetkazib beruvchi)" hint="Reklama manbasi emas: mijoz qayerdan kelgani lid kartasida («Manba»)">
+                <Field label="Turoperator (yetkazib beruvchi)" hint="Buyurtmaning tarixiy bog‘lanishi: lid operatori keyin o‘zgarsa ham bu sotuv statistikasi o‘zgarmaydi. Reklama manbasi emas. Migratsiyadan oldingi buyurtmalarda bu qiymat lid tanlovidan tiklangan va tarixiy tasdiqlanmagan — rahbar tekshirib, kerak bo‘lsa sabab bilan tasdiqlasin.">
                   <select
-                    value={d.lead?.tourOperatorId ?? ''}
-                    disabled={!d.lead || cancelled}
-                    onChange={(e) => d.lead && run(() => api(`/api/v1/leads/${d.lead!.id}`, { method: 'PATCH', body: { version: d.lead!.version, tourOperatorId: e.target.value || null } }))}
+                    value={o.tourOperatorId ?? ''}
+                    disabled={cancelled}
+                    onChange={(e) => run(() => api(`/api/v1/orders/${id}`, { method: 'PATCH', body: { version: o.version, tourOperatorId: e.target.value || null, ...(operatorReason.trim() ? { tourOperatorReason: operatorReason.trim() } : {}) } }).then(() => setOperatorReason('')))}
                   >
                     <option value="">Tanlanmagan</option>
                     {operators.map((s) => (
@@ -156,6 +162,9 @@ export default function OrderPage() {
                     ))}
                   </select>
                 </Field>
+                <Field label="Operator o‘zgartirish sababi" hint="Tasdiqlangan buyurtmada majburiy; auditga yoziladi">
+                  <input value={operatorReason} onChange={(e) => setOperatorReason(e.target.value)} disabled={cancelled} placeholder="Masalan: mijoz boshqa operatorga o‘tdi" />
+                </Field>
                 {d.tourOperator && (
                   <div className="field">
                     <span className="field-label">Tanlangan</span>
@@ -165,7 +174,7 @@ export default function OrderPage() {
                   </div>
                 )}
               </div>
-              <PricingForm key={o.version} order={o} disabled={cancelled} onSave={(b) => run(() => api(`/api/v1/orders/${id}`, { method: 'PATCH', body: { version: o.version, ...b } }))} />
+              <PricingForm key={o.version} order={o} canCost={canCost} disabled={cancelled} onSave={(b) => run(() => api(`/api/v1/orders/${id}`, { method: 'PATCH', body: { version: o.version, ...b } }))} />
             </Section>
 
             <FinanceSummary finance={d.finance} />
@@ -173,12 +182,34 @@ export default function OrderPage() {
             <ServicesSection
               services={o.services}
               suppliers={suppliers}
+              canCost={canCost}
               disabled={cancelled}
               error={serviceError}
               onAdd={(b) => runService(() => api(`/api/v1/orders/${id}/services`, { method: 'POST', body: b }))}
               onUpdate={(sid, b) => runService(() => api(`/api/v1/services/${sid}`, { method: 'PATCH', body: b }))}
               onRemove={(sid) => runService(() => api(`/api/v1/services/${sid}`, { method: 'DELETE' }))}
             />
+
+            {canCost && (
+              <SupplierRefundsSection
+                refunds={d.supplierRefunds ?? []}
+                suppliers={suppliers}
+                defaultCurrency={o.currency}
+                disabled={cancelled}
+                error={refundError}
+                onAdd={async (b) => {
+                  setRefundError(null);
+                  try {
+                    await api(`/api/v1/orders/${id}/supplier-refunds`, { method: 'POST', body: b, idempotencyKey: newKey() });
+                    await state.reload();
+                    return true;
+                  } catch (e) {
+                    setRefundError(e as ApiError);
+                    return false;
+                  }
+                }}
+              />
+            )}
 
             <Section title="Reys segmentlari">
               <p className="muted">Ma’lumot manbasi: qo‘lda kiritilgan (manual). Bu jonli reys API ma’lumoti emas.</p>
@@ -188,7 +219,7 @@ export default function OrderPage() {
               <AddSegment passengers={o.passengers} onAdd={async (b) => { await api(`/api/v1/orders/${id}/segments`, { method: 'POST', body: b }); await state.reload(); return true; }} />
             </Section>
 
-            <Section title="To‘lovlar (qayd etish pul o‘tkazmaydi)">
+            <Section title="Mijoz to‘lovlari va mijozga qaytarimlar (qayd etish pul o‘tkazmaydi)">
               <table>
                 <tbody>
                   {o.payments.map((p) => (
@@ -203,7 +234,7 @@ export default function OrderPage() {
                   ))}
                 </tbody>
               </table>
-              <p className="hint">Qaytarim foydani avtomatik o‘zgartirmaydi; faqat to‘liq qaytarilgan buyurtma («refunded») jami sotuvdan chiqadi. Qaytarimlar dashboard’da alohida ko‘rsatiladi.</p>
+              <p className="hint">Mijozga qaytarim to‘langan summadan oshmasligi va valyutasi buyurtma valyutasiga mos bo‘lishi shart. Dastlabki foydani o‘zgartirmaydi: u «Qaytarimdan keyingi foyda»da alohida ko‘rinadi. Yetkazib beruvchidan qaytgan summa pastdagi alohida bo‘limda qayd etiladi.</p>
               <PaymentForm onAdd={(b) => run(() => api(`/api/v1/orders/${id}/payments`, { method: 'POST', body: b, idempotencyKey: newKey() }))} />
             </Section>
 

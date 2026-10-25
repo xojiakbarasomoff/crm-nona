@@ -187,15 +187,18 @@ export class LeadsService {
     const [events, offers, orders, contact, pendingOps] = await Promise.all([
       this.d.prisma.leadEvent.findMany({ where: { companyId: actor.companyId, leadId: id }, orderBy: { effectiveAt: 'asc' } }),
       this.d.prisma.offer.findMany({ where: { companyId: actor.companyId, leadId: id }, orderBy: { version: 'desc' } }),
-      this.d.prisma.order.findMany({ where: { companyId: actor.companyId, leadId: id }, select: { id: true, orderNo: true, fulfillmentState: true } }),
+      this.d.prisma.order.findMany({ where: { companyId: actor.companyId, leadId: id }, select: { id: true, orderNo: true, fulfillmentState: true, tourOperatorId: true } }),
       this.d.prisma.contact.findFirst({ where: { companyId: actor.companyId, id: lead.contactId }, select: { id: true, fullName: true, primaryPhone: true } }),
       this.d.prisma.outboxOperation.findMany({
         where: { companyId: actor.companyId, state: { in: ['pending', 'processing', 'failed', 'unknown', 'paused'] }, payload: { path: ['leadId'], equals: id } },
         select: { id: true, action: true, state: true, lastError: true },
       }),
     ]);
-    const op = lead.tourOperatorId ? await this.d.prisma.supplier.findFirst({ where: { id: lead.tourOperatorId, companyId: actor.companyId } }) : null;
-    return { lead, events, offers, orders, contact, pendingOperations: pendingOps, tourOperator: op ? serializeSupplier(op, can(actor.role, 'reference.view_full')) : null };
+    // Faol buyurtma bo'lsa, turoperator — buyurtmaniki (tarixiy bog'lanish); aks holda lidniki.
+    const activeOrder = orders.find((o) => o.fulfillmentState !== 'cancelled') ?? null;
+    const operatorId = activeOrder ? activeOrder.tourOperatorId : lead.tourOperatorId;
+    const op = operatorId ? await this.d.prisma.supplier.findFirst({ where: { id: operatorId, companyId: actor.companyId } }) : null;
+    return { lead, events, offers, orders, contact, pendingOperations: pendingOps, tourOperator: op ? serializeSupplier(op, can(actor.role, 'reference.view_full')) : null, operatorOwnedByOrder: activeOrder ? { id: activeOrder.id, orderNo: activeOrder.orderNo } : null };
   }
 
   /** Local tourism fields are owned by PostgreSQL and change immediately (optimistic lock). */
@@ -217,6 +220,11 @@ export class LeadsService {
       if (patch.lostNote !== undefined) data.lostNote = patch.lostNote;
       if (patch.nextContactAt !== undefined) data.nextContactAt = patch.nextContactAt;
       if (patch.followUpNote !== undefined) data.followUpNote = patch.followUpNote;
+      if (patch.tourOperatorId !== undefined && patch.tourOperatorId !== lead.tourOperatorId) {
+        // Faol buyurtma bor bo'lsa, turoperator buyurtmaning tarixiy bog'lanishi: uni buyurtma kartasida (sabab va audit bilan) o'zgartiring.
+        const active = await tx.order.findFirst({ where: { companyId: actor.companyId, leadId: id, fulfillmentState: { not: 'cancelled' } }, select: { id: true, orderNo: true } });
+        if (active) throw unprocessable('ORDER_OWNS_OPERATOR', `Buyurtma ${active.orderNo} mavjud: turoperatorni buyurtma kartasida o‘zgartiring (audit bilan). Eski sotuvlar statistikasi o‘zgarmaydi.`, { tourOperatorId: 'order_exists' }, { orderId: active.id });
+      }
       if (patch.tourOperatorId !== undefined) {
         // Turoperator — yetkazib beruvchi; reklama manbasi (firstSource) bilan aralashmaydi.
         if (patch.tourOperatorId) await assertSelectableSupplier(tx, actor.companyId, patch.tourOperatorId, { kind: 'tour_operator', unchanged: patch.tourOperatorId === lead.tourOperatorId });
@@ -465,7 +473,7 @@ export class LeadsService {
     const existing = await tx.order.findFirst({ where: { companyId, leadId: lead.id, fulfillmentState: { not: 'cancelled' } } });
     if (existing) return existing;
     const { createOrderRow } = await import('./orders.service');
-    return createOrderRow(tx, { companyId, leadId: lead.id, contactId: lead.contactId, ownerId: lead.ownerId, now, fulfillmentState: 'draft' });
+    return createOrderRow(tx, { companyId, leadId: lead.id, contactId: lead.contactId, ownerId: lead.ownerId, now, fulfillmentState: 'draft', tourOperatorId: lead.tourOperatorId });
   }
 
   async createCrmTask(tx: Tx, t: { companyId: string; key: string; entityId: string; kind: string; text: string; responsibleUserId: string | null; dueAt: Date; entityType?: string }) {

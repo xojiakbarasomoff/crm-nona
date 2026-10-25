@@ -46,6 +46,8 @@ export const ROUTES: Route[] = [
   { method: 'get', path: '/api/v1/orders/{id}', tag: 'orders', summary: 'To‘liq buyurtma' },
   { method: 'patch', path: '/api/v1/orders/{id}', tag: 'orders', summary: 'Buyurtma tahriri', body: S.OrderPatchSchema },
   { method: 'post', path: '/api/v1/orders/{id}/payments', tag: 'orders', summary: 'To‘lovni qo‘lda qayd etish (Idempotency-Key majburiy)', body: S.PaymentSchema, idempotent: true },
+  { method: 'post', path: '/api/v1/orders/{id}/supplier-refunds', tag: 'orders', summary: 'Yetkazib beruvchidan qaytgan summani qayd etish (finance.cost.view; Idempotency-Key majburiy)', body: S.SupplierRefundSchema, idempotent: true },
+  { method: 'patch', path: '/api/v1/users/{id}/finance-access', tag: 'users', summary: 'Menejerga tannarx va foydani ko‘rish huquqini yoqish/o‘chirish (administrator)', body: S.FinanceAccessSchema },
   { method: 'post', path: '/api/v1/orders/{id}/passengers', tag: 'orders', summary: 'Yo‘lovchi', body: S.PassengerSchema },
   { method: 'post', path: '/api/v1/orders/{id}/services', tag: 'orders', summary: 'Xizmat qatori: sotuv narxi, tannarx, yetkazib beruvchi, mehmonxona/transfer tafsilotlari, paketga kiritilganligi', body: S.ServiceSchema },
   { method: 'patch', path: '/api/v1/services/{id}', tag: 'orders', summary: 'Xizmat qatorini tahrirlash (narx o‘zgarishi auditga yoziladi)', body: S.ServicePatchSchema },

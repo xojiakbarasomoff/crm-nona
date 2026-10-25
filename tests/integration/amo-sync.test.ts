@@ -2,6 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Core } from '../../apps/api/src/core';
 import { encryptSecret } from '@crm/database';
+import { WORK_SCHEDULE } from '../../packages/database/src/seed';
 import { DEMO_STATUS_IDS, type DemoAmoRestClient } from '@crm/integrations';
 import { amoCrmSignal, companyId, drain, login, makeApp, makeCore, newLead, sendLeadAds, userId } from './helpers';
 
@@ -16,6 +17,8 @@ beforeAll(async () => {
   app = await makeApp(core);
 });
 afterAll(async () => {
+  // AC10 jadvalni 24/7 qiladi; boshqa fayllar (compliance: ish kuni/yakshanba) seed jadvaliga tayanadi — qaytaramiz.
+  await p().managerPoolMember.updateMany({ data: { schedule: WORK_SCHEDULE as never, available: true } });
   await app.close();
   await core.close();
 });

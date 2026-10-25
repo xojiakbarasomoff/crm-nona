@@ -55,8 +55,8 @@ Bekor qilish va qaytarim qoidalari:
 | Holat | Jami sotuv/foydaga | Qayerda ko‘rinadi |
 | --- | --- | --- |
 | Buyurtma bekor qilindi | **kirmaydi** | «Bekor qilingan buyurtmalar» (davrda bekor qilinganlar, tarixiy summa bilan). Tarixiy summalar **o‘chirilmaydi**, bekor qilingan buyurtma tahrirlanmaydi. |
-| To‘liq qaytarim (`paymentState = refunded`) | **kirmaydi** | «To‘liq qaytarilgan». |
-| Qisman qaytarim | **foydani o‘zgartirmaydi** | «Qaytarimlar» (pul harakati) alohida; to‘lov holati `partial`. |
+| To‘liq qaytarim (`paymentState = refunded`) | **kiradi** (sotuv sifatida), qaytarim alohida ko‘rsatiladi | «Qaytarimdan keyingi foyda» (§K). |
+| Qisman qaytarim | **dastlabki foydani o‘zgartirmaydi** | «Qaytarimdan keyingi foyda»da aks etadi (§K). |
 | Ochiq buyurtma | tasdiqlangan jamiga kirmaydi | «Kutilayotgan foyda». |
 
 Menejer kesimi — yopilish paytidagi mas’ul (mavjud qoidaga mos). Turoperator kesimi — lidga biriktirilgan turoperator
@@ -142,3 +142,32 @@ Qo‘llash: `npm run db:migrate` (`prisma migrate deploy`); baza reset qilinmayd
 ## J. Cheklovlar va ochiq savollar
 
 `KNOWN_LIMITATIONS.md` «Moliya va hujjatlar» bo‘limiga qarang.
+
+## K. Tuzatishlar (2026-10-25, 2-bosqich): tarixiy operator, qaytarimlar, huquq
+
+**1. Turoperator — buyurtmaning tarixiy bog‘lanishi.** `orders.tour_operator_id` buyurtma yaratilganda lidning joriy operatoridan nusxalanadi (migratsiya eski buyurtmalarni lidning joriy tanlovidan to‘ldiradi). Dashboard kesimi va filtri **buyurtma** operatoriga tayanadi, lidniki emas. Faol (bekor qilinmagan) buyurtma bor lidda operatorni lid kartasida o‘zgartirib bo‘lmaydi (422 `ORDER_OWNS_OPERATOR`); lid operatori baribir o‘zgarsa ham eski sotuvlar statistikasi o‘zgarmaydi. Buyurtma operatorini alohida o‘zgartirish: `PATCH /orders/{id}` (`tourOperatorId`, `tourOperatorReason`); tasdiqlangan buyurtmada sabab majburiy, faqat faol turoperator tanlanadi, auditga `tour_operator_changed` (eski/yangi/sabab) yoziladi. Bu aniq, auditli o‘zgarish — statistika yangi operatorga o‘tadi.
+
+**2. Dastlabki foyda va qaytarimdan keyingi foyda.**
+- Dastlabki foyda = sotuv narxi − tannarx (qaytarimga bog‘liq emas).
+- Qaytarimdan keyingi foyda = (sotuv − mijozga qaytarilgan summa) − (tannarx − yetkazib beruvchidan qaytgan summa).
+- Mijozga qaytarim — `POST /orders/{id}/payments` (`kind=refund`): valyutasi buyurtma valyutasiga mos va qabul qilingan to‘lovdan oshmasligi shart. Yetkazib beruvchidan qaytgan summa — alohida `POST /orders/{id}/supplier-refunds` (Idempotency-Key majburiy, jadval `supplier_refunds`): valyuta mosligi va tannarxdan oshmasligi tekshiriladi.
+- Valyutalar kurssiz aralashtirilmaydi; mos kelmagan qaytarim hisobga olinmaydi va ogohlantiriladi (`refundCurrencyMismatch`).
+- Bu ko‘rsatkichlar **buxgalteriya sof foydasi emas** (komissiya, soliq, bank to‘lovlari, valyuta farqi hisobga olinmagan); interfeys va eksportda shunday nomlanmaydi.
+- To‘liq qaytarilgan buyurtma endi alohida «refunded» guruhga ketmaydi: tasdiqlangan sotuvda qoladi, qaytarimlari alohida ko‘rsatiladi.
+
+**3. Alohida huquq `finance.cost.view`.** Standartda ADMIN va HEAD’da bor; menejerga faqat administrator yoqadi (`PATCH /users/{id}/finance-access`, audit `finance_cost_access_granted/revoked`; rahbar ham, menejer o‘zi ham bera olmaydi; faqat MANAGER roli uchun). Huquqsiz foydalanuvchiga **backend**da (buyurtma kartasi, ro‘yxat, xizmatlar, audit qiymatlari), **dashboard**da (tannarx, foyda, kutilayotgan foyda, yetkazib beruvchi qaytarimlari — javobdan olib tashlanadi; kesh kaliti huquqni hisobga oladi) va **eksport**da (CSV tannarx/foyda ustunlari chiqmaydi) tannarx ko‘rinmaydi; tannarx kiritish va yetkazib beruvchi qaytarimini qayd etish 403. amoCRM’ga tannarx/foyda baribir chiqmaydi.
+
+**4. Migratsiya isboti.** `npm run test:migration` — vaqtinchalik bazada eski sxema (xususiyatdan oldingi migratsiyalar) ma’lumot bilan to‘ldiriladi, yangi migratsiyalar qo‘llanadi va eski qatorlar kontrol yig‘indisi bilan taqqoslanadi (`docs/migration-check-2026-10-25.md`). Foydalanuvchining bazasi reset qilinmaydi.
+
+**5. Demo ma’lumotlar alohida.** Migratsiya va seed hech qanday turoperator/narx qo‘shmaydi. Sun’iy namunalar faqat alohida lokal demo muhitda (`crm_finance_demo`, API :4101, web :3101): `npm run demo:finance:setup|start|data`. Railway/production bazasiga avtomatik sun’iy ma’lumot qo‘shilmaydi.
+
+### K.1. Operatorning kelib chiqishi (tasdiqlanmagan backfill)
+
+`orders.tour_operator_id` ikki xil kelib chiqadi:
+
+| Buyurtma | Qiymat manbasi | Ishonchlilik |
+| --- | --- | --- |
+| Migratsiyadan keyin yaratilgan | Buyurtma yaratilgan paytdagi lid operatoridan nusxa; keyingi o‘zgartirishlar `tour_operator_changed` auditi bilan | Tarixiy jihatdan ishonchli |
+| Migratsiyadan **oldin** yaratilgan | `20261025000100` migratsiyasi paytida lidning joriy `tour_operator_id` qiymatidan bir marta **tiklangan** | **Tarixiy tasdiqlanmagan**: lid operatori ham bir migratsiya oldin paydo bo‘lgan; qiymat — foydalanuvchining o‘sha oraliqda tanlagani yoki `NULL` |
+
+Shuning uchun eski sotuvlarning operator kesimidagi statistikasi «taxminiy» hisoblanadi, tasdiqlangan hisobot sifatida ishlatilmasin. Hozircha bazada ikki holat belgi bilan ajratilmaydi (migratsiya allaqachon lokal bazaga qo‘llangan, checksum o‘zgarmasligi kerak); kerak bo‘lsa alohida migratsiya bilan `tour_operator_source` ustuni qo‘shiladi.

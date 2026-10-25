@@ -16,6 +16,7 @@ let app: INestApplication;
 let head: Session;
 let mgrA: Session;
 let mgrB: Session;
+let admin: Session;
 const p = () => core.deps.prisma;
 const amo = () => core.deps.adapters.amoRest({ id: '', accountDomain: null, accountId: '' }) as DemoAmoRestClient;
 
@@ -25,6 +26,12 @@ beforeAll(async () => {
   head = await login(app, 'rahbar@demo.local');
   mgrA = await login(app, 'menejer.a@demo.local');
   mgrB = await login(app, 'menejer.b@demo.local');
+  admin = await login(app, 'admin@demo.local');
+  // Tannarx/foyda huquqi standartda menejerda yo'q: bu fayldagi moliyaviy oqimlar uchun administrator yoqadi.
+  for (const email of ['menejer.a@demo.local', 'menejer.b@demo.local']) {
+    const r = await admin.patch(`/api/v1/users/${await userId(core, email)}/finance-access`, { enabled: true });
+    expect(r.status).toBe(200);
+  }
 });
 afterAll(async () => {
   await app.close();
@@ -335,7 +342,7 @@ describe('foyda = sotuv − tannarx (karta va dashboard mos)', () => {
     void keep;
   });
 
-  it('qaytarim: to‘liq qaytarilgan buyurtma jami sotuvdan chiqadi; qisman qaytarim foydani o‘zgartirmaydi; qaytarimlar alohida ko‘rsatiladi', async () => {
+  it('qaytarim: dastlabki foyda o‘zgarmaydi, qaytarimdan keyingi foyda alohida; mijoz va yetkazib beruvchi qaytarimlari alohida qayd etiladi', async () => {
     const op = await makeOperator();
     const l1 = await leadOwnedBy('menejer.a@demo.local', op.id);
     const l2 = await leadOwnedBy('menejer.a@demo.local', op.id);
@@ -354,10 +361,33 @@ describe('foyda = sotuv − tannarx (karta va dashboard mos)', () => {
     await win(l1.id);
     await win(l2.id);
     const d = await dashboard(head, `&tourOperatorId=${op.id}`);
-    expect(d.finance.confirmed.USD.sales).toBe('1200.00'); // faqat qisman qaytarilgan
-    expect(d.finance.confirmed.USD.profitBasis.profit).toBe('200.00'); // qisman qaytarim foydani o'zgartirmaydi
-    expect(d.finance.refundedOrders.USD).toEqual({ sales: '600.00', orders: 1 });
-    expect(Number(d.periodMetrics.refundsByCurrency.USD)).toBeGreaterThanOrEqual(800); // pul harakati alohida
+    // Dastlabki foyda qaytarimga bog'liq emas: (1200−1000) + (600−500) = 300; sotuv jami qaytarimlarni ham o'z ichiga oladi.
+    expect(d.finance.confirmed.USD.sales).toBe('1800.00');
+    expect(d.finance.confirmed.USD.profitBasis.profit).toBe('300.00');
+    expect(d.finance.confirmed.USD.customerRefunded).toBe('800.00');
+    expect(d.finance.confirmed.USD.ordersWithRefund).toBe(2);
+    // Yetkazib beruvchi hali hech narsa qaytarmagan: qaytarimdan keyingi foyda = (1800−800) − 1500 = −500
+    expect(d.finance.confirmed.USD.supplierRefunded).toBe('0.00');
+    expect(d.finance.confirmed.USD.afterRefund.profit).toBe('-500.00');
+    // Yetkazib beruvchi to'liq buyurtma tannarxini qaytardi (alohida qayd, idempotent)
+    const receivedAt = new Date().toISOString();
+    const sr = async (key: string, amount: string, currency = 'USD') =>
+      mgrA.post(`/api/v1/orders/${full.id}/supplier-refunds`, { amount, currency, receivedAt }, { 'Idempotency-Key': key });
+    expect((await sr(`s1-${full.id}`, '500.00')).status).toBe(201);
+    expect((await sr(`s1-${full.id}`, '500.00')).status).toBe(201); // qayta yuborish o'sha javobni qaytaradi, ikkilanmaydi
+    expect((await sr(`s2-${full.id}`, '1.00', 'EUR')).status).toBe(422); // valyuta mos emas
+    expect((await sr(`s3-${full.id}`, '1.00')).status).toBe(422); // tannarxdan oshib ketadi
+    const d2 = await dashboard(head, `&tourOperatorId=${op.id}`);
+    expect(d2.finance.confirmed.USD.profitBasis.profit).toBe('300.00'); // dastlabki foyda o'zgarmaydi
+    expect(d2.finance.confirmed.USD.supplierRefunded).toBe('500.00');
+    expect(d2.finance.confirmed.USD.afterRefund).toMatchObject({ sales: '1000.00', net: '1000.00', profit: '0.00' });
+    const cardFull = await card(head, full.id);
+    expect(cardFull.finance.byCurrency.USD).toMatchObject({ profit: '100.00', customerRefunded: '600.00', supplierRefunded: '500.00', profitAfterRefund: '0.00' });
+    expect(cardFull.supplierRefunds).toHaveLength(1);
+    expect(await p().auditLog.count({ where: { entityId: full.id, action: 'supplier_refund_recorded' } })).toBe(1);
+    // Mijozga qaytarim valyutasi buyurtma valyutasiga mos bo'lishi shart
+    const bad = await mgrA.post(`/api/v1/orders/${partial.id}/payments`, { kind: 'refund', amount: '1.00', currency: 'EUR', receivedAt: new Date().toISOString(), method: 'cash' }, { 'Idempotency-Key': `bad-${partial.id}` });
+    expect(bad.status).toBe(422);
   });
 
   it('to‘lov holati paket + paketdan tashqari xizmatlar jamiga nisbatan hisoblanadi', async () => {
@@ -432,7 +462,7 @@ describe('ruxsatlar: moliya, eksport va dashboard', () => {
     expect(r.status).toBe(200);
     const csv = r.text as string;
     const [header, ...rows] = csv.replace(String.fromCharCode(0xfeff), '').split('\n');
-    expect(header).toContain('selling_price,net_price,profit,profit_state');
+    expect(header).toContain('selling_price,net_price,profit_initial,profit_state,customer_refunded,supplier_refunded,profit_after_refund');
     const kr = rows.find((x) => x.includes((known as unknown as { orderNo?: string }).orderNo ?? '__')) ?? rows[0]!;
     expect(rows).toHaveLength(2);
     expect(rows.some((x) => x.includes(',1200.00,1000.00,200.00,known,'))).toBe(true);
@@ -519,5 +549,116 @@ describe('hujjatlar: kategoriyalar, bog‘lash va huquqlar', () => {
     const audits = await p().auditLog.findMany({ where: { entityType: 'passenger', entityId: pax.body.id } });
     expect(JSON.stringify(audits.map((x) => [x.oldValue, x.newValue]))).not.toContain('maxfiy-pasport');
     expect(audits.map((x) => x.action)).toEqual(expect.arrayContaining(['attachment_uploaded', 'attachment_downloaded', 'attachment_deleted']));
+  });
+});
+
+describe('turoperator — buyurtmaning tarixiy bog‘lanishi', () => {
+  it('buyurtma yaratilganda operator nusxalanadi; lid operatori faol buyurtma bilan o‘zgarmaydi; statistika o‘zgarmaydi', async () => {
+    const op1 = await makeOperator();
+    const op2 = await makeOperator();
+    const lead = await leadOwnedBy('menejer.a@demo.local', op1.id);
+    const o = await order(mgrA, lead.id, '1200.00', 'USD', '1000.00');
+    await win(lead.id);
+    expect((await card(mgrA, o.id)).tourOperator?.id).toBe(op1.id);
+    expect((await p().order.findUniqueOrThrow({ where: { id: o.id } })).tourOperatorId).toBe(op1.id);
+    // faol buyurtma bor: lid operatorini o'zgartirib bo'lmaydi
+    const l = await p().lead.findUniqueOrThrow({ where: { id: lead.id } });
+    const blocked = await mgrA.patch(`/api/v1/leads/${lead.id}`, { version: l.version, tourOperatorId: op2.id });
+    expect(blocked.status).toBe(422);
+    // lid operatori baribir (masalan ichki tuzatish) o'zgarsa ham eski sotuv statistikasi o'zgarmaydi
+    await p().lead.update({ where: { id: lead.id }, data: { tourOperatorId: op2.id } });
+    expect((await card(mgrA, o.id)).tourOperator?.id).toBe(op1.id);
+    const d1 = await dashboard(head, `&tourOperatorId=${op1.id}`);
+    expect(d1.finance.confirmed.USD.sales).toBe('1200.00');
+    expect(d1.finance.confirmed.USD.profitBasis.profit).toBe('200.00');
+    const d2 = await dashboard(head, `&tourOperatorId=${op2.id}`);
+    expect(d2.finance.confirmed.USD).toBeUndefined();
+  });
+
+  it('buyurtma operatorini o‘zgartirish: tasdiqlangan buyurtmada sabab majburiy, auditga eski/yangi qiymat yoziladi, arxiv operator tanlanmaydi', async () => {
+    const op1 = await makeOperator();
+    const op2 = await makeOperator();
+    const arch = await makeOperator();
+    const lead = await leadOwnedBy('menejer.a@demo.local', op1.id);
+    const o = await order(mgrA, lead.id, '600.00', 'USD', '500.00');
+    await win(lead.id);
+    const v = () => card(mgrA, o.id).then((c) => c.order.version as number);
+    const noReason = await mgrA.patch(`/api/v1/orders/${o.id}`, { version: await v(), tourOperatorId: op2.id });
+    expect(noReason.status).toBe(422);
+    expect((await head.patch(`/api/v1/suppliers/${arch.id}`, { version: arch.version, status: 'archived' })).status).toBe(200);
+    expect((await mgrA.patch(`/api/v1/orders/${o.id}`, { version: await v(), tourOperatorId: arch.id, tourOperatorReason: 'noto‘g‘ri tanlangan edi' })).status).toBe(422);
+    const ok = await mgrA.patch(`/api/v1/orders/${o.id}`, { version: await v(), tourOperatorId: op2.id, tourOperatorReason: 'mijoz boshqa operatorga o‘tdi' });
+    expect(ok.status).toBe(200);
+    const row = await p().auditLog.findFirstOrThrow({ where: { entityId: o.id, action: 'tour_operator_changed' } });
+    expect(JSON.stringify(row.oldValue)).toContain(op1.id);
+    expect(JSON.stringify(row.newValue)).toContain(op2.id);
+    expect(JSON.stringify(row.newValue)).toContain('mijoz boshqa operatorga');
+    // bu aniq, auditli o'zgarish: statistika yangi operatorga o'tadi, eski operatorda qolmaydi
+    expect((await dashboard(head, `&tourOperatorId=${op2.id}`)).finance.confirmed.USD.sales).toBe('600.00');
+    expect((await dashboard(head, `&tourOperatorId=${op1.id}`)).finance.confirmed.USD).toBeUndefined();
+  });
+});
+
+describe('tannarx va foydani ko‘rish huquqi (finance.cost.view)', () => {
+  it('standartda rahbar va administratorda bor; menejerda yo‘q; faqat administrator menejerga yoqadi', async () => {
+    const mgrBId = await userId(core, 'menejer.b@demo.local');
+    expect((await mgrB.patch(`/api/v1/users/${mgrBId}/finance-access`, { enabled: true })).status).toBe(403); // menejer o'ziga bera olmaydi
+    expect((await head.patch(`/api/v1/users/${mgrBId}/finance-access`, { enabled: true })).status).toBe(403); // rahbar ham bera olmaydi
+    expect((await admin.patch(`/api/v1/users/${await userId(core, 'rahbar@demo.local')}/finance-access`, { enabled: true })).status).toBe(422); // faqat menejer uchun
+    expect((await admin.patch(`/api/v1/users/${mgrBId}/finance-access`, { enabled: false })).status).toBe(200);
+    expect((await mgrB.get('/api/v1/me')).body.capabilities).not.toContain('finance.cost.view');
+    expect((await head.get('/api/v1/me')).body.capabilities).toContain('finance.cost.view');
+    expect((await admin.get('/api/v1/me')).body.capabilities).toContain('finance.cost.view');
+    expect(await p().auditLog.count({ where: { entityId: mgrBId, action: 'finance_cost_access_revoked' } })).toBeGreaterThan(0);
+  });
+
+  it('huquqsiz menejer: buyurtma kartasi, ro‘yxat, o‘zgartirish, xizmat, qaytarim, dashboard va eksportda tannarx/foyda chiqmaydi', async () => {
+    const op = await makeOperator();
+    const lead = await leadOwnedBy('menejer.b@demo.local', op.id);
+    const o = await order(head, lead.id, '1200.00', 'USD', '1000.00'); // rahbar tannarxni kiritdi
+    await win(lead.id);
+    const c = await card(mgrB, o.id);
+    expect(c.canCost).toBe(false);
+    expect(c.order.netPrice).toBeNull();
+    expect(c.order.costHidden).toBe(true);
+    expect(JSON.stringify(c)).not.toContain('1000.00');
+    expect(JSON.stringify(c)).not.toMatch(/"(profit|profitState|marginPercent|netAfterRefund|profitAfterRefund|supplierRefunded|netAmount|net)":/);
+    const list = await mgrB.get('/api/v1/orders');
+    expect(JSON.stringify(list.body)).not.toMatch(/"netPrice":"/);
+    // o'zgartirish va xizmatga tannarx kiritish — 403
+    expect((await mgrB.patch(`/api/v1/orders/${o.id}`, { version: c.order.version, netPrice: '1.00' })).status).toBe(403);
+    expect((await mgrB.post(`/api/v1/orders/${o.id}/services`, { serviceType: 'visa', description: 'Viza', amount: '10.00', netAmount: '5.00', currency: 'USD' })).status).toBe(403);
+    expect((await mgrB.post(`/api/v1/orders/${o.id}/supplier-refunds`, { amount: '1.00', currency: 'USD', receivedAt: new Date().toISOString() }, { 'Idempotency-Key': `nb-${o.id}` })).status).toBe(403);
+    // dashboard: sotuv ko'rinadi, tannarx/foyda yo'q
+    const d = await dashboard(mgrB, `&tourOperatorId=${op.id}`);
+    expect(d.finance.costHidden).toBe(true);
+    expect(d.finance.confirmed.USD.sales).toBe('1200.00');
+    expect(d.finance.confirmed.USD).not.toHaveProperty('profitBasis');
+    expect(d.finance.confirmed.USD).not.toHaveProperty('afterRefund');
+    expect(JSON.stringify(d.finance)).not.toContain('1000.00');
+    // eksport menejerga yopiq
+    expect((await mgrB.get(`/api/v1/exports/orders.csv?from=${today()}&to=${tomorrow()}`)).status).toBe(403);
+    // rahbar hammasini ko'radi
+    const hc = await card(head, o.id);
+    expect(hc.canCost).toBe(true);
+    expect(hc.order.netPrice).toBe('1000.00');
+  });
+
+  it('administrator yoqgach menejer tannarx va foydani ko‘radi; audit yoziladi; o‘chirilgach yana yopiladi', async () => {
+    const mgrBId = await userId(core, 'menejer.b@demo.local');
+    expect((await admin.patch(`/api/v1/users/${mgrBId}/finance-access`, { enabled: true })).status).toBe(200);
+    expect((await mgrB.get('/api/v1/me')).body.capabilities).toContain('finance.cost.view');
+    expect(await p().auditLog.count({ where: { entityId: mgrBId, action: 'finance_cost_access_granted' } })).toBeGreaterThan(0);
+    const lead = await leadOwnedBy('menejer.b@demo.local');
+    const o = await order(mgrB, lead.id, '800.00', 'USD', '600.00');
+    expect((await card(mgrB, o.id)).order.netPrice).toBe('600.00');
+    expect((await admin.patch(`/api/v1/users/${mgrBId}/finance-access`, { enabled: false })).status).toBe(200);
+    expect((await card(mgrB, o.id)).canCost).toBe(false);
+  });
+
+  it('eksport: rahbarda tannarx va qaytarimdan keyingi foyda ustunlari bor', async () => {
+    const r = await head.get(`/api/v1/exports/orders.csv?from=${today()}&to=${tomorrow()}`);
+    expect(r.status).toBe(200);
+    expect(r.text).toContain('profit_after_refund');
   });
 });

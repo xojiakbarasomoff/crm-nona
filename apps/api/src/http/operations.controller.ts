@@ -18,10 +18,12 @@ import {
   SegmentSchema,
   ServicePatchSchema,
   ServiceSchema,
+  SupplierRefundSchema,
   TicketSchema,
 } from '@crm/contracts';
 import { formatMoney, maskReference } from '@crm/domain';
 import type { Core, UserActor } from '../core';
+import { canCost } from '../core/scope';
 import { serializeOrder, serializeService } from '../core/services/orders.service';
 import { serializeSegment } from '../core/services/segments.service';
 import { Actor, CORE, parse, send, UuidPipe as uuid, withIdempotency, type AuthedRequest } from './common';
@@ -34,13 +36,14 @@ export class OperationsController {
   @Get('orders')
   async orders(@Actor() actor: UserActor, @Query() q: unknown, @Res() res: Response) {
     const r = await this.core.orders.listOrders(actor, parse(PaginationQuery.strict(), q));
-    send(res, 200, { ...r, items: r.items.map(serializeOrder) });
+    const cost = canCost(actor);
+    send(res, 200, { ...r, items: r.items.map((o) => serializeOrder(o, cost)) });
   }
 
   @Post('orders')
   async createOrder(@Actor() actor: UserActor, @Body() body: unknown, @Req() req: AuthedRequest, @Res() res: Response) {
     const input = parse(OrderCreateSchema, body);
-    const r = await withIdempotency(this.core, actor, req, false, async () => ({ status: 201, body: serializeOrder(await this.core.orders.createOrder(actor, input)) }));
+    const r = await withIdempotency(this.core, actor, req, false, async () => ({ status: 201, body: serializeOrder(await this.core.orders.createOrder(actor, input), canCost(actor)) }));
     send(res, r.status, r.body);
   }
 
@@ -51,11 +54,11 @@ export class OperationsController {
     send(res, 200, {
       ...r,
       order: {
-        ...serializeOrder(r.order),
+        ...serializeOrder(r.order, r.canCost),
         segments: r.order.segments.map((s) => serializeSegment(s, full)),
         passengers: r.order.passengers.map((p) => ({ ...p, tickets: p.tickets.map((t) => ({ ...t, ticketNumber: full ? t.ticketNumber : maskReference(t.ticketNumber) })) })),
         payments: r.order.payments.map((p) => ({ ...p, amount: formatMoney({ amountMinor: p.amountMinor, currency: p.currency }), amountMinor: undefined })),
-        services: r.order.services.map(serializeService),
+        services: r.order.services.map((s) => serializeService(s, r.canCost)),
       },
     });
   }
@@ -63,7 +66,7 @@ export class OperationsController {
   @Patch('orders/:id')
   async patchOrder(@Actor() actor: UserActor, @Param('id', uuid) id: string, @Body() body: unknown, @Res() res: Response) {
     const { version, ...patch } = parse(OrderPatchSchema, body);
-    send(res, 200, serializeOrder(await this.core.orders.updateOrder(actor, id, version, patch)));
+    send(res, 200, serializeOrder(await this.core.orders.updateOrder(actor, id, version, patch), canCost(actor)));
   }
 
   @Post('orders/:id/payments')
@@ -71,7 +74,18 @@ export class OperationsController {
     const input = parse(PaymentSchema, body);
     const r = await withIdempotency(this.core, actor, req, true, async () => {
       const out = await this.core.orders.recordPayment(actor, id, { ...input, receivedAt: new Date(input.receivedAt), businessKey: `idem:${actor.id}:${req.header('idempotency-key')}` });
-      return { status: out.duplicate ? 200 : 201, body: { payment: { ...out.payment, amount: input.amount, amountMinor: undefined }, order: serializeOrder(out.order), paymentStateNote: out.paymentStateNote } };
+      return { status: out.duplicate ? 200 : 201, body: { payment: { ...out.payment, amount: input.amount, amountMinor: undefined }, order: serializeOrder(out.order, canCost(actor)), paymentStateNote: out.paymentStateNote } };
+    });
+    send(res, r.status, r.body);
+  }
+
+  /** Yetkazib beruvchidan qaytgan summa (alohida qayd; mijoz qaytarimi — /payments kind=refund). */
+  @Post('orders/:id/supplier-refunds')
+  async supplierRefund(@Actor() actor: UserActor, @Param('id', uuid) id: string, @Body() body: unknown, @Req() req: AuthedRequest, @Res() res: Response) {
+    const input = parse(SupplierRefundSchema, body);
+    const r = await withIdempotency(this.core, actor, req, true, async () => {
+      const out = await this.core.orders.recordSupplierRefund(actor, id, { ...input, receivedAt: new Date(input.receivedAt), businessKey: `idem:${actor.id}:${req.header('idempotency-key')}` });
+      return { status: out.duplicate ? 200 : 201, body: { id: out.refund.id, amount: input.amount, currency: out.refund.currency } };
     });
     send(res, r.status, r.body);
   }

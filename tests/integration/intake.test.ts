@@ -3,7 +3,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Core } from '../../apps/api/src/core';
 import { type DemoMetaDirectClient, signMetaBody } from '@crm/integrations';
-import { drain, login, makeApp, makeCore, sendChatReply, sendDirect, sendLeadAds, testConfig } from './helpers';
+import { alwaysOnDuty, drain, login, makeApp, makeCore, sendChatReply, sendDirect, sendLeadAds, testConfig } from './helpers';
 import { createApp } from '../../apps/api/src/app';
 import { createCore } from '../../apps/api/src/core';
 
@@ -12,6 +12,7 @@ let app: INestApplication;
 
 beforeAll(async () => {
   core = makeCore();
+  await alwaysOnDuty(core);
   app = await makeApp(core);
 });
 afterAll(async () => {

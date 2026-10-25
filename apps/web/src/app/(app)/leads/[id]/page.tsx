@@ -41,6 +41,8 @@ interface LeadDetail {
   contact: { id: string; fullName: string | null; primaryPhone: string | null } | null;
   pendingOperations: Array<{ id: string; action: string; state: string; lastError: string | null }>;
   tourOperator: { id: string; name: string; status: string } | null;
+  /** Faol buyurtma bo'lsa turoperator buyurtmaniki (tarixiy bog'lanish): lid kartasida o'zgartirilmaydi. */
+  operatorOwnedByOrder: { id: string; orderNo: string } | null;
 }
 
 export default function LeadPage() {
@@ -149,7 +151,7 @@ export default function LeadPage() {
                     </select>
                   </Section>
                 )}
-                <TourOperatorPicker current={d.tourOperator} onSave={(tourOperatorId) => run(() => api(`/api/v1/leads/${id}`, { method: 'PATCH', body: { version: l.version, tourOperatorId } }))} />
+                <TourOperatorPicker current={d.tourOperator} ownedBy={d.operatorOwnedByOrder} onSave={(tourOperatorId) => run(() => api(`/api/v1/leads/${id}`, { method: 'PATCH', body: { version: l.version, tourOperatorId } }))} />
                 <Section title="Mijoz">
                   {d.contact ? (
                     <>
@@ -184,14 +186,14 @@ export default function LeadPage() {
 }
 
 /** Turoperator (xizmat yetkazib beruvchi). Reklama manbasi emas: u yuqoridagi «Manba» maydonida. */
-function TourOperatorPicker({ current, onSave }: { current: LeadDetail['tourOperator']; onSave: (id: string | null) => void }) {
+function TourOperatorPicker({ current, ownedBy, onSave }: { current: LeadDetail['tourOperator']; ownedBy: LeadDetail['operatorOwnedByOrder']; onSave: (id: string | null) => void }) {
   const list = useApi<{ items: Array<{ id: string; name: string; status: string }> }>('/api/v1/suppliers?status=active&kind=tour_operator');
   const options = list.data?.items ?? [];
   const all = current && !options.some((o) => o.id === current.id) ? [...options, current] : options;
   return (
     <Section title="Turoperator">
       <Field label="Yetkazib beruvchi turoperator" hint="Mijoz qayerdan kelgani («Manba») bilan aralashtirmang">
-        <select value={current?.id ?? ''} onChange={(e) => onSave(e.target.value || null)} aria-label="Turoperator">
+        <select value={current?.id ?? ''} onChange={(e) => onSave(e.target.value || null)} aria-label="Turoperator" disabled={!!ownedBy}>
           <option value="">Tanlanmagan</option>
           {all.map((o) => (
             <option key={o.id} value={o.id}>
@@ -201,6 +203,11 @@ function TourOperatorPicker({ current, onSave }: { current: LeadDetail['tourOper
           ))}
         </select>
       </Field>
+      {ownedBy && (
+        <p className="hint">
+          Buyurtma <Link href={`/orders/${ownedBy.id}`}>{ownedBy.orderNo}</Link> mavjud: turoperator buyurtmaning tarixiy bog‘lanishi. Uni buyurtma kartasida (sabab va audit bilan) o‘zgartiring — eski sotuvlar statistikasi lid o‘zgarishidan ta’sirlanmaydi.
+        </p>
+      )}
     </Section>
   );
 }

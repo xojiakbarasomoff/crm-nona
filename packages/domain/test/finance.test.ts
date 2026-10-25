@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeOrderFinance, countedLines, marginPercent, parseMoney, singleCurrencySelling, summarizeFinance, type FinanceLine, type FinanceOrderInput } from '../src';
+import { canWith, capabilitiesFor, checkCustomerRefund, checkSupplierRefund, computeOrderFinance, countedLines, marginPercent, parseMoney, singleCurrencySelling, summarizeFinance, type FinanceLine, type FinanceOrderInput, type RefundsByCurrency } from '../src';
 
 const m = (v: string, c = 'UZS') => parseMoney(v, c).amountMinor;
 const pkg = (selling: string | null, net: string | null, currency: string | null = 'UZS'): FinanceLine => ({
@@ -96,10 +96,10 @@ describe('valyutalar kurssiz qo‘shilmaydi', () => {
   });
 });
 
-const order = (id: string, bucket: FinanceOrderInput['bucket'], lines: FinanceLine[], o: Partial<FinanceOrderInput> = {}): FinanceOrderInput => ({
+const order = (id: string, bucket: FinanceOrderInput['bucket'], lines: FinanceLine[], o: Partial<FinanceOrderInput> = {}, refunds: RefundsByCurrency = {}): FinanceOrderInput => ({
   orderId: id,
   bucket,
-  finance: computeOrderFinance(lines),
+  finance: computeOrderFinance(lines, refunds),
   managerId: 'mA',
   operatorId: 'opX',
   ...o,
@@ -120,15 +120,10 @@ describe('dashboard yig‘indisi', () => {
     expect(mb.currencies.UZS!.profit).toBe(m('-100'));
   });
 
-  it('bekor qilingan va to‘liq qaytarilgan buyurtmalar jami sotuvga kirmaydi, tarixda alohida ko‘rinadi', () => {
-    const s = summarizeFinance([
-      order('1', 'confirmed', [pkg('1200', '1000')]),
-      order('2', 'cancelled', [pkg('800', '700')]),
-      order('3', 'refunded', [pkg('600', '500')]),
-    ]);
+  it('bekor qilingan buyurtma jami sotuvga kirmaydi, tarixda alohida ko‘rinadi', () => {
+    const s = summarizeFinance([order('1', 'confirmed', [pkg('1200', '1000')]), order('2', 'cancelled', [pkg('800', '700')])]);
     expect(s.confirmed.UZS!.sales).toBe(m('1200'));
     expect(s.cancelled.UZS).toEqual({ sales: m('800'), orders: 1 });
-    expect(s.refunded.UZS).toEqual({ sales: m('600'), orders: 1 });
   });
 
   it('kutilayotgan foyda faqat ochiq buyurtmalardan, alohida', () => {
@@ -154,5 +149,105 @@ describe('marja', () => {
     expect(marginPercent(m('1200'), m('200'))).toBe('16.66');
     expect(marginPercent(m('1000'), m('-100'))).toBe('-10.00');
     expect(marginPercent(0n, 0n)).toBeNull();
+  });
+});
+
+
+describe('dastlabki foyda va qaytarimdan keyingi foyda', () => {
+  const ref = (customer: string, supplier: string, ccy = 'UZS'): RefundsByCurrency => ({ [ccy]: { customerMinor: m(customer, ccy), supplierMinor: m(supplier, ccy) } });
+
+  it('qaytarimdan keyingi foyda = (sotuv − mijozga qaytarilgan) − (tannarx − yetkazib beruvchidan qaytgan)', () => {
+    const f = computeOrderFinance([pkg('1200', '1000')], ref('300', '100'));
+    const c = f.byCurrency.UZS!;
+    expect(c.profitMinor).toBe(m('200')); // dastlabki foyda o‘zgarmaydi
+    expect(c.sellingAfterRefundMinor).toBe(m('900'));
+    expect(c.netAfterRefundMinor).toBe(m('900'));
+    expect(c.profitAfterRefundMinor).toBe(m('0')); // (1200−300) − (1000−100)
+  });
+
+  it('yetkazib beruvchi qaytarmasa, mijozga qaytarim zarar keltiradi (manfiy foyda)', () => {
+    const f = computeOrderFinance([pkg('1200', '1000')], ref('1200', '0'));
+    expect(f.byCurrency.UZS!.profitAfterRefundMinor).toBe(m('-1000'));
+    expect(f.byCurrency.UZS!.profitMinor).toBe(m('200'));
+  });
+
+  it('yetkazib beruvchi to‘liq qaytarsa, foyda mijoz qaytarimiga teng kamayadi', () => {
+    const f = computeOrderFinance([pkg('1200', '1000')], ref('200', '1000'));
+    expect(f.byCurrency.UZS!.profitAfterRefundMinor).toBe(m('1000'));
+  });
+
+  it('qaytarim bo‘lmasa ikki foyda teng; tannarx noma’lum bo‘lsa ikkalasi ham aniqlanmagan', () => {
+    const a = computeOrderFinance([pkg('1200', '1000')]).byCurrency.UZS!;
+    expect(a.profitAfterRefundMinor).toBe(a.profitMinor);
+    const b = computeOrderFinance([pkg('1200', null)], ref('100', '0')).byCurrency.UZS!;
+    expect(b.profitMinor).toBeNull();
+    expect(b.profitAfterRefundMinor).toBeNull();
+    expect(b.sellingAfterRefundMinor).toBe(m('1100'));
+  });
+
+  it('qaytarim valyutasi narx valyutasiga mos kelmasa hisobga olinmaydi va belgilanadi (kurs yo‘q)', () => {
+    const f = computeOrderFinance([pkg('1200', '1000', 'USD')], { UZS: { customerMinor: m('500000'), supplierMinor: 0n } });
+    expect(f.byCurrency.USD!.profitAfterRefundMinor).toBe(m('200', 'USD'));
+    expect(f.refundCurrencyMismatch).toEqual(['UZS']);
+  });
+
+  it('qaytarimlar valyutalar bo‘yicha alohida qo‘llanadi', () => {
+    const lines = [pkg('1000', '800', 'USD'), svc('t', '500000', '300000', { currency: 'UZS' })];
+    const f = computeOrderFinance(lines, { USD: { customerMinor: m('100', 'USD'), supplierMinor: 0n }, UZS: { customerMinor: 0n, supplierMinor: m('50000') } });
+    expect(f.byCurrency.USD!.profitAfterRefundMinor).toBe(m('100', 'USD')); // (1000−100) − 800
+    expect(f.byCurrency.UZS!.profitAfterRefundMinor).toBe(m('250000')); // 500000 − (300000−50000)
+  });
+
+  it('tekshiruvlar: valyuta mosligi, qabul qilinganidan ko‘p qaytarim, tannarxdan ko‘p qaytarim, tannarx noma’lum', () => {
+    const f = computeOrderFinance([pkg('1200', '1000', 'USD')]);
+    expect(checkCustomerRefund(f, { currency: 'UZS', amountMinor: 1n, receivedMinor: 10n, refundedMinor: 0n })).toMatchObject({ ok: false, code: 'REFUND_CURRENCY_MISMATCH' });
+    expect(checkCustomerRefund(f, { currency: 'USD', amountMinor: m('600', 'USD'), receivedMinor: m('1000', 'USD'), refundedMinor: m('500', 'USD') })).toMatchObject({ ok: false, code: 'REFUND_EXCEEDS_RECEIVED' });
+    expect(checkCustomerRefund(f, { currency: 'USD', amountMinor: m('500', 'USD'), receivedMinor: m('1000', 'USD'), refundedMinor: m('500', 'USD') })).toEqual({ ok: true });
+    expect(checkSupplierRefund(f, { currency: 'EUR', amountMinor: 1n, refundedMinor: 0n })).toMatchObject({ code: 'REFUND_CURRENCY_MISMATCH' });
+    expect(checkSupplierRefund(f, { currency: 'USD', amountMinor: m('900', 'USD'), refundedMinor: m('200', 'USD') })).toMatchObject({ ok: false, code: 'SUPPLIER_REFUND_EXCEEDS_NET' });
+    expect(checkSupplierRefund(f, { currency: 'USD', amountMinor: m('800', 'USD'), refundedMinor: m('200', 'USD') })).toEqual({ ok: true });
+    const unknownNet = computeOrderFinance([pkg('1200', null, 'USD')]);
+    expect(checkSupplierRefund(unknownNet, { currency: 'USD', amountMinor: 1n, refundedMinor: 0n })).toMatchObject({ ok: false, code: 'NET_UNKNOWN' });
+  });
+
+  it('dashboard: dastlabki va qaytarimdan keyingi foyda alohida; qaytarimli buyurtma tasdiqlangan jamida qoladi', () => {
+    const s = summarizeFinance([
+      order('1', 'confirmed', [pkg('1200', '1000')], {}, ref('300', '100')),
+      order('2', 'confirmed', [pkg('600', '500')]),
+      order('3', 'confirmed', [pkg('500', null)], {}, ref('50', '0')), // tannarxsiz: foydaga kirmaydi, mijoz qaytarimi hisobda
+    ]);
+    const a = s.confirmed.UZS!;
+    expect(a.sales).toBe(m('2300'));
+    expect(a.profit).toBe(m('300')); // 200 + 100 (dastlabki)
+    expect(a.profitAfterRefund).toBe(m('100')); // 0 + 100
+    expect(a.customerRefunded).toBe(m('350'));
+    expect(a.supplierRefunded).toBe(m('100'));
+    expect(a.ordersWithRefund).toBe(2);
+    expect(a.undeterminedOrders).toBe(1);
+    expect(a.basisSalesAfterRefund).toBe(m('1500')); // 900 + 600
+    expect(a.basisNetAfterRefund).toBe(m('1400')); // 900 + 500
+  });
+
+  it('valyuta mos kelmagan qaytarimli buyurtmalar soni alohida', () => {
+    const s = summarizeFinance([order('1', 'confirmed', [pkg('1000', '800', 'USD')], {}, { UZS: { customerMinor: m('1000'), supplierMinor: 0n } })]);
+    expect(s.refundMismatchOrders).toBe(1);
+  });
+});
+
+describe('tannarx/foyda huquqi', () => {
+  it('rahbar va administratorda standart bor, menejerda yo‘q; menejerga shaxsiy beriladi', () => {
+    expect(canWith({ role: 'ADMIN' }, 'finance.cost.view')).toBe(true);
+    expect(canWith({ role: 'HEAD' }, 'finance.cost.view')).toBe(true);
+    expect(canWith({ role: 'MANAGER' }, 'finance.cost.view')).toBe(false);
+    expect(canWith({ role: 'MANAGER', extraCapabilities: ['finance.cost.view'] }, 'finance.cost.view')).toBe(true);
+    expect(capabilitiesFor({ role: 'MANAGER', extraCapabilities: ['finance.cost.view'] })).toContain('finance.cost.view');
+    expect(capabilitiesFor({ role: 'MANAGER' })).not.toContain('finance.cost.view');
+  });
+
+  it('shaxsiy huquq boshqa huquqlarni bermaydi', () => {
+    const mgr = { role: 'MANAGER' as const, extraCapabilities: ['finance.cost.view', 'users.manage', 'export'] };
+    expect(canWith(mgr, 'users.manage')).toBe(false);
+    expect(canWith(mgr, 'export')).toBe(false);
+    expect(capabilitiesFor(mgr)).not.toContain('export');
   });
 });

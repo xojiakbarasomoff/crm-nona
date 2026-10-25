@@ -1,12 +1,12 @@
-import type { FulfillmentState, Order, OrderService as ServiceRow, PaymentState, Prisma, TicketingState, Tx } from '@crm/database';
+import type { FulfillmentState, Order, OrderService as ServiceRow, PaymentState, Prisma, SupplierRefund, TicketingState, Tx } from '@crm/database';
 import { validateServiceDetails } from '@crm/contracts';
-import { can, computeOrderFinance, formatMoney, formatOrderNo, isSupportedCurrency, marginPercent, parseMoney, singleCurrencySelling, sumByCurrency, type FinanceLine, type OrderFinance } from '@crm/domain';
+import { can, checkCustomerRefund, checkSupplierRefund, computeOrderFinance, formatMoney, formatOrderNo, isSupportedCurrency, marginPercent, parseMoney, singleCurrencySelling, sumByCurrency, type FinanceLine, type OrderFinance, type RefundsByCurrency } from '@crm/domain';
 import { audit } from '../audit';
 import type { CoreDeps, UserActor } from '../context';
 import { publishEvent } from '../events';
 import { conflict, forbidden, isPgUniqueViolation, unprocessable } from '../errors';
 import { enqueueOutbox } from '../queue';
-import { assertFound, canEditRecord, leadWhere, orderWhere } from '../scope';
+import { assertFound, canCost, canEditRecord, leadWhere, orderWhere, requireCost } from '../scope';
 import { assertSelectableSupplier, serializeSupplier } from './suppliers.service';
 
 /** Atomic per-company, per-year order number; gaps are acceptable (TZ §12.3). */
@@ -25,7 +25,7 @@ export async function nextOrderNo(tx: Tx, companyId: string, year: number): Prom
  */
 export async function createOrderRow(
   tx: Tx,
-  p: { companyId: string; leadId: string; contactId: string; ownerId: string | null; now: Date; fulfillmentState: FulfillmentState; agreedAmountMinor?: bigint | null; currency?: string | null; offerVersionId?: string | null; note?: string | null },
+  p: { companyId: string; leadId: string; contactId: string; ownerId: string | null; now: Date; fulfillmentState: FulfillmentState; agreedAmountMinor?: bigint | null; currency?: string | null; offerVersionId?: string | null; note?: string | null; tourOperatorId?: string | null },
 ): Promise<Order> {
   const existing = await tx.order.findFirst({ where: { companyId: p.companyId, leadId: p.leadId, fulfillmentState: { not: 'cancelled' } } });
   if (existing) return existing;
@@ -45,19 +45,23 @@ export async function createOrderRow(
       currency: p.currency ?? null,
       offerVersionId: p.offerVersionId ?? null,
       note: p.note ?? null,
+      // Tarixiy bog'lanish: yaratilgan paytdagi lid turoperatori. Keyin lid o'zgarsa ham o'zgarmaydi.
+      tourOperatorId: p.tourOperatorId ?? null,
     },
   });
   await enqueueOutbox(tx, { companyId: p.companyId, operationKey: `order.summary:${order.id}:1`, target: 'amocrm', action: 'order.summary', payload: { orderId: order.id, leadId: p.leadId } });
   return order;
 }
 
-export function serializeOrder(o: Order) {
+/** Tannarx (netPrice) faqat `finance.cost.view` huquqi bor foydalanuvchiga qaytariladi (backend darajasida). */
+export function serializeOrder(o: Order, canCost: boolean) {
   return {
     ...o,
     /** Paket darajasidagi sotuv narxi (selling price). */
     agreedAmount: o.agreedAmountMinor !== null && o.currency ? formatMoney({ amountMinor: o.agreedAmountMinor, currency: o.currency }) : null,
-    /** Paket darajasidagi tannarx (net price); null — noma'lum. */
-    netPrice: o.netPriceMinor !== null && o.currency ? formatMoney({ amountMinor: o.netPriceMinor, currency: o.currency }) : null,
+    /** Paket darajasidagi tannarx (net price); null — noma'lum yoki ko'rish huquqi yo'q (`costHidden`). */
+    netPrice: canCost && o.netPriceMinor !== null && o.currency ? formatMoney({ amountMinor: o.netPriceMinor, currency: o.currency }) : null,
+    costHidden: !canCost,
     agreedAmountMinor: undefined,
     netPriceMinor: undefined,
   };
@@ -65,17 +69,17 @@ export function serializeOrder(o: Order) {
 
 const fmt = (amountMinor: bigint, currency: string) => formatMoney({ amountMinor, currency });
 
-export function serializeService(s: ServiceRow) {
+export function serializeService(s: ServiceRow, canCost: boolean) {
   const ccy = s.currency;
-  const known = s.amountMinor !== null && s.netMinor !== null && !!ccy;
+  const known = canCost && s.amountMinor !== null && s.netMinor !== null && !!ccy;
   return {
     id: s.id,
     serviceType: s.serviceType,
     description: s.description,
     /** Sotuv narxi (mijozga). */
     amount: s.amountMinor !== null && ccy ? fmt(s.amountMinor, ccy) : null,
-    /** Tannarx (yetkazib beruvchidan); null — noma'lum. */
-    netAmount: s.netMinor !== null && ccy ? fmt(s.netMinor, ccy) : null,
+    /** Tannarx (yetkazib beruvchidan); null — noma'lum yoki ko'rish huquqi yo'q. */
+    netAmount: canCost && s.netMinor !== null && ccy ? fmt(s.netMinor, ccy) : null,
     currency: ccy,
     profit: known ? fmt(s.amountMinor! - s.netMinor!, ccy!) : null,
     supplierId: s.supplierId,
@@ -98,31 +102,75 @@ export function orderFinanceLines(o: Pick<Order, 'id' | 'agreedAmountMinor' | 'n
   return lines;
 }
 
-export const orderFinance = (o: Pick<Order, 'id' | 'agreedAmountMinor' | 'netPriceMinor' | 'currency'>, services: ServiceRow[]) => computeOrderFinance(orderFinanceLines(o, services));
+export const orderFinance = (o: Pick<Order, 'id' | 'agreedAmountMinor' | 'netPriceMinor' | 'currency'>, services: ServiceRow[], refunds: RefundsByCurrency = {}) => computeOrderFinance(orderFinanceLines(o, services), refunds);
 
-export const FINANCE_FORMULA = "Foyda = sotuv narxi (selling price) − tannarx (net price). Qo'shimcha xarajatlar (komissiya, soliq, bank to'lovlari, valyuta farqi) hisobga olinmagan: bu buxgalteriya bo'yicha yakuniy «sof foyda» emas.";
+export const FINANCE_FORMULA =
+  "Dastlabki foyda = sotuv narxi (selling price) − tannarx (net price). Qaytarimdan keyingi foyda = (sotuv narxi − mijozga qaytarilgan summa) − (tannarx − yetkazib beruvchidan qaytgan summa). Qo'shimcha xarajatlar (komissiya, soliq, bank to'lovlari, valyuta farqi) hisobga olinmagan: bu buxgalteriya bo'yicha yakuniy «sof foyda» emas.";
 
-export function serializeFinance(f: OrderFinance) {
+type Db = { payment: Tx['payment']; supplierRefund: Tx['supplierRefund'] };
+
+/** Buyurtma qaytarimlari: mijozga qaytarilgan (payments.kind='refund') va yetkazib beruvchidan qaytgan — valyuta bo'yicha. */
+export async function loadRefunds(db: Db, companyId: string, orderIds: string[]) {
+  const byOrder = new Map<string, { refunds: RefundsByCurrency; received: Record<string, bigint> }>();
+  if (!orderIds.length) return byOrder;
+  const get = (id: string) => byOrder.get(id) ?? (byOrder.set(id, { refunds: {}, received: {} }), byOrder.get(id)!);
+  const [pay, sup] = await Promise.all([
+    db.payment.groupBy({ by: ['orderId', 'currency', 'kind'], where: { companyId, orderId: { in: orderIds }, status: 'confirmed' }, _sum: { amountMinor: true } }),
+    db.supplierRefund.groupBy({ by: ['orderId', 'currency'], where: { companyId, orderId: { in: orderIds } }, _sum: { amountMinor: true } }),
+  ]);
+  for (const r of pay) {
+    const o = get(r.orderId);
+    const sum = r._sum.amountMinor ?? 0n;
+    if (r.kind === 'refund') (o.refunds[r.currency] ??= { customerMinor: 0n, supplierMinor: 0n }).customerMinor += sum;
+    else o.received[r.currency] = (o.received[r.currency] ?? 0n) + sum;
+  }
+  for (const r of sup) (get(r.orderId).refunds[r.currency] ??= { customerMinor: 0n, supplierMinor: 0n }).supplierMinor += r._sum.amountMinor ?? 0n;
+  return byOrder;
+}
+
+/** Foydalanuvchida tannarx/foyda huquqi bo'lmasa — faqat sotuv va mijoz qaytarimi qaytariladi. */
+export function serializeFinance(f: OrderFinance, canCost: boolean) {
+  const rows = Object.values(f.byCurrency).map((c) => {
+    const base = {
+      selling: fmt(c.sellingMinor, c.currency),
+      customerRefunded: fmt(c.customerRefundedMinor, c.currency),
+      sellingAfterRefund: fmt(c.sellingAfterRefundMinor, c.currency),
+      lines: c.lines,
+    };
+    if (!canCost) return [c.currency, base] as const;
+    return [
+      c.currency,
+      {
+        ...base,
+        net: c.lines - c.missingNetLines > 0 ? fmt(c.netMinor, c.currency) : null,
+        netComplete: c.missingNetLines === 0 && c.missingSellingLines === 0,
+        /** Dastlabki foyda (qaytarimsiz). */
+        profit: c.profitMinor === null ? null : fmt(c.profitMinor, c.currency),
+        profitState: c.profitState,
+        marginPercent: c.profitMinor === null ? null : marginPercent(c.sellingMinor, c.profitMinor),
+        supplierRefunded: fmt(c.supplierRefundedMinor, c.currency),
+        netAfterRefund: c.netAfterRefundMinor === null ? null : fmt(c.netAfterRefundMinor, c.currency),
+        /** Qaytarimdan keyingi foyda. */
+        profitAfterRefund: c.profitAfterRefundMinor === null ? null : fmt(c.profitAfterRefundMinor, c.currency),
+        missingNetLines: c.missingNetLines,
+      },
+    ] as const;
+  });
   return {
+    costHidden: !canCost,
     hasPrice: f.hasPrice,
-    profitUndetermined: f.profitUndetermined,
-    byCurrency: Object.fromEntries(
-      Object.values(f.byCurrency).map((c) => [
-        c.currency,
-        {
-          selling: fmt(c.sellingMinor, c.currency),
-          net: c.lines - c.missingNetLines > 0 ? fmt(c.netMinor, c.currency) : null,
-          netComplete: c.missingNetLines === 0 && c.missingSellingLines === 0,
-          profit: c.profitMinor === null ? null : fmt(c.profitMinor, c.currency),
-          profitState: c.profitState,
-          marginPercent: c.profitMinor === null ? null : marginPercent(c.sellingMinor, c.profitMinor),
-          lines: c.lines,
-          missingNetLines: c.missingNetLines,
-        },
-      ]),
-    ),
-    formula: FINANCE_FORMULA,
+    profitUndetermined: canCost ? f.profitUndetermined : null,
+    refundCurrencyMismatch: f.refundCurrencyMismatch.length > 0,
+    byCurrency: Object.fromEntries(rows),
+    formula: canCost ? FINANCE_FORMULA : null,
   };
+}
+
+/** Auditdan tannarxga oid kalitlarni olib tashlaydi (huquqsiz foydalanuvchi uchun). */
+function stripCost(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(stripCost);
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v as Record<string, unknown>).filter(([k]) => !/net/i.test(k)).map(([k, x]) => [k, stripCost(x)]));
+  return v;
 }
 
 export class OrdersService {
@@ -211,7 +259,7 @@ export class OrdersService {
         currency = m.currency;
       }
       try {
-        const order = await createOrderRow(tx, { companyId: actor.companyId, leadId: lead.id, contactId: lead.contactId, ownerId: lead.ownerId, now: this.d.clock.now(), fulfillmentState: 'draft', agreedAmountMinor: amountMinor, currency, offerVersionId, note: input.note ?? null });
+        const order = await createOrderRow(tx, { companyId: actor.companyId, leadId: lead.id, contactId: lead.contactId, ownerId: lead.ownerId, now: this.d.clock.now(), fulfillmentState: 'draft', agreedAmountMinor: amountMinor, currency, offerVersionId, note: input.note ?? null, tourOperatorId: lead.tourOperatorId });
         await audit(tx, actor, { entityType: 'order', entityId: order.id, action: 'created', newValue: { orderNo: order.orderNo, leadId: lead.id } });
         return order;
       } catch (err) {
@@ -235,18 +283,37 @@ export class OrdersService {
       'Buyurtma',
     );
     const canSeeFull = actor.role !== 'MANAGER' || order.ownerId === actor.id;
-    const [lead, contact, reminders, auditRows] = await Promise.all([
-      this.d.prisma.lead.findFirst({ where: { id: order.leadId, companyId: actor.companyId }, select: { id: true, name: true, stage: true, version: true, amoLeadId: true, serviceType: true, requirements: true, tourOperatorId: true, ownerId: true } }),
+    const cost = canCost(actor);
+    const [lead, contact, reminders, auditRows, supplierRefunds, refundMap] = await Promise.all([
+      this.d.prisma.lead.findFirst({ where: { id: order.leadId, companyId: actor.companyId }, select: { id: true, name: true, stage: true, version: true, amoLeadId: true, serviceType: true, requirements: true, tourOperatorId: true, ownerId: true, firstWonAt: true } }),
       this.d.prisma.contact.findFirst({ where: { id: order.contactId, companyId: actor.companyId }, select: { id: true, fullName: true, primaryPhone: true, primaryEmail: true } }),
       this.d.prisma.reminderOccurrence.findMany({ where: { companyId: actor.companyId, orderId: id }, orderBy: { dueAt: 'asc' } }),
       this.d.prisma.auditLog.findMany({ where: { companyId: actor.companyId, entityId: { in: [id, ...order.segments.map((s) => s.id)] } }, orderBy: { createdAt: 'desc' }, take: 100 }),
+      cost ? this.d.prisma.supplierRefund.findMany({ where: { companyId: actor.companyId, orderId: id }, orderBy: { receivedAt: 'asc' } }) : Promise.resolve([] as SupplierRefund[]),
+      loadRefunds(this.d.prisma, actor.companyId, [id]),
     ]);
-    const supplierIds = [...new Set([lead?.tourOperatorId, ...order.services.map((s) => s.supplierId)].filter((x): x is string => !!x))];
+    const supplierIds = [...new Set([order.tourOperatorId, ...order.services.map((s) => s.supplierId), ...supplierRefunds.map((r) => r.supplierId)].filter((x): x is string => !!x))];
     const suppliers = supplierIds.length ? await this.d.prisma.supplier.findMany({ where: { companyId: actor.companyId, id: { in: supplierIds } } }) : [];
     const full = can(actor.role, 'reference.view_full');
     const supplierMap = Object.fromEntries(suppliers.map((x) => [x.id, serializeSupplier(x, full)]));
-    const finance = serializeFinance(orderFinance(order, order.services));
-    return { order, lead, contact, reminders, audit: auditRows, canSeeFullReferences: canSeeFull, finance, suppliers: supplierMap, tourOperator: lead?.tourOperatorId ? (supplierMap[lead.tourOperatorId] ?? null) : null };
+    const refunds = refundMap.get(id)?.refunds ?? {};
+    const finance = serializeFinance(orderFinance(order, order.services, refunds), cost);
+    // Huquqsiz foydalanuvchiga tannarx, foyda va yetkazib beruvchi qaytarimlari audit orqali ham sizib chiqmasin.
+    const auditOut = cost ? auditRows : auditRows.filter((r) => r.action !== 'supplier_refund_recorded').map((r) => ({ ...r, oldValue: stripCost(r.oldValue), newValue: stripCost(r.newValue) }));
+    return {
+      order,
+      lead,
+      contact,
+      reminders,
+      audit: auditOut,
+      canSeeFullReferences: canSeeFull,
+      canCost: cost,
+      finance,
+      supplierRefunds: supplierRefunds.map((r) => ({ id: r.id, serviceId: r.serviceId, supplierId: r.supplierId, amount: fmt(r.amountMinor, r.currency), currency: r.currency, receivedAt: r.receivedAt, reference: r.reference, note: r.note })),
+      suppliers: supplierMap,
+      /** Buyurtma turoperatori (tarixiy bog'lanish; lid operatori o'zgarsa ham saqlanadi). */
+      tourOperator: order.tourOperatorId ? (supplierMap[order.tourOperatorId] ?? null) : null,
+    };
   }
 
   async listOrders(actor: UserActor, q: { cursor?: string; limit: number; state?: FulfillmentState }) {
@@ -268,14 +335,26 @@ export class OrdersService {
     actor: UserActor,
     id: string,
     version: number,
-    patch: { agreedAmount?: string; netPrice?: string | null; currency?: string; saleEvidence?: string | null; note?: string | null; ticketingState?: TicketingState; fulfillmentState?: FulfillmentState; paymentState?: PaymentState },
+    patch: { agreedAmount?: string; netPrice?: string | null; tourOperatorId?: string | null; tourOperatorReason?: string | null; currency?: string; saleEvidence?: string | null; note?: string | null; ticketingState?: TicketingState; fulfillmentState?: FulfillmentState; paymentState?: PaymentState },
   ) {
     const result = await this.d.prisma.$transaction(async (tx) => {
       const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id }) }), 'Buyurtma');
       if (!canEditRecord(actor, order.ownerId)) throw forbidden();
       if (order.fulfillmentState === 'cancelled') throw unprocessable('ORDER_CANCELLED', 'Bekor qilingan buyurtmani tahrirlab bo‘lmaydi');
       const data: Prisma.OrderUncheckedUpdateManyInput = { version: { increment: 1 } };
+      if (patch.netPrice !== undefined) requireCost(actor);
       const pricing = patch.agreedAmount !== undefined || patch.currency !== undefined || patch.netPrice !== undefined;
+      let operatorChange: { from: string | null; to: string | null; reason: string | null } | null = null;
+      if (patch.tourOperatorId !== undefined && patch.tourOperatorId !== order.tourOperatorId) {
+        // Buyurtma turoperatorini alohida, sabab va audit bilan o'zgartirish (lid operatori bunga ta'sir qilmaydi).
+        const lead = await tx.lead.findFirst({ where: { id: order.leadId, companyId: actor.companyId }, select: { firstWonAt: true } });
+        const confirmedLike = order.fulfillmentState !== 'draft' || !!order.confirmedAt || !!lead?.firstWonAt;
+        const reason = patch.tourOperatorReason?.trim() || null;
+        if (confirmedLike && (!reason || reason.length < 3)) throw unprocessable('REASON_REQUIRED', 'Tasdiqlangan buyurtma turoperatorini o‘zgartirish uchun sabab kerak', { tourOperatorReason: 'required' });
+        if (patch.tourOperatorId) await assertSelectableSupplier(tx, actor.companyId, patch.tourOperatorId, { kind: 'tour_operator' });
+        data.tourOperatorId = patch.tourOperatorId;
+        operatorChange = { from: order.tourOperatorId, to: patch.tourOperatorId, reason };
+      }
       if (pricing) {
         const currency = patch.currency ?? order.currency;
         if (!currency || !isSupportedCurrency(currency)) throw unprocessable('INVALID_CURRENCY', 'Valyuta ko‘rsatilmagan', { currency: 'required' });
@@ -309,6 +388,9 @@ export class OrdersService {
       }
       const res = await tx.order.updateMany({ where: { id, version }, data });
       if (res.count !== 1) throw conflict('VERSION_CONFLICT', 'Buyurtma boshqa foydalanuvchi tomonidan o‘zgartirilgan. Sahifani yangilang.');
+      if (operatorChange) {
+        await audit(tx, actor, { entityType: 'order', entityId: id, action: 'tour_operator_changed', oldValue: { tourOperatorId: operatorChange.from }, newValue: { tourOperatorId: operatorChange.to, reason: operatorChange.reason } });
+      }
       await audit(tx, actor, {
         entityType: 'order',
         entityId: id,
@@ -353,6 +435,15 @@ export class OrdersService {
         }
         return { payment: dup, order, duplicate: true, paymentStateNote: null as string | null };
       }
+      if (input.kind === 'refund') {
+        // Mijozga qaytarim: valyuta buyurtma narxlariga mos, qabul qilingan to'lovdan oshmasin (kurs yo'q).
+        const svc = await tx.orderService.findMany({ where: { companyId: actor.companyId, orderId, removedAt: null } });
+        const fin = orderFinance(order, svc);
+        if (!fin.hasPrice) throw unprocessable('PRICE_REQUIRED', 'Qaytarimni yozishdan oldin buyurtma narxini kiriting', { amount: 'price_required' });
+        const sums = (await loadRefunds(tx, actor.companyId, [orderId])).get(orderId);
+        const check = checkCustomerRefund(fin, { currency: money.currency, amountMinor: money.amountMinor, receivedMinor: sums?.received[money.currency] ?? 0n, refundedMinor: sums?.refunds[money.currency]?.customerMinor ?? 0n });
+        if (!check.ok) throw unprocessable(check.code, check.message, { currency: check.code === 'REFUND_CURRENCY_MISMATCH' ? 'mismatch' : 'invalid', amount: check.code === 'REFUND_EXCEEDS_RECEIVED' ? 'exceeds_received' : 'ok' });
+      }
       const payment = await tx.payment.create({
         data: {
           companyId: actor.companyId,
@@ -376,6 +467,42 @@ export class OrdersService {
       const updated = state && state !== order.paymentState ? await tx.order.update({ where: { id: orderId }, data: { paymentState: state, version: { increment: 1 } } }) : order;
       await audit(tx, actor, { entityType: 'order', entityId: orderId, action: input.kind === 'refund' ? 'refund_recorded' : 'payment_recorded', newValue: { paymentId: payment.id, amount: input.amount, currency: input.currency, method: input.method } });
       return { payment, order: updated, duplicate: false, paymentStateNote: note };
+    });
+  }
+
+  /**
+   * Yetkazib beruvchidan qaytgan summa (mijozga qaytarimdan alohida qayd etiladi). Faqat `finance.cost.view` huquqi.
+   * Valyuta buyurtma narx valyutasiga mos bo'lishi va jami qaytgan summa tannarxdan oshmasligi shart (kurs yo'q).
+   */
+  async recordSupplierRefund(
+    actor: UserActor,
+    orderId: string,
+    input: { amount: string; currency: string; receivedAt: Date; supplierId?: string | null; serviceId?: string | null; reference?: string | null; note?: string | null; businessKey: string },
+  ) {
+    requireCost(actor);
+    if (!isSupportedCurrency(input.currency)) throw unprocessable('INVALID_CURRENCY', 'Valyuta qo‘llab-quvvatlanmaydi', { currency: 'unsupported' });
+    const money = parseMoney(input.amount, input.currency);
+    if (money.amountMinor <= 0n) throw unprocessable('INVALID_AMOUNT', 'Summa musbat bo‘lishi kerak', { amount: 'positive' });
+    return this.d.prisma.$transaction(async (tx) => {
+      const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: orderId }) }), 'Buyurtma');
+      if (!canEditRecord(actor, order.ownerId)) throw forbidden();
+      const dup = await tx.supplierRefund.findUnique({ where: { companyId_businessKey: { companyId: actor.companyId, businessKey: input.businessKey } } });
+      if (dup) {
+        if (dup.orderId !== orderId || dup.amountMinor !== money.amountMinor || dup.currency !== money.currency) throw conflict('IDEMPOTENCY_KEY_REUSED', 'Bu kalit boshqa qaytarim uchun ishlatilgan');
+        return { refund: dup, duplicate: true };
+      }
+      if (input.supplierId) assertFound(await tx.supplier.findFirst({ where: { id: input.supplierId, companyId: actor.companyId } }), 'Yetkazib beruvchi');
+      if (input.serviceId) assertFound(await tx.orderService.findFirst({ where: { id: input.serviceId, companyId: actor.companyId, orderId } }), 'Xizmat');
+      const svc = await tx.orderService.findMany({ where: { companyId: actor.companyId, orderId, removedAt: null } });
+      const fin = orderFinance(order, svc);
+      const sums = (await loadRefunds(tx, actor.companyId, [orderId])).get(orderId);
+      const check = checkSupplierRefund(fin, { currency: money.currency, amountMinor: money.amountMinor, refundedMinor: sums?.refunds[money.currency]?.supplierMinor ?? 0n });
+      if (!check.ok) throw unprocessable(check.code, check.message, { currency: check.code === 'REFUND_CURRENCY_MISMATCH' ? 'mismatch' : 'invalid', amount: check.code === 'SUPPLIER_REFUND_EXCEEDS_NET' ? 'exceeds_net' : 'ok' });
+      const refund = await tx.supplierRefund.create({
+        data: { companyId: actor.companyId, orderId, serviceId: input.serviceId ?? null, supplierId: input.supplierId ?? null, amountMinor: money.amountMinor, currency: money.currency, receivedAt: input.receivedAt, reference: input.reference ?? null, note: input.note ?? null, businessKey: input.businessKey, recordedById: actor.id },
+      });
+      await audit(tx, actor, { entityType: 'order', entityId: orderId, action: 'supplier_refund_recorded', newValue: { supplierRefundId: refund.id, amount: input.amount, currency: input.currency, supplierId: input.supplierId ?? null, serviceId: input.serviceId ?? null } });
+      return { refund, duplicate: false };
     });
   }
 
@@ -411,6 +538,7 @@ export class OrdersService {
     orderId: string,
     input: { serviceType: string; description: string; amount?: string | null; netAmount?: string | null; currency?: string | null; supplierId?: string | null; includedInPackage?: boolean; details?: Record<string, unknown> },
   ) {
+    if (input.netAmount) requireCost(actor);
     const { sell, cost } = this.moneyPair(input.amount, input.netAmount, input.currency);
     const det = validateServiceDetails(input.serviceType, input.details);
     if (!det.ok) throw unprocessable('VALIDATION_FAILED', 'Kiritilgan ma’lumot noto‘g‘ri', det.errors);
@@ -440,7 +568,7 @@ export class OrdersService {
         newValue: { serviceId: s.id, serviceType: s.serviceType, amount: input.amount ?? null, netAmount: input.netAmount ?? null, currency: s.currency, supplierId: s.supplierId, includedInPackage: s.includedInPackage },
       });
       await this.queueSummary(tx, actor, order, s.id);
-      return serializeService(s);
+      return serializeService(s, canCost(actor));
     });
   }
 
@@ -449,6 +577,7 @@ export class OrdersService {
     serviceId: string,
     patch: { serviceType?: string; description?: string; amount?: string | null; netAmount?: string | null; currency?: string | null; supplierId?: string | null; includedInPackage?: boolean; details?: Record<string, unknown> },
   ) {
+    if (patch.netAmount !== undefined) requireCost(actor);
     return this.d.prisma.$transaction(async (tx) => {
       const before = assertFound(await tx.orderService.findFirst({ where: { id: serviceId, companyId: actor.companyId, removedAt: null } }), 'Xizmat');
       const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: before.orderId }) }), 'Xizmat');
@@ -489,7 +618,7 @@ export class OrdersService {
       });
       await audit(tx, actor, { entityType: 'order', entityId: before.orderId, action: priceChanged ? 'service_price_updated' : 'service_updated', oldValue: snap(before), newValue: snap(after) });
       if (priceChanged) await this.queueSummary(tx, actor, order, serviceId);
-      return serializeService(after);
+      return serializeService(after, canCost(actor));
     });
   }
 

@@ -17,7 +17,7 @@ export const DEMO_COMPANY_ID = '00000000-0000-4000-8000-000000000001';
 export const DEMO_IG_BUSINESS_ID = '17840000000000001';
 export const DEMO_PAGE_ID = '100000000000001';
 
-const WORK_SCHEDULE = {
+export const WORK_SCHEDULE = {
   timezone: 'Asia/Tashkent',
   days: Object.fromEntries([1, 2, 3, 4, 5, 6].map((d) => [d, [{ start: '09:00', end: '19:00' }]])),
 };

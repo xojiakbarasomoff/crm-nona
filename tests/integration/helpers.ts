@@ -82,10 +82,11 @@ export interface Session {
   cookie: string;
 }
 
-export async function login(app: INestApplication, email: string): Promise<Session> {
+/** `at` — serverning soati (TestClock) bo'lsa, administrator TOTP kodi shu lahza uchun hisoblanadi. */
+export async function login(app: INestApplication, email: string, at: number = Date.now()): Promise<Session> {
   const res = await request(app.getHttpServer())
     .post('/api/v1/auth/login')
-    .send({ email, password: DEMO_PASSWORD, ...(email.startsWith('admin') ? { totp: totpCode(DEMO_ADMIN_TOTP_SECRET) } : {}) });
+    .send({ email, password: DEMO_PASSWORD, ...(email.startsWith('admin') ? { totp: totpCode(DEMO_ADMIN_TOTP_SECRET, at) } : {}) });
   if (res.status !== 200) throw new Error(`login failed ${res.status} ${JSON.stringify(res.body)}`);
   const cookie = (res.headers['set-cookie'] as unknown as string[]).map((c) => c.split(';')[0]).join('; ');
   const csrf = res.body.csrfToken as string;
@@ -119,7 +120,8 @@ export async function sendLeadAds(app: INestApplication, core: Core, p: { fullNa
   const leadgenId = p.leadgenId ?? `t_${randomUUID()}`;
   await (core.deps.adapters.metaLeads as DemoMetaLeadsClient).registerLead({
     leadgenId,
-    createdTime: new Date(),
+    // Sinov soati (TestClock) bo'lsa, navbatchilik jadvali shu vaqt bo'yicha baholanadi (assignment `at` = manba vaqti).
+    createdTime: core.deps.clock.now(),
     formId: 'form_t',
     adId: p.adId ?? null,
     adsetId: null,
@@ -160,6 +162,11 @@ export async function amoCrmSignal(app: INestApplication, core: Core, amoLeadId:
 /** Creates a lead through the Lead Ads path and returns it after amoCRM linking. */
 export async function newLead(app: INestApplication, core: Core, name = `Mijoz ${randomUUID().slice(0, 6)}`, phone?: string) {
   const { leadgenId, res: whRes } = await sendLeadAds(app, core, { fullName: name, phone: phone ?? `+99890${Math.floor(1_000_000 + Math.random() * 8_999_999)}`, platform: 'ig' });
+  // Navbatchi menejer `webhook_inbox.received_at` lahzasi bo'yicha tanlanadi (u DB `now()` bilan yoziladi, ya'ni soat
+  // injeksiyasiga bo'ysunmaydi). Sinov soati qat'iy bo'lsa, shu lahza ham sinov soatiga tenglashtiriladi.
+  if (core.deps.clock instanceof TestClock) {
+    await core.deps.prisma.webhookInbox.updateMany({ where: { externalEventId: `leadgen:${leadgenId}` }, data: { receivedAt: core.deps.clock.now() } });
+  }
   await drain(core);
   const inquiry = await core.deps.prisma.inquiry.findFirst({ where: { providerEventKey: `meta_leads:${leadgenId}` } });
   if (!inquiry) {
@@ -170,3 +177,12 @@ export async function newLead(app: INestApplication, core: Core, name = `Mijoz $
 }
 
 export const companyId = DEMO_COMPANY_ID;
+
+/**
+ * Fixture: barcha navbatchi menejerlar har doim ish vaqtida (jadvalsiz) va mavjud. Bu testlar haqiqiy soat/hafta kuniga
+ * bog'lanib qolmasligi uchun: lid egasi menejer bo'lishi kerak bo'lgan fayllar buni beforeAll'da chaqiradi.
+ * (Ish kuni/yakshanba holatlari aniq soat bilan compliance.test.ts da alohida tekshiriladi.)
+ */
+export async function alwaysOnDuty(core: Core) {
+  await core.deps.prisma.managerPoolMember.updateMany({ data: { schedule: null as never, available: true } });
+}

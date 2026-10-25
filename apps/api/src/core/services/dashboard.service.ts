@@ -18,12 +18,13 @@ import {
   type Bucket,
   type FinanceOrderInput,
   type LeadFact,
+  type MoneyAgg,
   type WeeklySchedule,
 } from '@crm/domain';
 import { audit } from '../audit';
 import type { CoreDeps, UserActor } from '../context';
-import { requireCap } from '../scope';
-import { orderFinance } from './orders.service';
+import { canCost, requireCap } from '../scope';
+import { loadRefunds, orderFinance } from './orders.service';
 
 export interface DashboardFilters {
   from: string;
@@ -88,7 +89,7 @@ export class DashboardService {
 
   /** Short Redis cache per scope+filters; the payload carries generatedAt so staleness is visible. */
   async compute(actor: UserActor, f: DashboardFilters) {
-    const scopeKey = can(actor.role, 'dashboard.company') ? 'company' : `user:${actor.id}`;
+    const scopeKey = `${can(actor.role, 'dashboard.company') ? 'company' : `user:${actor.id}`}:cost${canCost(actor) ? 1 : 0}`;
     const key = `dash:${actor.companyId}:${scopeKey}:${sha256Hex(stableStringify(f))}`;
     const cached = await this.d.redis.get(key).catch(() => null);
     if (cached) return JSON.parse(cached) as Awaited<ReturnType<DashboardService['computeFresh']>>;
@@ -151,7 +152,7 @@ export class DashboardService {
     const companyWide = can(actor.role, 'dashboard.company') && !f.ownerId && !f.serviceType && !f.stage && !departure;
 
     const wonIds = leads.filter((l) => inRange(l.firstWonAt)).map((l) => l.id);
-    const [inquiryRows, inProgress, awaitingRows, cancelledOrders, wonOrders, paymentRows, convs, ownerEvents] = await Promise.all([
+    const [inquiryRows, inProgress, awaitingRows, cancelledOrders, paymentRows, convs, ownerEvents] = await Promise.all([
       companyWide
         ? q<{ n: bigint }>(Prisma.sql`SELECT count(*)::bigint AS n FROM inquiries i WHERE i.company_id = ${actor.companyId}::uuid AND i.received_at >= ${start} AND i.received_at < ${end} ${f.source ? Prisma.sql`AND i.channel = ${f.source}::"Channel"` : Prisma.empty}`)
         : q<{ n: bigint }>(Prisma.sql`SELECT count(*)::bigint AS n FROM inquiries i JOIN leads l ON l.id = i.lead_id WHERE ${where} AND i.received_at >= ${start} AND i.received_at < ${end} ${f.source ? Prisma.sql`AND i.channel = ${f.source}::"Channel"` : Prisma.empty}`),
@@ -160,9 +161,6 @@ export class DashboardService {
         SELECT count(*)::bigint AS n FROM conversations c JOIN leads l ON l.id = c.lead_id
         WHERE ${where} AND l.stage NOT IN ('WON', 'LOST') AND c.last_inbound_at IS NOT NULL AND (c.last_human_reply_at IS NULL OR c.last_human_reply_at < c.last_inbound_at)`),
       q<{ n: bigint }>(Prisma.sql`SELECT count(*)::bigint AS n FROM orders o JOIN leads l ON l.id = o.lead_id WHERE ${where} AND o.fulfillment_state = 'cancelled' AND o.cancelled_at >= ${start} AND o.cancelled_at < ${end}`),
-      wonIds.length
-        ? this.d.prisma.order.findMany({ where: { companyId: actor.companyId, leadId: { in: wonIds } }, include: { services: { where: { removedAt: null } } } })
-        : Promise.resolve([]),
       q<{ kind: string; currency: string; total: bigint }>(Prisma.sql`
         SELECT p.kind, p.currency, sum(p.amount_minor)::bigint AS total FROM payments p JOIN orders o ON o.id = p.order_id JOIN leads l ON l.id = o.lead_id
         WHERE ${where} AND p.status = 'confirmed' AND p.received_at >= ${start} AND p.received_at < ${end} GROUP BY p.kind, p.currency`),
@@ -192,63 +190,96 @@ export class DashboardService {
     };
 
     // ---- Moliya (tannarx / sotuv / foyda). Qoidalar: docs/tz-addendum-finance.md ----
-    // confirmed: davrda birinchi marta WON bo'lgan lidlarning bekor qilinmagan, to'liq qaytarilmagan buyurtmalari.
+    // confirmed: davrda birinchi marta WON bo'lgan lidlarning bekor qilinmagan buyurtmalari (qaytarimlari bo'lsa ham).
     // open: hali yopilmagan lidlarning bekor qilinmagan buyurtmalari (kutilayotgan foyda, davrga bog'lanmagan snapshot).
     // cancelled: davrda bekor qilingan buyurtmalar (tarixiy summa saqlanadi, jami sotuvga kirmaydi).
-    // refunded: to'lov holati «refunded» (to'liq qaytarilgan): jami sotuvga kirmaydi.
+    // Turoperator — BUYURTMANING tarixiy bog'lanishi (lid keyin o'zgarsa ham statistika o'zgarmaydi), shuning uchun
+    // turoperator filtri bu yerda lidga emas, buyurtmaga qo'llanadi.
+    const cost = canCost(actor);
+    const noOp = { ...f, tourOperatorId: undefined };
+    const scopeNoOp = this.leadScope(actor, noOp);
+    if (departure) scopeNoOp.orders = { some: { segments: { some: { active: true, departureAtUtc: { gte: departure.start, lt: departure.end } } } } };
+    const whereNoOp = this.scopeSql(actor, noOp, departure);
+    const finLeads = await q<{ id: string; firstWonAt: Date; ownerId: string | null }>(Prisma.sql`
+      SELECT l.id, l.first_won_at AS "firstWonAt", l.owner_id AS "ownerId" FROM leads l
+      WHERE ${whereNoOp} AND l.first_won_at >= ${start} AND l.first_won_at < ${end}`);
+    const finLeadById = new Map(finLeads.map((l) => [l.id, l]));
+    const orderOp = f.tourOperatorId ? { tourOperatorId: f.tourOperatorId } : {};
     const svcInclude = { services: { where: { removedAt: null } } } as const;
-    const [cancelledRows, openRows] = await Promise.all([
-      this.d.prisma.order.findMany({ where: { companyId: actor.companyId, fulfillmentState: 'cancelled', cancelledAt: { gte: start, lt: end }, lead: scope }, include: svcInclude }),
-      this.d.prisma.order.findMany({ where: { companyId: actor.companyId, fulfillmentState: { not: 'cancelled' }, lead: { AND: [scope, { stage: { notIn: ['WON', 'LOST'] } }] } }, include: svcInclude }),
+    const [wonOrders, cancelledRows, openRows, finOwnerEvents] = await Promise.all([
+      finLeads.length ? this.d.prisma.order.findMany({ where: { companyId: actor.companyId, leadId: { in: finLeads.map((l) => l.id) }, fulfillmentState: { not: 'cancelled' }, ...orderOp }, include: svcInclude }) : Promise.resolve([]),
+      this.d.prisma.order.findMany({ where: { companyId: actor.companyId, fulfillmentState: 'cancelled', cancelledAt: { gte: start, lt: end }, lead: scopeNoOp, ...orderOp }, include: svcInclude }),
+      this.d.prisma.order.findMany({ where: { companyId: actor.companyId, fulfillmentState: { not: 'cancelled' }, lead: { AND: [scopeNoOp, { stage: { notIn: ['WON', 'LOST'] } }] }, ...orderOp }, include: svcInclude }),
+      finLeads.length ? this.d.prisma.leadEvent.findMany({ where: { companyId: actor.companyId, leadId: { in: finLeads.map((l) => l.id) }, newOwnerId: { not: null } }, select: { leadId: true, newOwnerId: true, effectiveAt: true }, orderBy: { effectiveAt: 'asc' } }) : Promise.resolve([]),
     ]);
+    const finOwnerByLead = new Map<string, Array<{ newOwnerId: string | null; effectiveAt: Date }>>();
+    for (const e of finOwnerEvents) finOwnerByLead.set(e.leadId, [...(finOwnerByLead.get(e.leadId) ?? []), e]);
+    const finOwnerAt = (leadId: string, at: Date) => {
+      let owner: string | null = null;
+      for (const e of finOwnerByLead.get(leadId) ?? []) if (e.effectiveAt <= at) owner = e.newOwnerId;
+      return owner;
+    };
+    const refundMap = await loadRefunds(this.d.prisma, actor.companyId, wonOrders.map((o) => o.id));
     const financeInputs: FinanceOrderInput[] = [];
     for (const o of wonOrders) {
-      if (o.fulfillmentState === 'cancelled') continue; // bekor qilingan: faqat «cancelled» bucket'da (bekor qilingan davrida)
-      const lead = leadById.get(o.leadId);
+      const fl = finLeadById.get(o.leadId);
       financeInputs.push({
         orderId: o.id,
-        bucket: o.paymentState === 'refunded' ? 'refunded' : 'confirmed',
-        finance: orderFinance(o, o.services),
-        managerId: (lead?.firstWonAt ? ownerAt(o.leadId, lead.firstWonAt) : null) ?? lead?.ownerId ?? o.ownerId,
-        operatorId: lead?.tourOperatorId ?? null,
+        bucket: 'confirmed',
+        finance: orderFinance(o, o.services, refundMap.get(o.id)?.refunds ?? {}),
+        managerId: (fl ? finOwnerAt(o.leadId, fl.firstWonAt) : null) ?? fl?.ownerId ?? o.ownerId,
+        operatorId: o.tourOperatorId,
       });
     }
-    for (const o of cancelledRows) financeInputs.push({ orderId: o.id, bucket: 'cancelled', finance: orderFinance(o, o.services), managerId: o.ownerId, operatorId: null });
-    for (const o of openRows) financeInputs.push({ orderId: o.id, bucket: 'open', finance: orderFinance(o, o.services), managerId: o.ownerId, operatorId: null });
+    for (const o of cancelledRows) financeInputs.push({ orderId: o.id, bucket: 'cancelled', finance: orderFinance(o, o.services), managerId: o.ownerId, operatorId: o.tourOperatorId });
+    for (const o of openRows) financeInputs.push({ orderId: o.id, bucket: 'open', finance: orderFinance(o, o.services), managerId: o.ownerId, operatorId: o.tourOperatorId });
     const finance = summarizeFinance(financeInputs, f.currency ? { currency: f.currency } : {});
     const salesByCurrency = Object.fromEntries(Object.entries(finance.confirmed).map(([c, a]) => [c, a.sales]));
     const operatorNames = new Map(
       (await this.d.prisma.supplier.findMany({ where: { companyId: actor.companyId, id: { in: finance.byOperator.map((r) => r.operatorId).filter((x): x is string => !!x) } }, select: { id: true, name: true } })).map((x) => [x.id, x.name]),
     );
-    const aggOut = (a: { sales: bigint; basisSales: bigint; basisNet: bigint; profit: bigint; basisOrders: number; undeterminedOrders: number; undeterminedSales: bigint }, c: string) => ({
-      sales: formatMoney({ amountMinor: a.sales, currency: c }),
-      /** Foyda hisoblangan (tannarxi aniq) buyurtmalar bo'yicha. */
-      profitBasis: { sales: formatMoney({ amountMinor: a.basisSales, currency: c }), net: formatMoney({ amountMinor: a.basisNet, currency: c }), profit: formatMoney({ amountMinor: a.profit, currency: c }), orders: a.basisOrders, marginPercent: marginPercent(a.basisSales, a.profit) },
-      undetermined: { orders: a.undeterminedOrders, sales: formatMoney({ amountMinor: a.undeterminedSales, currency: c }) },
-    });
-    const aggMap = (m2: Record<string, Parameters<typeof aggOut>[0]>) => Object.fromEntries(Object.entries(m2).map(([c, a]) => [c, aggOut(a, c)]));
+    const aggOut = (a: MoneyAgg, c: string) => {
+      const mon = (x: bigint) => formatMoney({ amountMinor: x, currency: c });
+      const base = { sales: mon(a.sales), customerRefunded: mon(a.customerRefunded), ordersWithRefund: a.ordersWithRefund };
+      if (!cost) return base; // tannarx, foyda va yetkazib beruvchi qaytarimlari huquqsiz foydalanuvchiga chiqmaydi
+      return {
+        ...base,
+        supplierRefunded: mon(a.supplierRefunded),
+        /** Dastlabki foyda (qaytarimsiz), tannarxi aniq buyurtmalar bo'yicha. */
+        profitBasis: { sales: mon(a.basisSales), net: mon(a.basisNet), profit: mon(a.profit), orders: a.basisOrders, marginPercent: marginPercent(a.basisSales, a.profit) },
+        /** Qaytarimdan keyingi: (sotuv − mijozga qaytarilgan) va (tannarx − yetkazib beruvchidan qaytgan). */
+        afterRefund: { sales: mon(a.basisSalesAfterRefund), net: mon(a.basisNetAfterRefund), profit: mon(a.profitAfterRefund), marginPercent: marginPercent(a.basisSalesAfterRefund, a.profitAfterRefund) },
+        undetermined: { orders: a.undeterminedOrders, sales: mon(a.undeterminedSales) },
+      };
+    };
+    const aggMap = (m2: Record<string, MoneyAgg>) => Object.fromEntries(Object.entries(m2).map(([c, a]) => [c, aggOut(a, c)]));
     const userNames = new Map((await this.d.prisma.user.findMany({ where: { companyId: actor.companyId }, select: { id: true, fullName: true } })).map((u) => [u.id, u.fullName]));
+    const rulesAll = {
+      confirmed: "Tasdiqlangan sotuv: davrda birinchi marta «Sotuv yakunlandi» bo'lgan lidlarning bekor qilinmagan buyurtmalari (qaytarimlari bo'lsa ham).",
+      cancelled: "Bekor qilingan buyurtmalar jami sotuv/foydaga kirmaydi; tarixiy summalari saqlanadi va alohida ko'rsatiladi.",
+      operator: "Turoperator — buyurtmaning tarixiy bog'lanishi: lid operatori keyin o'zgarsa ham eski sotuvlar statistikasi o'zgarmaydi; buyurtma operatorini o'zgartirish alohida, sabab va audit bilan.",
+      currencies: "Valyutalar kurssiz qo'shilmaydi: har bir valyuta alohida hisoblanadi.",
+    };
+    const rulesCost = {
+      formula: "Dastlabki foyda = sotuv narxi (selling) − tannarx (net). Qaytarimdan keyingi foyda = (sotuv − mijozga qaytarilgan summa) − (tannarx − yetkazib beruvchidan qaytgan summa). Qo'shimcha xarajatlar (komissiya, soliq, bank to'lovlari, valyuta farqi) hisobga olinmagan: bu buxgalteriya bo'yicha yakuniy «sof foyda» emas.",
+      refunds: "Mijozga qaytarilgan va yetkazib beruvchidan qaytgan summalar alohida qayd etiladi; valyutasi buyurtma narxlari valyutasiga mos bo'lishi shart. Qaytarim dastlabki foydani o'zgartirmaydi — u «qaytarimdan keyingi foyda»da aks etadi.",
+      unknownNet: "Tannarxi kiritilmagan buyurtma 0 deb hisoblanmaydi: foyda «aniqlanmagan», soni alohida ko'rsatiladi va tannarx/foyda jamiga kirmaydi.",
+      expected: "Kutilayotgan foyda: hali yopilmagan lidlarning ochiq buyurtmalari (tannarxi ma'lum bo'lganlari). Tasdiqlangan foyda emas.",
+    };
     const financeOut = {
-      rules: {
-        formula: "Foyda = sotuv narxi (selling) − tannarx (net). Qo'shimcha xarajatlar (komissiya, soliq, bank to'lovlari, valyuta farqi) hisobga olinmagan: bu buxgalteriya bo'yicha yakuniy «sof foyda» emas.",
-        confirmed: "Tasdiqlangan sotuv: davrda birinchi marta «Sotuv yakunlandi» bo'lgan lidlarning bekor qilinmagan, to'liq qaytarilmagan buyurtmalari.",
-        cancelled: "Bekor qilingan buyurtmalar jami sotuv/foydaga kirmaydi; tarixiy summalari saqlanadi va alohida ko'rsatiladi.",
-        refunds: "To'liq qaytarilgan buyurtma («refunded») jami sotuvga kirmaydi. Qisman qaytarim foydani o'zgartirmaydi: qaytarimlar alohida pul harakati sifatida ko'rsatiladi.",
-        unknownNet: "Tannarxi kiritilmagan buyurtma 0 deb hisoblanmaydi: foyda «aniqlanmagan», soni alohida ko'rsatiladi va tannarx/foyda jamiga kirmaydi.",
-        currencies: "Valyutalar kurssiz qo'shilmaydi: har bir valyuta alohida hisoblanadi.",
-        expected: "Kutilayotgan foyda: hali yopilmagan lidlarning ochiq buyurtmalari (tannarxi ma'lum bo'lganlari). Tasdiqlangan foyda emas.",
-      },
+      costHidden: !cost,
+      rules: cost ? { ...rulesAll, ...rulesCost } : rulesAll,
       confirmed: aggMap(finance.confirmed),
-      undeterminedOrders: finance.undeterminedOrders,
+      undeterminedOrders: cost ? finance.undeterminedOrders : null,
       unpricedOrders: finance.unpricedOrders,
-      expected: Object.fromEntries(Object.entries(finance.expected).map(([c, e]) => [c, { profit: formatMoney({ amountMinor: e.profit, currency: c }), orders: e.orders, undeterminedOrders: e.undeterminedOrders }])),
+      refundMismatchOrders: cost ? finance.refundMismatchOrders : null,
+      expected: cost ? Object.fromEntries(Object.entries(finance.expected).map(([c, e]) => [c, { profit: formatMoney({ amountMinor: e.profit, currency: c }), orders: e.orders, undeterminedOrders: e.undeterminedOrders }])) : {},
       cancelled: Object.fromEntries(Object.entries(finance.cancelled).map(([c, e]) => [c, { sales: formatMoney({ amountMinor: e.sales, currency: c }), orders: e.orders }])),
-      refundedOrders: Object.fromEntries(Object.entries(finance.refunded).map(([c, e]) => [c, { sales: formatMoney({ amountMinor: e.sales, currency: c }), orders: e.orders }])),
       byOperator: finance.byOperator
-        .map((r) => ({ operatorId: r.operatorId, name: r.operatorId ? (operatorNames.get(r.operatorId) ?? '—') : 'Ko‘rsatilmagan', orders: r.orders, undeterminedOrders: r.undeterminedOrders, currencies: aggMap(r.currencies) }))
+        .map((r) => ({ operatorId: r.operatorId, name: r.operatorId ? (operatorNames.get(r.operatorId) ?? '—') : 'Ko‘rsatilmagan', orders: r.orders, undeterminedOrders: cost ? r.undeterminedOrders : null, currencies: aggMap(r.currencies) }))
         .sort((a, b) => b.orders - a.orders),
       byManager: finance.byManager
-        .map((r) => ({ userId: r.managerId, name: r.managerId ? (userNames.get(r.managerId) ?? '—') : 'Taqsimlanmagan', orders: r.orders, undeterminedOrders: r.undeterminedOrders, currencies: aggMap(r.currencies) }))
+        .map((r) => ({ userId: r.managerId, name: r.managerId ? (userNames.get(r.managerId) ?? '—') : 'Taqsimlanmagan', orders: r.orders, undeterminedOrders: cost ? r.undeterminedOrders : null, currencies: aggMap(r.currencies) }))
         .sort((a, b) => b.orders - a.orders),
     };
     const managers: Record<string, { newLeads: number; won: number; inProgress: number; sales: Record<string, bigint> }> = {};
@@ -320,19 +351,22 @@ export class DashboardService {
   }
 
   /**
-   * Buyurtmalar CSV (moliyaviy ustunlar): faqat `export` huquqi (rahbar/administrator); menejer uchun 403.
-   * Har bir (buyurtma, valyuta) uchun bitta qator; foyda aniqlanmagan bo'lsa bo'sh (0 emas) va holat «undetermined».
+   * Buyurtmalar CSV: faqat `export` huquqi (rahbar/administrator). Tannarx, foyda va qaytarim ustunlari qo'shimcha
+   * `finance.cost.view` huquqini talab qiladi (bo'lmasa shu ustunlar chiqarilmaydi). Har bir (buyurtma, valyuta) uchun
+   * bitta qator; foyda aniqlanmagan bo'lsa bo'sh (0 emas) va `profit_state=undetermined`. Auditga yoziladi.
    */
   async exportOrdersCsv(actor: UserActor, f: DashboardFilters): Promise<string> {
     requireCap(actor, 'export');
+    const cost = canCost(actor);
     const company = await this.d.prisma.company.findUniqueOrThrow({ where: { id: actor.companyId } });
     const { start, end } = companyDateRangeToUtc(f.from, f.to, company.timezone);
     const rows = await this.d.prisma.order.findMany({
-      where: { companyId: actor.companyId, createdAt: { gte: start, lt: end }, lead: this.leadScope(actor, f) },
-      include: { services: { where: { removedAt: null } }, lead: { select: { name: true, stage: true, tourOperatorId: true } } },
+      where: { companyId: actor.companyId, createdAt: { gte: start, lt: end }, lead: this.leadScope(actor, { ...f, tourOperatorId: undefined }), ...(f.tourOperatorId ? { tourOperatorId: f.tourOperatorId } : {}) },
+      include: { services: { where: { removedAt: null } }, lead: { select: { name: true, stage: true } } },
       orderBy: { createdAt: 'asc' },
       take: 50_000,
     });
+    const refundMap = cost ? await loadRefunds(this.d.prisma, actor.companyId, rows.map((o) => o.id)) : new Map();
     const users = new Map((await this.d.prisma.user.findMany({ where: { companyId: actor.companyId }, select: { id: true, fullName: true } })).map((u) => [u.id, u.fullName]));
     const ops = new Map((await this.d.prisma.supplier.findMany({ where: { companyId: actor.companyId }, select: { id: true, name: true } })).map((x) => [x.id, x.name]));
     const esc = (v: unknown) => {
@@ -340,31 +374,30 @@ export class DashboardService {
       const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
       return /[",\n;]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
     };
-    const header = ['order_no', 'lead', 'lead_stage', 'owner', 'tour_operator', 'fulfillment_state', 'payment_state', 'currency', 'selling_price', 'net_price', 'profit', 'profit_state', 'created_at'];
+    const header = ['order_no', 'lead', 'lead_stage', 'owner', 'tour_operator', 'fulfillment_state', 'payment_state', 'currency', 'selling_price', ...(cost ? ['net_price', 'profit_initial', 'profit_state', 'customer_refunded', 'supplier_refunded', 'profit_after_refund'] : []), 'created_at'];
     const lines: string[] = [];
     for (const o of rows) {
-      const fin = orderFinance(o, o.services);
+      const fin = orderFinance(o, o.services, refundMap.get(o.id)?.refunds ?? {});
       const ccys = Object.values(fin.byCurrency).filter((c) => !f.currency || c.currency === f.currency);
       for (const c of ccys.length ? ccys : f.currency ? [] : [null]) {
+        const mon = (x: bigint | null) => (x === null || !c ? '' : formatMoney({ amountMinor: x, currency: c.currency }));
         const cells = [
           o.orderNo,
           o.lead.name,
           o.lead.stage,
           o.ownerId ? users.get(o.ownerId) : '',
-          o.lead.tourOperatorId ? ops.get(o.lead.tourOperatorId) : '',
+          o.tourOperatorId ? ops.get(o.tourOperatorId) : '',
           o.fulfillmentState,
           o.paymentState,
           c?.currency ?? '',
-          c ? formatMoney({ amountMinor: c.sellingMinor, currency: c.currency }) : '',
-          c && c.lines - c.missingNetLines > 0 ? formatMoney({ amountMinor: c.netMinor, currency: c.currency }) : '',
-          c && c.profitMinor !== null ? formatMoney({ amountMinor: c.profitMinor, currency: c.currency }) : '',
-          c ? c.profitState : 'undetermined',
+          c ? mon(c.sellingMinor) : '',
+          ...(cost ? [c && c.lines - c.missingNetLines > 0 ? mon(c.netMinor) : '', c ? mon(c.profitMinor) : '', c ? c.profitState : 'undetermined', c ? mon(c.customerRefundedMinor) : '', c ? mon(c.supplierRefundedMinor) : '', c ? mon(c.profitAfterRefundMinor) : ''] : []),
           o.createdAt.toISOString(),
         ];
         lines.push(cells.map(esc).join(','));
       }
     }
-    await audit(this.d.prisma, actor, { entityType: 'export', entityId: actor.companyId, action: 'orders_csv', newValue: { filters: f, rows: lines.length } });
+    await audit(this.d.prisma, actor, { entityType: 'export', entityId: actor.companyId, action: 'orders_csv', newValue: { filters: f, rows: lines.length, costColumns: cost } });
     return [header.join(','), ...lines].join('\n');
   }
 

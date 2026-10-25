@@ -51,7 +51,7 @@ Paket narxi bo‘lmasa ham bo‘ladi: u holda jami — narxli xizmatlar yig‘in
 Qoidalar (qisqa; to‘liq matn — «Hisoblash qoidalari»):
 - Tasdiqlangan sotuv — davrda «Sotuv yakunlandi» bo‘lgan lidlarning bekor qilinmagan buyurtmalari.
 - **Bekor qilingan** buyurtma jamiga kirmaydi, lekin summalari tarixda saqlanadi va alohida ko‘rsatiladi.
-- **To‘liq qaytarilgan** buyurtma jamiga kirmaydi; **qisman qaytarim** foydani o‘zgartirmaydi (qaytarimlar alohida ko‘rsatiladi).
+- Qaytarim **dastlabki foydani** o‘zgartirmaydi; u **«Qaytarimdan keyingi foyda»**da alohida ko‘rinadi (mijozga qaytarim va yetkazib beruvchidan qaytgan summa alohida qayd etiladi).
 - Tannarxi kiritilmagan buyurtma tannarx va foyda jamiga kirmaydi (0 emas), faqat sotuv jamiga kiradi.
 
 ## 6. Turoperatorlar ma’lumotnomasi (rahbar, administrator)
@@ -61,3 +61,12 @@ Qoidalar (qisqa; to‘liq matn — «Hisoblash qoidalari»):
 ## 7. Demo
 
 Mahalliy demoda sun’iy turoperatorlar («… (demo)») va buyurtmalar bor. Kirish: `rahbar@demo.local` / `Demo-parol-2026!` (lokal), yoki Railway demosida `user1` / `123123123`. Demo ma’lumotlar production’da ishlamaydi.
+
+## 8. Qaytarimlar va operator o‘zgartirish (yangi)
+
+- **Mijozga qaytarim:** buyurtma kartasi → «Mijoz to‘lovlari» → tur «Qaytarim». Valyuta buyurtma valyutasi bilan bir xil, summa to‘langandan oshmasin.
+- **Yetkazib beruvchidan qaytgan summa:** «Yetkazib beruvchidan qaytgan summa» bo‘limi (faqat tannarxni ko‘ra oladiganlarga). Mijoz qaytarimi bilan aralashtirmang.
+- **Foyda:** dastlabki foyda = sotuv − tannarx. Qaytarimdan keyingi foyda = (sotuv − mijozga qaytarilgan) − (tannarx − yetkazib beruvchidan qaytgan). Bu buxgalteriya «sof foydasi» emas.
+- **Turoperator:** buyurtma yaratilganda lidnikidan nusxalanadi va buyurtma bilan qoladi. Buyurtma bor lidda operatorni lid kartasida o‘zgartirib bo‘lmaydi; buyurtma kartasida o‘zgartiring (tasdiqlangan buyurtmada sabab shart, auditga yoziladi). Eski sotuvlar statistikasi lid o‘zgarishidan ta’sirlanmaydi.
+- **Tannarx va foydani ko‘rish ruxsati:** rahbar va administratorda bor. Administrator menejerga «Foydalanuvchilar» sahifasida «Tannarx va foyda → Ko‘ra oladi» orqali yoqadi. Ruxsatsiz foydalanuvchi buyurtma, dashboard va eksportda faqat sotuv va mijoz qaytarimini ko‘radi.
+- **Demo:** sun’iy ma’lumotlar faqat alohida demo muhitda (`npm run demo:finance:setup`, `:start`, `:data`; web http://localhost:3101).
