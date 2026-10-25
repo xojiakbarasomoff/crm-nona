@@ -22,8 +22,8 @@ Test to‘plamlari (2026-10-24, Node 22.23.4, Prisma 7.10.1): unit + contract **
 | AC02 | Bir hodisa 10 marta | ✅ | ✅ `intake.test.ts` › AC02; backfill+webhook dedupe | PG/Redis ✅ (dedupe DB unique kalit bilan) · Meta ⛔ |
 | AC03 | Parallel kanal, bir telefon | ✅ | ✅ `intake.test.ts` › AC03 (×2) | PG ✅ (advisory lock, partial unique) |
 | AC04 | Umumiy oilaviy telefon | ✅ | ✅ unit + `intake.test.ts` › AC04 | PG ✅ |
-| AC05 | Direct yangi va davomiy suhbat | ✅ | ✅ `intake.test.ts` › AC05 | PG/Redis ✅ · Meta/Chats ⛔ (G05, G08) |
-| AC06 | amoCRM ichidan inson javobi | ✅ | ✅ `intake.test.ts` › AC06 (demo Send API) | **⛔ Instagram’da qabul qilinishi sinalmagan (G06)** |
+| AC05 | Direct yangi va davomiy suhbat | ✅ | ✅ `intake.test.ts` › AC05 | PG/Redis ✅ · Meta ✅ jonli kiruvchi (test akkaunt, 2026-10-25; `instagram-direct-setup.md` 6.3) |
+| AC06 | CRM ichidan inson javobi (avval amoCRM orqali edi) | ✅ | ✅ `intake.test.ts` › AC06, `simple-workflow.test.ts` (demo Send API) | ✅ jonli: test akkauntga javob `accepted`, Instagram’da qabul qilingan, takror yo‘q (2026-10-25; 6.3). Faqat Development rejimidagi rolli akkaunt bilan |
 | AC07 | Javob oynasi yopiq | ✅ | ✅ unit + `intake.test.ts` › AC07 | PG ✅ · oyna uzunligi Meta’da ⛔ (G07) |
 | AC08 | Click-to-Direct | ✅ | ✅ `intake.test.ts` › AC08 (sintetik referral) | PG ✅ · Meta ⛔ (G09) |
 | AC09 | Kampaniya metadata olinmaydi | ✅ | ✅ `intake.test.ts` › AC09 | PG ✅ · Meta ⛔ |

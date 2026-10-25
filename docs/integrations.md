@@ -28,7 +28,7 @@ Inbox commit muvaffaqiyatsiz bo‘lsa 5xx qaytariladi (AC26).
 
 | Imkoniyat | Login yo‘li | Kerakli ruxsat (TZ’dagi misol) | Tasdiqlangan |
 | --- | --- | --- | --- |
-| Direct o‘qish/yuborish | Instagram Login | `instagram_business_basic`, `instagram_business_manage_messages` [S06] | ⛔ |
+| Direct o‘qish/yuborish | Instagram Login | `instagram_business_basic`, `instagram_business_manage_messages` [S06] | ✅ test akkaunt bilan (Development rejimi, 2026-10-25). Barcha mijozlar uchun App Review / Advanced Access ⛔ |
 | Lead Ads o‘qish | Facebook Login (Page) | Page va lead-forma ruxsatlari [S09] | ⛔ |
 | Human Agent | tanlangan mahsulot | App Review [S07] | ⛔ |
 

@@ -55,8 +55,7 @@ Webhook obuna maydonlari: `messages`, `messaging_seen` (kod faqat shularni ishla
 ## 6. Oqim va javob yuborish — kodda nima bor
 
 - **Kiruvchi:** Meta → `POST /webhooks/meta` (imzo) → inbox → kontakt (`instagram_scoped`) → lid → navbatdagi mas’ul menejer (lid va mas’ul darhol; birinchi aloqa vazifasi yaratiladi). Suhbat `(connection, IGSID)` bo‘yicha yagona; bir xil `mid` qayta kelsa takrorlanmaydi; keyingi xabarlar yangi lid yaratmaydi (sinalgan).
-- **Chiquvchi:** CRM’dan Instagram’ga javob yuborish hozir **ulanmagan** (javob yozish interfeysi yo‘q). `meta.send` ishlovchisi tayyor, lekin uni ishga tushiruvchi (javob oynasi) hali qurilmagan.
-- **Javob yuborish:** CRM ichidagi javob oynasi keyingi bosqich; hozircha javoblar Instagram’ning o‘zida beriladi.
+- **Chiquvchi:** lid kartasidagi «Переписка Instagram» → `POST /api/v1/leads/:id/messages` (majburiy `Idempotency-Key`) → xabar `queued` → outbox `meta.send` (`direct.send:<messageId>`) → Instagram API. «Отправлено» faqat API qabul qilgach (`accepted`); rad etilsa `failed` va sabab saqlanadi; natija noma’lum bo‘lsa avtomatik qayta yuborilmaydi. 24 soatlik javob oynasi `decideOutbound` bilan tekshiriladi.
 - **Railway demo rejimi:** ilova `APP_MODE=demo` va Lead Ads adapteri mock; faqat Instagram Direct ulanishi `live` (haqiqiy).
 
 ## 6.1. Hujjat bilan tasdiqlangan qoidalar (Meta hujjatlari, 2026-10-25) va ular kodda qanday qo‘llanadi
@@ -74,7 +73,21 @@ Webhook obuna maydonlari: `messages`, `messaging_seen` (kod faqat shularni ishla
 
 ## 6.2. «Faol/tayyor» faqat haqiqiy sinovdan keyin
 
-Ulanish credential kiritilgach `degraded / awaiting_live_verification` holatida turadi va Integratsiyalar sahifasida «tayyor emas» deb ko‘rsatiladi. **Tayyor (`ok`)** faqat ikkala haqiqiy sinov o‘tgach: (1) imzosi to‘g‘ri va akkaunt ID mos kelgan haqiqiy kiruvchi Direct xabari qayta ishlandi; (2) Meta haqiqiy javob xabarini qabul qildi («accepted»). Javob sinovi amoCRM chatisiz bajarib bo‘lmaydi (6-band BLOK), shuning uchun u hal bo‘lmaguncha ulanish «kiruvchi tasdiqlangan, tayyor emas» bo‘lib qoladi.
+Ulanish credential kiritilgach `degraded / awaiting_live_verification` holatida turadi va Integratsiyalar sahifasida «tayyor emas» deb ko‘rsatiladi. **Tayyor (`ok`)** faqat ikkala haqiqiy sinov o‘tgach: (1) imzosi to‘g‘ri va akkaunt ID mos kelgan haqiqiy kiruvchi Direct xabari qayta ishlandi; (2) Meta haqiqiy javob xabarini qabul qildi («accepted»). Ikkala belgi (`verifiedInboundAt`, `verifiedOutboundAt`) kod tomonidan avtomatik qo‘yiladi: kiruvchi — haqiqiy webhook qayta ishlanganda, chiquvchi — `live` ulanishda Instagram javobni qabul qilganda. Qo‘lda o‘rnatilmaydi.
+
+## 6.3. Jonli sinov natijasi — @nonatravel.uz ↔ test akkaunt @_khojiakbarr
+
+Faqat jamoaning o‘z test akkaunti bilan; boshqa mijozlarga xabar yuborilmagan. Dalillar prod API’dan (administrator sessiyasi, faqat GET) 2026-10-26 da olingan.
+
+| Tekshiruv | Natija |
+| --- | --- |
+| Kiruvchi | 2026-10-25 12:11:37 UTC (17:11 Toshkent) «Salom dubayga 2 kishilik tur narxi qancha ?» → lid `dae165e9-87ec-4f15-a8ed-e5800ea50283` (manba Instagram Direct), suhbat `efe9685f-…`. `verifiedInboundAt = 2026-10-25T12:11:39Z`. |
+| Chiquvchi | CRM’dan «salom» yuborildi: xabar `26f63b3e-3ccc-4a29-b15e-53ca4166f309`, yaratildi 22:24:09.736 UTC, holati **`accepted`**, xato yo‘q. Lidda `firstHumanActionAt` va suhbatda `lastHumanReplyAt` = 22:24:10.997 UTC (`meta.send` muvaffaqiyatli tarmog‘i yozadi). `verifiedOutboundAt = 2026-10-25T22:24:11.014Z`. Test akkaunt egasi xabar Instagram’da kelganini tasdiqladi. |
+| Meta xabar ID | Instagram yuborilgan xabarning echo hodisasini 22:24:11.429 UTC da yubordi: `ig_echo:aWdfZAG1faXRlbToxOklHTWVzc2FnZAUlEOjE3ODQxNDc0MjAxNDU2NjAzOjM0MDI4MjM2Njg0MTcxMDMwMTI0NDI2MDA5NTY5OTM2NjAwMzk0NzozMzA3NDQwNDMxNTkyNzEzMTM5NTI1MjQ5MzQ5NjYxNDkxMgZDZD` (`done`, 1 urinish). Echo yangi xabar qatori yaratmagan — `processEcho` bu faqat echo `mid` bizning xabarning `providerMessageId` siga teng bo‘lganda bo‘ladi. Demak saqlangan Meta ID = shu `mid`. **Cheklov:** `providerMessageId` maydoni API orqali chiqmaydi va prod bazaga tashqi ulanish yo‘q, shuning uchun bu maydon to‘g‘ridan-to‘g‘ri o‘qilmagan — xulosa echo mantiqidan. |
+| Takroriy yuborish yo‘q | Suhbatda bitta chiquvchi xabar; kompaniya bo‘yicha outbox: `done: 1`, `outbox_retries: 0`, `outbox_dead: 0`, `provider_429: 0`, `needsOperator`/`deadLetters` bo‘sh; shu vaqtdan keyin bitta echo hodisa. |
+| Ulanish holati | `nonatravel.uz` (`17841474201456603`): `health: ok`, `state: ready` (kiruvchi va chiquvchi tasdiqlangan). Token muddati 2026-12-24. |
+
+**Bu nimani tasdiqlamaydi:** ilova hali Meta Development rejimida — ishlash faqat ilovada roli bor akkauntlar bilan sinalgan. Boshqa (oddiy) mijozlarga javob berish uchun App Review / Advanced Access kerak bo‘lishi mumkin (2-bo‘lim). Human Agent tegi (24 soatdan keyin javob) sinalmagan. Lead Ads (reklama formalari) bu sinovga kirmaydi va **tasdiqlanmagan** — `docs/lead-ads-setup.md`.
 
 ## 7. Hali tasdiqlanmagan (birinchi jonli sinovda tekshiriladi)
 
