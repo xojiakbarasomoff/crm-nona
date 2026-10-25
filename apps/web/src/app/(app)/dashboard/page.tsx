@@ -3,8 +3,8 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState, type ReactNode } from 'react';
-import { SOURCE_LABELS, STAGE_LABELS, fmtDateTime, useApi, type Loadable } from '../../../lib/api';
-import { Async, Badge, Field } from '../../../components/ui';
+import { SOURCE_LABELS, STAGE_LABELS, fmtDate, fmtDateTime, isoToDmy, parseDmy, useApi, type Loadable } from '../../../lib/api';
+import { Async, Badge, DateInput, Field, InstagramLink } from '../../../components/ui';
 import { Icon, type IconName } from '../../../components/icons';
 import { CURRENCIES, fmtAmount, money, CURRENCY_LABEL } from '../../../lib/format';
 import { canDo, useMe } from '../../../components/shell';
@@ -102,15 +102,38 @@ const LOST_STAGE = 'LOST';
 export default function DashboardPage() {
   const me = useMe();
   const router = useRouter();
-  const [from, setFrom] = useState(() => `${tashkentToday().slice(0, 8)}01`);
-  const [to, setTo] = useState(tashkentToday);
+  const defaults = () => ({ from: `${tashkentToday().slice(0, 8)}01`, to: tashkentToday(), source: '', bucket: 'day', operator: '', currency: '' });
+  // Qoralama (maydonlardagi qiymat) va qo'llangan filtr alohida: natijalar faqat «Qidirish» bosilganda yangilanadi.
+  const [from, setFrom] = useState(() => isoToDmy(defaults().from));
+  const [to, setTo] = useState(() => isoToDmy(defaults().to));
   const [source, setSource] = useState('');
   const [bucket, setBucket] = useState('day');
   const [operator, setOperator] = useState('');
   const [currency, setCurrency] = useState('');
+  const [applied, setApplied] = useState(defaults);
+  const [filterError, setFilterError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
-  const q = new URLSearchParams({ from, to, bucket, ...(source ? { source } : {}), ...(operator ? { tourOperatorId: operator } : {}), ...(currency ? { currency } : {}) });
-  const state = useApi<Dash>(`/api/v1/dashboard?${q}`);
+  const apply = () => {
+    const f = parseDmy(from);
+    const t = parseDmy(to);
+    if (!f || !t) return setFilterError('Sanani DD.MM.YYYY ko‘rinishida kiriting (masalan, 25.10.2026).');
+    if (f > t) return setFilterError('Boshlanish sanasi tugash sanasidan keyin bo‘lishi mumkin emas.');
+    setFilterError(null);
+    setApplied({ from: f, to: t, source, bucket, operator, currency });
+  };
+  const clear = () => {
+    const d = defaults();
+    setFrom(isoToDmy(d.from));
+    setTo(isoToDmy(d.to));
+    setSource('');
+    setBucket('day');
+    setOperator('');
+    setCurrency('');
+    setFilterError(null);
+    setApplied(d);
+  };
+  const q = new URLSearchParams({ from: applied.from, to: applied.to, bucket: applied.bucket, ...(applied.source ? { source: applied.source } : {}), ...(applied.operator ? { tourOperatorId: applied.operator } : {}), ...(applied.currency ? { currency: applied.currency } : {}) });
+  const state = useApi<Dash>(`/api/v1/dashboard?${q}`, { reset: true });
   const notifications = useApi<{ items: Array<{ id: string; readAt: string | null }> }>('/api/v1/notifications');
   const unread = notifications.data?.items.filter((n) => !n.readAt).length ?? 0;
   const flights = useApi<{ items: FlightRow[] }>('/api/v1/flights?limit=5');
@@ -122,7 +145,7 @@ export default function DashboardPage() {
         <div>
           <h1>Boshqaruv paneli</h1>
           <p className="muted">
-            {from} – {to}
+            {fmtDate(applied.from)} – {fmtDate(applied.to)}
             {state.data ? ` · Oxirgi sinxronlash: ${fmtDateTime(state.data.dataQuality.lastSyncAt)}` : ''}
           </p>
         </div>
@@ -135,7 +158,7 @@ export default function DashboardPage() {
           }}
         >
           <Icon name="search" />
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Lid nomi bo‘yicha qidirish…" aria-label="Lid qidirish" />
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Lid, mijoz, telefon, @username…" aria-label="Lid qidirish" />
         </form>
         <Link href="/notifications" className="iconbtn" aria-label={`Bildirishnomalar${unread ? `: ${unread} ta o‘qilmagan` : ''}`}>
           <Icon name="bell" size={20} />
@@ -145,10 +168,10 @@ export default function DashboardPage() {
 
       <section className="filter-card" aria-label="Filtrlar">
         <Field label="Boshlanish (Asia/Tashkent)">
-          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+          <DateInput value={from} onChange={setFrom} label="Boshlanish sanasi (DD.MM.YYYY)" />
         </Field>
         <Field label="Tugash (kiradi)">
-          <input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+          <DateInput value={to} onChange={setTo} label="Tugash sanasi (DD.MM.YYYY)" />
         </Field>
         <Field label="Birinchi manba">
           <select value={source} onChange={(e) => setSource(e.target.value)}>
@@ -188,6 +211,14 @@ export default function DashboardPage() {
             <option value="month">Oy</option>
           </select>
         </Field>
+        <div className="filter-actions" style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+          <button className="btn" type="button" onClick={apply}>
+            Qidirish
+          </button>
+          <button className="btn secondary" type="button" onClick={clear}>
+            Tozalash
+          </button>
+        </div>
         {canDo(me, 'export') && (
           <a className="btn secondary with-icon" href={`/api/v1/exports/leads.csv?${q}`}>
             <Icon name="download" size={16} />
@@ -201,6 +232,14 @@ export default function DashboardPage() {
           </a>
         )}
       </section>
+      {filterError && (
+        <div className="state error" role="alert">
+          {filterError}
+        </div>
+      )}
+      <p className="muted" role="note">
+        Qaysi sanaga asoslanadi (Asia/Tashkent, boshlanish va tugash kunlari to‘liq kiradi): yangi lidlar, manbalar, konversiya va quyidagi lidlar jadvali — lid <b>yaratilgan</b> sana; sotuvlar va moliya (sotuv, tannarx, foyda) — lid birinchi marta «Yutildi» bo‘lgan sana; to‘lovlar — to‘lov <b>qabul qilingan</b> sana; Buyurtmalar CSV — buyurtma yaratilgan sana. Filtr «Qidirish» bosilganda qo‘llanadi.
+      </p>
 
       <Async state={state}>
         {(d) => {
@@ -337,7 +376,78 @@ export default function DashboardPage() {
           );
         }}
       </Async>
+      <DashLeads query={q.toString()} />
     </>
+  );
+}
+
+interface DashLead {
+  id: string;
+  name: string;
+  stage: string;
+  source: string;
+  ownerId: string | null;
+  createdAt: string;
+  contactName: string | null;
+  instagramUsername: string | null;
+  telegramUsername: string | null;
+}
+
+/** Filtrga mos lidlar (yaratilgan sana bo'yicha): yuklanish, xato va bo'sh natija alohida ko'rinadi; eski davr natijasi saqlanmaydi. */
+function DashLeads({ query }: { query: string }) {
+  const res = useApi<{ total: number; truncated: boolean; items: DashLead[] }>(`/api/v1/dashboard/leads?${query}`, { reset: true });
+  const team = useApi<{ items: Array<{ id: string; fullName: string }> }>('/api/v1/team');
+  const owner = (id: string | null) => team.data?.items.find((u) => u.id === id)?.fullName ?? (id ? '—' : 'Taqsimlanmagan');
+  return (
+    <section className="card panel" aria-label="Filtrga mos lidlar">
+      <header className="card-head">
+        <h2>Filtrga mos lidlar</h2>
+        <span className="muted">{res.data ? `Topilgan lidlar: ${res.data.total}${res.data.truncated ? ` (birinchi ${res.data.items.length} tasi ko‘rsatilgan)` : ''}` : ''}</span>
+      </header>
+      {res.loading && !res.data && <div className="state">Yuklanmoqda…</div>}
+      {res.error && !res.data && (
+        <div className="state error" role="alert">
+          So‘rov xatosi: {res.error.message}{' '}
+          <button className="btn secondary" type="button" onClick={() => void res.reload()}>
+            Qayta urinish
+          </button>
+        </div>
+      )}
+      {res.data && res.data.items.length === 0 && <div className="state empty">Tanlangan davrda ma’lumot topilmadi</div>}
+      {res.data && res.data.items.length > 0 && (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Mijoz / @username</th>
+                <th>Manba</th>
+                <th>Mas’ul</th>
+                <th>Bosqich</th>
+                <th>Yaratilgan</th>
+                <th>Karta</th>
+              </tr>
+            </thead>
+            <tbody>
+              {res.data.items.map((l) => (
+                <tr key={l.id}>
+                  <td>
+                    {l.instagramUsername ? <InstagramLink username={l.instagramUsername} /> : l.contactName ?? l.name}
+                    {l.telegramUsername ? <span className="muted"> · @{l.telegramUsername}</span> : null}
+                  </td>
+                  <td>{SOURCE_LABELS[l.source] ?? l.source}</td>
+                  <td>{owner(l.ownerId)}</td>
+                  <td>{STAGE_LABELS[l.stage] ?? l.stage}</td>
+                  <td>{fmtDateTime(l.createdAt)}</td>
+                  <td>
+                    <Link href={`/leads/${l.id}`}>{l.name}</Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
 

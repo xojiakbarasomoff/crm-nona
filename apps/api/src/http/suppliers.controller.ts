@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Inject, Param, Patch, Post, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
-import { SupplierCreateSchema, SupplierListQuery, SupplierPatchSchema } from '@crm/contracts';
+import { SupplierCreateSchema, SupplierImportSchema, SupplierListQuery, SupplierPatchSchema } from '@crm/contracts';
 import type { Core, UserActor } from '../core';
 import { Actor, CORE, parse, send, UuidPipe as uuid } from './common';
 
@@ -12,6 +12,12 @@ export class SuppliersController {
   @Get()
   async list(@Actor() actor: UserActor, @Query() q: unknown, @Res() res: Response) {
     send(res, 200, await this.core.suppliers.list(actor, parse(SupplierListQuery, q)));
+  }
+
+  /** Turoperatorlar ro'yxatini idempotent import qilish (dublikat yaratmaydi). */
+  @Post('import-tour-operators')
+  async importTourOperators(@Actor() actor: UserActor, @Body() body: unknown, @Res() res: Response) {
+    send(res, 200, await this.core.suppliers.importTourOperators(actor, parse(SupplierImportSchema, body).names));
   }
 
   @Post()

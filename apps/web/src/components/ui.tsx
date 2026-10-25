@@ -66,6 +66,15 @@ export function InstagramLink({ username, withHandle = true }: { username: strin
   );
 }
 
+/** Sana kiritish: «DD.MM.YYYY» (brauzer/AQSH formatiga bog'liq emas). */
+export function DateInput({ value, onChange, label }: { value: string; onChange: (v: string) => void; label: string }) {
+  const mask = (raw: string) => {
+    const d = raw.replace(/\D/g, '').slice(0, 8);
+    return [d.slice(0, 2), d.slice(2, 4), d.slice(4, 8)].filter(Boolean).join('.') + (d.length === 2 || d.length === 4 ? '.' : '');
+  };
+  return <input value={value} onChange={(e) => onChange(mask(e.target.value))} inputMode="numeric" placeholder="DD.MM.YYYY" maxLength={10} aria-label={label} autoComplete="off" />;
+}
+
 export function Field({ label, error, children, hint }: { label: string; error?: string; children: ReactNode; hint?: string }) {
   return (
     <label className="field">

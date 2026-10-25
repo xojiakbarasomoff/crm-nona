@@ -165,11 +165,31 @@ export class LeadsService {
   // ---------------- Web actions ----------------
 
   async list(actor: UserActor, q: { stage?: Stage; ownerId?: string; source?: Channel; search?: string; cursor?: string; limit: number }) {
+    const search = q.search?.trim() ?? '';
+    // Qidiruv: lid nomi, mijoz ismi/familiyasi, telefon, Instagram va Telegram username (@ bilan yoki usiz). Foydalanuvchi ko'ra oladigan
+    // BARCHA lidlar bo'yicha (leadWhere ko'rinish doirasini beradi) — faqat yuklangan sahifa emas.
+    const searchOr: Prisma.LeadWhereInput[] = [];
+    if (search) {
+      const tokens = search.split(/\s+/).filter(Boolean);
+      const ci = { mode: 'insensitive' as const };
+      const tokenMatch = (t: string): Prisma.ContactWhereInput => {
+        const h = t.replace(/^@+/, '');
+        return { OR: [{ fullName: { contains: t, ...ci } }, { firstName: { contains: t, ...ci } }, { lastName: { contains: t, ...ci } }, ...(h ? [{ instagramUsername: { contains: h, ...ci } }, { telegramUsername: { contains: h, ...ci } }] : [])] };
+      };
+      const digits = search.replace(/\D/g, '');
+      const contacts = await this.d.prisma.contact.findMany({
+        where: { companyId: actor.companyId, deletedAt: null, OR: [{ AND: tokens.map(tokenMatch) }, ...(digits.length >= 3 && /^[+\d\s().-]+$/.test(search) ? [{ primaryPhone: { contains: digits } }] : [])] },
+        select: { id: true },
+        take: 2000,
+      });
+      searchOr.push({ name: { contains: search, mode: 'insensitive' } }, { name: { contains: search.replace(/^@+/, ''), mode: 'insensitive' } });
+      if (contacts.length) searchOr.push({ contactId: { in: contacts.map((c) => c.id) } });
+    }
     const where: Prisma.LeadWhereInput = leadWhere(actor, {
       ...(q.stage ? { stage: q.stage } : {}),
       ...(q.source ? { firstSource: q.source } : {}),
       ...(q.ownerId && actor.role !== 'MANAGER' ? { ownerId: q.ownerId } : {}),
-      ...(q.search ? { name: { contains: q.search, mode: 'insensitive' } } : {}),
+      ...(searchOr.length ? { OR: searchOr } : {}),
     });
     // List view: only the columns the table needs (less mapping work per row).
     const rows = await this.d.prisma.lead.findMany({

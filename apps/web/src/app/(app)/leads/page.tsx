@@ -57,8 +57,8 @@ export default function LeadsPage() {
               ))}
             </select>
           </Field>
-          <Field label="Qidiruv">
-            <input value={search} onChange={(e) => (setCursor(undefined), setSearch(e.target.value))} placeholder="Lid nomi" />
+          <Field label="Qidiruv (lid, ism/familiya, telefon, Instagram/Telegram @username)">
+            <input value={search} onChange={(e) => (setCursor(undefined), setSearch(e.target.value))} placeholder="Lid, mijoz, telefon, @username" />
           </Field>
         </div>
       </Section>

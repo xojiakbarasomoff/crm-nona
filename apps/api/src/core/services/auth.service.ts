@@ -116,7 +116,14 @@ export class AuthService {
       capabilities: capabilitiesFor({ role: user.role, extraCapabilities: user.extraCapabilities }),
       mfa: { required: info.mfaRequired, enrolled: info.mfaEnrolled, verified: info.mfaVerified },
       appMode: this.d.config.mode,
+      /** Holat bannerida haqiqiy holatni ko'rsatish uchun (maxfiy ma'lumotsiz): jonli Instagram Direct'da kiruvchi xabar sinovdan o'tganmi. */
+      liveStatus: { instagramDirectInboundVerified: await this.instagramInboundVerified(actor.companyId) },
     };
+  }
+
+  private async instagramInboundVerified(companyId: string): Promise<boolean> {
+    const conns = await this.d.prisma.integrationConnection.findMany({ where: { companyId, provider: 'META_DIRECT', mode: 'live', disconnectedAt: null }, select: { settings: true } });
+    return conns.some((c) => !!(c.settings as Record<string, unknown> | null)?.verifiedInboundAt);
   }
 
   // ---- MFA enrollment (admin) ----

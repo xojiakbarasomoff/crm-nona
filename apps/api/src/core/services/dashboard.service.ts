@@ -23,6 +23,7 @@ import {
 } from '@crm/domain';
 import { audit } from '../audit';
 import type { CoreDeps, UserActor } from '../context';
+import { unprocessable } from '../errors';
 import { canCost, requireCap } from '../scope';
 import { loadRefunds, orderFinance } from './orders.service';
 
@@ -104,6 +105,26 @@ export class DashboardService {
       .finally(() => inflight.delete(key));
     inflight.set(key, job);
     return job;
+  }
+
+  /**
+   * Dashboard filtrlariga mos lidlar jadvali: lid YARATILGAN sana bo'yicha (Asia/Tashkent, boshlanish va tugash kunlari to'liq kiradi),
+   * ko'rinish doirasi `leadScope` (menejer — faqat o'zinikini). Moliya ko'rsatkichlari hisoblash qoidalariga tegilmaydi.
+   */
+  async listLeads(actor: UserActor, f: DashboardFilters, limit = 200) {
+    const company = await this.d.prisma.company.findUniqueOrThrow({ where: { id: actor.companyId } });
+    if (f.from > f.to) throw unprocessable('DATE_RANGE_INVALID', 'Boshlanish sanasi tugash sanasidan keyin bo‘lishi mumkin emas', { from: 'after_to' });
+    const { start, end } = companyDateRangeToUtc(f.from, f.to, company.timezone);
+    const where: Prisma.LeadWhereInput = { ...this.leadScope(actor, f), createdAt: { gte: start, lt: end } };
+    const [total, rows] = await Promise.all([this.d.prisma.lead.count({ where }), this.d.prisma.lead.findMany({ where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: limit, select: { id: true, name: true, stage: true, firstSource: true, ownerId: true, createdAt: true, contactId: true } })]);
+    const contacts = await this.d.prisma.contact.findMany({ where: { companyId: actor.companyId, id: { in: [...new Set(rows.map((r) => r.contactId))] } }, select: { id: true, fullName: true, instagramUsername: true, telegramUsername: true } });
+    const byId = new Map(contacts.map((c) => [c.id, c]));
+    return {
+      total,
+      truncated: total > rows.length,
+      range: { from: f.from, to: f.to, timezone: company.timezone },
+      items: rows.map((r) => ({ id: r.id, name: r.name, stage: r.stage, source: r.firstSource, ownerId: r.ownerId, createdAt: r.createdAt, contactName: byId.get(r.contactId)?.fullName ?? null, instagramUsername: byId.get(r.contactId)?.instagramUsername ?? null, telegramUsername: byId.get(r.contactId)?.telegramUsername ?? null })),
+    };
   }
 
   async computeFresh(actor: UserActor, f: DashboardFilters) {

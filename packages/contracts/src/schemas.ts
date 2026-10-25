@@ -276,7 +276,10 @@ export const DashboardQuery = z
     currency: currency.optional(),
     bucket: z.enum(['day', 'week', 'month']).default('day'),
   })
-  .strict();
+  .strict()
+  .refine((q) => q.from <= q.to, { message: 'Boshlanish sanasi tugash sanasidan keyin bo‘lishi mumkin emas', path: ['from'] });
+
+export const SupplierImportSchema = z.object({ names: z.array(z.string().trim().min(1).max(200)).min(1).max(200) }).strict();
 
 export const DuplicateResolveSchema = z.object({ action: z.enum(['dismiss', 'mark_shared', 'merge', 'flag']), primaryContactId: id.optional(), note: z.string().max(1000).optional() }).strict();
 export const AmoOAuthStartSchema = z.object({ domain: z.string().min(3).max(100) }).strict();
