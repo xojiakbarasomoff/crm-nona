@@ -20,6 +20,8 @@ export interface InstagramLoginConfig {
 
 export interface InstagramProfile {
   userId: string;
+  /** `/me → id` (app-scoped); `user_id` dan farq qilsa — webhook shu ID bilan kelishi mumkin. */
+  appScopedId: string | null;
   username: string | null;
   accountType: string | null;
 }
@@ -86,10 +88,10 @@ function parseToken(raw: Json, now: Date): LongLivedToken {
 
 /** Professional account id + username + type (BUSINESS | MEDIA_CREATOR; PERSONAL accounts cannot use messaging). */
 export async function fetchInstagramProfile(cfg: Pick<InstagramLoginConfig, 'graphVersion'>, token: string, fetchImpl: FetchLike = fetch): Promise<InstagramProfile> {
-  const raw = await requestJson<Json>(`https://graph.instagram.com/${cfg.graphVersion}/me?fields=user_id,username,account_type`, { headers: { Authorization: `Bearer ${token}` } }, fetchImpl);
+  const raw = await requestJson<Json>(`https://graph.instagram.com/${cfg.graphVersion}/me?fields=id,user_id,username,account_type`, { headers: { Authorization: `Bearer ${token}` } }, fetchImpl);
   const userId = typeof raw.user_id === 'string' || typeof raw.user_id === 'number' ? String(raw.user_id) : typeof raw.id === 'string' ? raw.id : null;
   if (!userId) throw new ProviderError('Instagram /me returned no user id', 'validation', null);
-  return { userId, username: typeof raw.username === 'string' ? raw.username : null, accountType: typeof raw.account_type === 'string' ? raw.account_type : null };
+  return { userId, appScopedId: typeof raw.id === 'string' && raw.id !== userId ? raw.id : null, username: typeof raw.username === 'string' ? raw.username : null, accountType: typeof raw.account_type === 'string' ? raw.account_type : null };
 }
 
 /**

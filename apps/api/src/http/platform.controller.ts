@@ -96,6 +96,12 @@ export class PlatformController {
     send(res, 200, await this.core.instagram.subscriptionCheck(actor));
   }
 
+  @Post('api/v1/integrations/instagram/sync-ids')
+  async igSyncIds(@Actor() actor: UserActor, @Res() res: Response) {
+    requireCapOrThrow(actor, 'integrations.manage');
+    send(res, 200, await this.core.instagram.syncProfileIds(actor));
+  }
+
   @Post('api/v1/integrations/instagram/oauth/start')
   async igStart(@Actor() actor: UserActor, @Res() res: Response) {
     send(res, 200, await this.core.instagram.start(actor));

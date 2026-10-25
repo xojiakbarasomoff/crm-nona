@@ -99,6 +99,25 @@ export class InstagramService {
     return { graphVersion: m.graphVersion || null, connections: out };
   }
 
+  /**
+   * Mavjud ulanishga `/me → id` (app-scoped) ni yozadi (token orqali o'sha akkauntning o'zi aytgan ID). Webhook `recipient.id` ikkala
+   * qiymatdan biri bilan kelishi mumkin; mos kelish faqat SHU ulanishning o'z ikki ID'si bilan bo'ladi, boshqa akkaunt qabul qilinmaydi.
+   */
+  async syncProfileIds(actor: UserActor) {
+    requireCap(actor, 'integrations.manage');
+    const cfg = this.cfg();
+    const conns = await this.d.prisma.integrationConnection.findMany({ where: { companyId: actor.companyId, provider: 'META_DIRECT', mode: 'live', disconnectedAt: null, credentialsEnc: { not: null } } });
+    const out: Array<{ accountId: string; appScopedIdStored: boolean }> = [];
+    for (const conn of conns) {
+      const creds = JSON.parse(decryptSecret(conn.credentialsEnc!, this.d.encryptionKey)) as StoredInstagramCreds;
+      const profile = await fetchInstagramProfile(cfg, creds.accessToken, this.fetchImpl);
+      const ok = profile.userId === conn.accountId && !!profile.appScopedId;
+      if (ok) await this.d.prisma.integrationConnection.update({ where: { id: conn.id }, data: { settings: { ...((conn.settings ?? {}) as object), appScopedId: profile.appScopedId } as object, version: { increment: 1 } } });
+      out.push({ accountId: conn.accountId, appScopedIdStored: ok });
+    }
+    return { connections: out };
+  }
+
   async start(actor: UserActor) {
     requireCap(actor, 'integrations.manage');
     const cfg = this.cfg();
@@ -136,7 +155,7 @@ export class InstagramService {
 
     const credentialsEnc = encryptSecret(JSON.stringify({ accessToken: long.accessToken, igUserId: profile.userId, username: profile.username, issuedAt: now.toISOString() } satisfies StoredInstagramCreds), this.d.encryptionKey);
     // Credential kiritilgani «tayyor» degani emas: haqiqiy kiruvchi va chiquvchi sinov o'tmaguncha degraded.
-    const settings = { username: profile.username, accountType: profile.accountType, login: 'instagram_login', webhookSubscribed: subscribed, permissions: short.permissions, verifiedInboundAt: null, verifiedOutboundAt: null };
+    const settings = { username: profile.username, accountType: profile.accountType, login: 'instagram_login', appScopedId: profile.appScopedId, webhookSubscribed: subscribed, permissions: short.permissions, verifiedInboundAt: null, verifiedOutboundAt: null };
     const reason = subscribed ? AWAITING_LIVE_VERIFICATION : WEBHOOK_UNCONFIRMED;
     const conn = await this.d.prisma.$transaction(async (tx) => {
       const existing = await tx.integrationConnection.findFirst({ where: { companyId: actor.companyId, provider: 'META_DIRECT', accountId: profile.userId } });

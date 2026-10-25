@@ -11,6 +11,7 @@ import { alwaysOnDuty, drain, login, makeApp, makeCore, sendChatReply, type Sess
  * fetch'i bilan almashtirilgan (Meta javoblari hujjatdagi shaklda). Bu haqiqiy akkauntda tasdiqlash EMAS.
  */
 const IG_ID = '17841400000000001';
+const APP_SCOPED_ID = '28541086455584499'; // /me → id (app-scoped); user_id = professional account ID
 const IG_SECRET = 'ig-test-secret'; // Instagram app secret: OAuth + `object: instagram` webhook imzosi (haqiqiy Meta test hodisasi bilan tasdiqlangan)
 const APP_SECRET = 'meta-app-secret'; // META_APP_SECRET: Lead Ads (`page`) webhook imzosi va signed_request
 const calls: Array<{ url: string; method: string; body: string | null }> = [];
@@ -23,7 +24,7 @@ async function metaFetch(input: string, init?: RequestInit): Promise<Response> {
   if (url.startsWith('https://api.instagram.com/oauth/access_token')) return json({ data: [{ access_token: 'SHORT_TOKEN', user_id: IG_ID, permissions: 'instagram_business_basic,instagram_business_manage_messages' }] });
   if (url.startsWith('https://graph.instagram.com/access_token')) return json({ access_token: 'LONG_TOKEN_1', token_type: 'bearer', expires_in: 5183944 });
   if (url.startsWith('https://graph.instagram.com/refresh_access_token')) return json({ access_token: 'LONG_TOKEN_2', token_type: 'bearer', expires_in: 5183944 });
-  if (/graph\.instagram\.com\/v[\d.]+\/me\?/.test(url)) return json({ user_id: IG_ID, username: 'nona_travel', account_type: behavior === 'personal' ? 'PERSONAL' : 'BUSINESS' });
+  if (/graph\.instagram\.com\/v[\d.]+\/me\?/.test(url)) return json({ id: APP_SCOPED_ID, user_id: IG_ID, username: 'nona_travel', account_type: behavior === 'personal' ? 'PERSONAL' : 'BUSINESS' });
   if (url.includes('/subscribed_apps')) return json({ success: true });
   if (url.endsWith('/me/messages')) return json({ recipient_id: 'x', message_id: `mid.live.${randomUUID()}` });
   return json({ error: { message: `unexpected ${url}` } }, 500);
@@ -147,6 +148,20 @@ describe('Instagram Login: kiruvchi Direct → kontakt/lid → mas’ul → javo
     expect(await p().webhookInbox.count()).toBe(before);
     expect(await p().message.count({ where: { providerMessageId: `mid.foreign.${sender}` } })).toBe(0);
     expect(Number(await core.deps.redis.get('metrics:webhook_unknown_account'))).toBeGreaterThanOrEqual(1);
+  });
+
+  it("webhook akkaunt IDsi shu ulanishning app-scoped id si bilan kelsa ham qabul qilinadi va kanonik akkaunt IDsiga keltiriladi (boshqa akkaunt emas)", async () => {
+    const other = `${sender}9`; // alohida yuboruvchi: boshqa testlarning xabar sonlariga tegmaydi
+    const mid = `mid.scoped.${other}`;
+    const body = Buffer.from(JSON.stringify({ object: 'instagram', entry: [{ id: APP_SCOPED_ID, time: Date.now(), messaging: [{ sender: { id: other }, recipient: { id: APP_SCOPED_ID }, timestamp: Date.now(), message: { mid, text: 'app-scoped id' } }] }] }));
+    const r = await request(app.getHttpServer()).post('/webhooks/meta').set('Content-Type', 'application/json').set('X-Hub-Signature-256', signMetaBody(body, IG_SECRET)).send(body.toString());
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ received: 1, stored: 1 });
+    await drain(core);
+    const msg = await p().message.findFirst({ where: { providerMessageId: mid } });
+    expect(msg).toBeTruthy();
+    const conv = await p().conversation.findFirstOrThrow({ where: { id: msg!.conversationId } });
+    expect(conv.businessAccountId).toBe(IG_ID);
   });
 
   it('birinchi xabar kontakt, lid va mas’ul menejer yaratadi; keyingi xabarlar va qayta yetkazish takroriy lid yaratmaydi', async () => {
