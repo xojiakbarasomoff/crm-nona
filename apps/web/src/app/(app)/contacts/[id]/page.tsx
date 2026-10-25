@@ -34,7 +34,7 @@ export default function ContactPage() {
             </p>
           )}
           <p className="muted">
-            {d.contact.primaryPhone ?? 'Telefon yo‘q'} · {d.contact.primaryEmail ?? 'Email yo‘q'} · amoCRM kontakt: {d.contact.amoContactId ?? 'hali yaratilmagan'}
+            {d.contact.primaryPhone ?? 'Telefon yo‘q'} · {d.contact.primaryEmail ?? 'Email yo‘q'}{d.contact.amoContactId ? ` · amoCRM: ${d.contact.amoContactId}` : ''}
           </p>
           {d.contact.piiErasedAt && <div className="state stale">Shaxsiy ma’lumotlar {fmtDateTime(d.contact.piiErasedAt)} da o‘chirilgan. Moliyaviy yozuvlar siyosat bo‘yicha saqlanadi.</div>}
           {me.role === 'ADMIN' && !d.contact.piiErasedAt && (
@@ -61,7 +61,7 @@ export default function ContactPage() {
               {d.conversations.map((c) => (
                 <Section key={c.id} title="Instagram Direct yozishmasi">
                   <p className="muted">
-                    Tarix {fmtDateTime(c.historyAvailableFrom)} dan mavjud. Javob yozish joyi — amoCRM native chati{c.amoChatAvailable ? ' (chat ulangan)' : ' (chat hali yaratilmagan)'}.
+                    Tarix {fmtDateTime(c.historyAvailableFrom)} dan. {c.amoChatAvailable ? 'Javob amoCRM chatida yoziladi.' : 'CRM’dan javob yuborish ulanmagan.'}
                   </p>
                   <div className="chat">
                     {c.messages.map((m) => (

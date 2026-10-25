@@ -71,7 +71,7 @@ export function Attachments({ ownerType, ownerId, owners, title = 'Fayllar' }: {
 
   return (
     <Section title={title}>
-      <p className="muted">PDF, PNG, JPEG, WEBP, DOCX, XLSX; 10 MB gacha. Fayl virus tekshiruvidan o‘tmaguncha ochilmaydi. Pasport nusxasi faqat PDF yoki rasm bo‘ladi va ommaviy ochilmaydi: yuklab olish havolasi qisqa muddatli va faqat sizga tegishli.</p>
+      <p className="muted">PDF, rasm, DOCX, XLSX; 10 MB gacha. Fayl tekshiruvdan o‘tmaguncha ochilmaydi. Pasport nusxasi ommaviy ochilmaydi.</p>
       <div className="row">
         <label className="field">
           <span className="field-label">Hujjat turi</span>

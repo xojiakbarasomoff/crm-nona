@@ -44,7 +44,6 @@ export default function LeadsPage() {
         </button>
       </div>
       {creating && <NewLeadForm onClose={() => setCreating(false)} />}
-      <p className="muted">Lid statusi va mas’ulning asosiy tizimi — amoCRM. Bu ro‘yxat lokal proyeksiya.</p>
       <Section title="Filtr">
         <div className="row">
           <Field label="Bosqich">
@@ -57,8 +56,8 @@ export default function LeadsPage() {
               ))}
             </select>
           </Field>
-          <Field label="Qidiruv (lid, ism/familiya, telefon, Instagram/Telegram @username)">
-            <input value={search} onChange={(e) => (setCursor(undefined), setSearch(e.target.value))} placeholder="Lid, mijoz, telefon, @username" />
+          <Field label="Qidiruv">
+            <input value={search} onChange={(e) => (setCursor(undefined), setSearch(e.target.value))} placeholder="Ism, telefon yoki @username" />
           </Field>
         </div>
       </Section>

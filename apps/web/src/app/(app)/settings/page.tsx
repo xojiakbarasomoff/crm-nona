@@ -65,7 +65,7 @@ export default function SettingsPage() {
       </Section>
       <Section title="Kompaniya sozlamalari">
         <p className="muted">
-          Ish jadvali, SLA, sticky owner, navbatchi mas’ul, telefon qoidasi va retention siyosati hozircha seed/DB orqali boshqariladi. Tasdiqlanmagan qiymatlar KNOWN_LIMITATIONS.md da qayd etilgan.
+          Ish jadvali, javob muddati (SLA), navbatchi mas’ul, telefon qoidasi va saqlash siyosati hozircha administrator tomonidan ma’lumotlar bazasi orqali o‘zgartiriladi.
         </p>
       </Section>
     </>

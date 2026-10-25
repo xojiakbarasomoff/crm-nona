@@ -221,3 +221,12 @@ tr.row-cancelled td.code, tr.row-cancelled td.code a { color: #9a95a3; text-deco
 .fin-rules summary { cursor: pointer; font-weight: 600; color: var(--bordo-700); }
 @media (max-width: 1100px) { .dash-grid { grid-template-columns: 1fr; } }
 @media (max-width: 700px) { .funnel-row { grid-template-columns: 110px minmax(0, 1fr) 52px; } .mgr-head, .mgr-row { grid-template-columns: minmax(0, 1fr) 40px 56px; } .mgr-head span:last-child, .mgr-row > :last-child { display: none; } }
+
+/* Qisqa yordam belgisi va administrator diagnostikasi */
+details.help { display: inline-block; margin-left: 6px; vertical-align: baseline; }
+details.help > summary { cursor: pointer; list-style: none; color: var(--text-soft); font-size: 0.9rem; }
+details.help > summary::-webkit-details-marker { display: none; }
+details.help[open] { display: block; margin: 6px 0; }
+details.help .help-body { margin-top: 4px; font-size: 0.82rem; max-width: 70ch; }
+details.admin-diag { margin-top: 18px; border-top: 1px solid var(--border, #e5dad5); padding-top: 10px; }
+details.admin-diag > summary { cursor: pointer; font-weight: 600; color: var(--text-soft); }

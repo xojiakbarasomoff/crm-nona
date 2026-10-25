@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
 import { api, CHECK_LABELS, fmtDateTime, newKey, OP_STATUS_LABELS, useApi, type ApiError } from '../../../../lib/api';
-import { Async, Badge, Field, FormError, Section } from '../../../../components/ui';
+import { Async, Badge, Field, FormError, LocalDateTimeField, Section } from '../../../../components/ui';
 import { Attachments, type DocOwner } from '../../../../components/attachments';
 import { FinanceSummary, PricingForm, ServicesSection, SupplierRefundsSection, type FinanceView, type ServiceView, type SupplierRef, type SupplierRefundView } from '../../../../components/order-finance';
 import { SERVICE_TYPE_LABELS } from '../../../../lib/format';
@@ -212,7 +212,7 @@ export default function OrderPage() {
             )}
 
             <Section title="Reys segmentlari">
-              <p className="muted">Ma’lumot manbasi: qo‘lda kiritilgan (manual). Bu jonli reys API ma’lumoti emas.</p>
+              <p className="muted">Ma’lumot qo‘lda kiritilgan (jonli reys ma’lumoti ulanmagan).</p>
               {o.segments.map((s) => (
                 <SegmentCard key={s.id} s={s} run={run} />
               ))}
@@ -416,7 +416,7 @@ function SegmentCard({ s, run }: { s: Segment; run: (fn: () => Promise<unknown>)
         </Field>
         {result === 'changed' && (
           <Field label={`Yangi jo‘nash (${s.departureTimezone})`}>
-            <input type="datetime-local" value={newLocal} onChange={(e) => setNewLocal(e.target.value)} required />
+            <LocalDateTimeField value={newLocal} onValue={setNewLocal} required />
           </Field>
         )}
         <Field label="Izoh">
@@ -516,7 +516,7 @@ function AddSegment({ passengers, onAdd }: { passengers: OrderView['order']['pas
       </div>
       <div className="row">
         <Field label="Jo‘nash (aeroport vaqti)">
-          <input type="datetime-local" value={f.depLocal} onChange={set('depLocal')} />
+          <LocalDateTimeField value={f.depLocal} onValue={(v) => set('depLocal')({ target: { value: v } })} />
         </Field>
         <Field label="Jo‘nash zonasi (IANA)">
           <select value={f.depZone} onChange={set('depZone')}>
@@ -526,7 +526,7 @@ function AddSegment({ passengers, onAdd }: { passengers: OrderView['order']['pas
           </select>
         </Field>
         <Field label="Yetib kelish (aeroport vaqti)">
-          <input type="datetime-local" value={f.arrLocal} onChange={set('arrLocal')} />
+          <LocalDateTimeField value={f.arrLocal} onValue={(v) => set('arrLocal')({ target: { value: v } })} />
         </Field>
         <Field label="Yetib kelish zonasi">
           <select value={f.arrZone} onChange={set('arrZone')}>
@@ -646,7 +646,7 @@ function ManualReminder({ orderId, onAdd }: { orderId: string; onAdd: (b: Record
         <input value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} required />
       </Field>
       <Field label="Vaqt">
-        <input type="datetime-local" value={f.localStart} onChange={(e) => setF({ ...f, localStart: e.target.value })} required />
+        <LocalDateTimeField value={f.localStart} onValue={(v) => setF({ ...f, localStart: v })} required />
       </Field>
       <Field label="Zona">
         <select value={f.timezone} onChange={(e) => setF({ ...f, timezone: e.target.value })}>

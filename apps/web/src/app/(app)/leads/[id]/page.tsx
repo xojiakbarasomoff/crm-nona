@@ -3,8 +3,8 @@
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { api, fmtDateTime, newKey, SOURCE_LABELS, STAGE_LABELS, useApi, type ApiError } from '../../../../lib/api';
-import { Async, Badge, Field, FormError, InstagramLink, Section, SyncBadge } from '../../../../components/ui';
+import { api, fmtDateTime, isoToTashkentLocal, newKey, SOURCE_LABELS, STAGE_LABELS, tashkentLocalToIso, useApi, type ApiError } from '../../../../lib/api';
+import { Async, Badge, Field, FormError, InstagramLink, IsoDateField, LocalDateTimeField, Section, SyncBadge } from '../../../../components/ui';
 import { canDo, useMe } from '../../../../components/shell';
 import { Attachments } from '../../../../components/attachments';
 import { ContactEditForm } from '../../../../components/manual-lead';
@@ -90,7 +90,7 @@ export default function LeadPage() {
                   → <Badge tone="info">Sinxronlanmoqda: {l.pendingChange.stage ? STAGE_LABELS[l.pendingChange.stage] : `mas’ul ${userName(l.pendingChange.ownerId ?? null)}`}</Badge>
                 </>
               )}{' '}
-              · Mas’ul: {userName(l.ownerId)} · Manba: {SOURCE_LABELS[l.firstSource]} ({l.firstPlacement}) · amoCRM ID: {l.amoLeadId ?? 'hali yaratilmagan'} · SLA: {fmtDateTime(l.firstResponseDueAt)}
+              · Mas’ul: {userName(l.ownerId)} · Manba: {SOURCE_LABELS[l.firstSource]} · amoCRM: {l.amoLeadId ?? 'yaratilmagan'} · Javob muddati: {fmtDateTime(l.firstResponseDueAt)}
             </p>
             {l.slaBreachedAt && !l.firstHumanActionAt && <div className="state error">SLA buzildi: birinchi inson javobi {fmtDateTime(l.firstResponseDueAt)} gacha qayd etilmadi.</div>}
             {l.anomaly && (
@@ -100,7 +100,7 @@ export default function LeadPage() {
             )}
             {d.pendingOperations.length > 0 && (
               <div className="state">
-                amoCRM operatsiyalari: {d.pendingOperations.map((o) => `${o.action} (${o.state}${o.lastError ? `: ${o.lastError}` : ''})`).join('; ')}
+                amoCRM bilan sinxronlash kutilmoqda{d.pendingOperations.some((o) => o.lastError) ? `: ${d.pendingOperations.find((o) => o.lastError)?.lastError}` : ''}
               </div>
             )}
             <FormError error={error} />
@@ -281,9 +281,9 @@ function RequirementsForm({ lead, req, onSave }: { lead: LeadDetail['lead']; req
     budgetAmount: String(req.budgetAmount ?? ''),
     budgetCurrency: String(req.budgetCurrency ?? 'USD'),
     contactOutcome: lead.contactOutcome ?? '',
-    offerPrepDueAt: lead.offerPrepDueAt?.slice(0, 16) ?? '',
+    offerPrepDueAt: isoToTashkentLocal(lead.offerPrepDueAt),
     lostReasonCode: lead.lostReasonCode ?? '',
-    nextContactAt: lead.nextContactAt?.slice(0, 16) ?? '',
+    nextContactAt: isoToTashkentLocal(lead.nextContactAt),
     followUpNote: lead.followUpNote ?? '',
     paymentDueAt: String(req.paymentDueAt ?? ''),
   });
@@ -298,9 +298,9 @@ function RequirementsForm({ lead, req, onSave }: { lead: LeadDetail['lead']; req
           onSave({
             serviceType: str(f.serviceType),
             contactOutcome: str(f.contactOutcome),
-            offerPrepDueAt: f.offerPrepDueAt ? new Date(f.offerPrepDueAt).toISOString() : null,
+            offerPrepDueAt: f.offerPrepDueAt ? tashkentLocalToIso(f.offerPrepDueAt) : null,
             lostReasonCode: str(f.lostReasonCode),
-            nextContactAt: f.nextContactAt ? new Date(f.nextContactAt).toISOString() : null,
+            nextContactAt: f.nextContactAt ? tashkentLocalToIso(f.nextContactAt) : null,
             followUpNote: str(f.followUpNote),
             requirements: {
               serviceType: str(f.serviceType),
@@ -339,10 +339,10 @@ function RequirementsForm({ lead, req, onSave }: { lead: LeadDetail['lead']; req
         </div>
         <div className="row">
           <Field label="Ketish (dan)">
-            <input type="date" value={f.dateFrom} onChange={set('dateFrom')} />
+            <IsoDateField value={f.dateFrom} onValue={(v) => set('dateFrom')({ target: { value: v } } as never)} />
           </Field>
           <Field label="Qaytish (gacha)">
-            <input type="date" value={f.dateTo} onChange={set('dateTo')} />
+            <IsoDateField value={f.dateTo} onValue={(v) => set('dateTo')({ target: { value: v } } as never)} />
           </Field>
           <Field label="Katta">
             <input type="number" min={0} value={f.adults} onChange={set('adults')} />
@@ -378,15 +378,15 @@ function RequirementsForm({ lead, req, onSave }: { lead: LeadDetail['lead']; req
             <input value={f.contactOutcome} onChange={set('contactOutcome')} />
           </Field>
           <Field label="Taklif muddati">
-            <input type="datetime-local" value={f.offerPrepDueAt} onChange={set('offerPrepDueAt')} />
+            <LocalDateTimeField value={f.offerPrepDueAt} onValue={(v) => set('offerPrepDueAt')({ target: { value: v } } as never)} />
           </Field>
           <Field label="To‘lov muddati">
-            <input type="date" value={f.paymentDueAt} onChange={set('paymentDueAt')} />
+            <IsoDateField value={f.paymentDueAt} onValue={(v) => set('paymentDueAt')({ target: { value: v } } as never)} />
           </Field>
         </div>
         <div className="row">
           <Field label="Qayta aloqa vaqti">
-            <input type="datetime-local" value={f.nextContactAt} onChange={set('nextContactAt')} />
+            <LocalDateTimeField value={f.nextContactAt} onValue={(v) => set('nextContactAt')({ target: { value: v } } as never)} />
           </Field>
           <Field label="Qayta aloqa izohi">
             <input value={f.followUpNote} onChange={set('followUpNote')} />

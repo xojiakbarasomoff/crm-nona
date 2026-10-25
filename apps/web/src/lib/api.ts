@@ -132,6 +132,25 @@ export const parseDmy = (text: string): string | null => {
   return dt.getUTCFullYear() === Number(yyyy) && dt.getUTCMonth() === Number(mm) - 1 && dt.getUTCDate() === Number(dd) ? `${yyyy}-${mm}-${dd}` : null;
 };
 export const isoToDmy = (iso: string) => fmtDate(iso);
+/** «DD.MM.YYYY HH:mm» → «YYYY-MM-DDTHH:mm» (haqiqiy sana-vaqt bo'lmasa null). Aeroport/mahalliy vaqt maydonlari uchun ham ishlatiladi. */
+export const parseDmyHm = (text: string): string | null => {
+  const m = /^(\d{2}\.\d{2}\.\d{4}) (\d{2}):(\d{2})$/.exec(text.trim());
+  if (!m) return null;
+  const date = parseDmy(m[1]!);
+  const hh = Number(m[2]);
+  const mm = Number(m[3]);
+  return date && hh < 24 && mm < 60 ? `${date}T${m[2]}:${m[3]}` : null;
+};
+export const localToDmyHm = (local: string) => (local ? `${fmtDate(local.slice(0, 10))} ${local.slice(11, 16)}` : '');
+/** Toshkent vaqti (UTC+5, yozgi vaqt yo'q) bilan ISO ↔ «YYYY-MM-DDTHH:mm». Bazadagi vaqt qiymati o'zgarmaydi, faqat ko'rsatish/kiritish. */
+export const isoToTashkentLocal = (iso: string | null | undefined) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const p = dtParts(d, 'Asia/Tashkent');
+  return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`;
+};
+export const tashkentLocalToIso = (local: string) => new Date(`${local}:00+05:00`).toISOString();
 
 export const newKey = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
 

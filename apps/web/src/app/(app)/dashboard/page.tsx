@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState, type ReactNode } from 'react';
 import { SOURCE_LABELS, STAGE_LABELS, fmtDate, fmtDateTime, isoToDmy, parseDmy, useApi, type Loadable } from '../../../lib/api';
-import { Async, Badge, DateInput, Field, InstagramLink } from '../../../components/ui';
+import { Async, Badge, DateInput, Field, Help, InstagramLink } from '../../../components/ui';
 import { Icon, type IconName } from '../../../components/icons';
 import { CURRENCIES, fmtAmount, money, CURRENCY_LABEL } from '../../../lib/format';
 import { canDo, useMe } from '../../../components/shell';
@@ -238,7 +238,10 @@ export default function DashboardPage() {
         </div>
       )}
       <p className="muted" role="note">
-        Qaysi sanaga asoslanadi (Asia/Tashkent, boshlanish va tugash kunlari to‘liq kiradi): yangi lidlar, manbalar, konversiya va quyidagi lidlar jadvali — lid <b>yaratilgan</b> sana; sotuvlar va moliya (sotuv, tannarx, foyda) — lid birinchi marta «Yutildi» bo‘lgan sana; to‘lovlar — to‘lov <b>qabul qilingan</b> sana; Buyurtmalar CSV — buyurtma yaratilgan sana. Filtr «Qidirish» bosilganda qo‘llanadi.
+        Sana oralig‘i Toshkent vaqti bilan, ikkala kun ham kiradi.
+        <Help label="Ko‘rsatkichlar qaysi sanaga asoslanadi">
+          Yangi lidlar, manbalar, konversiya va lidlar jadvali — lid <b>yaratilgan</b> sana bo‘yicha. Sotuv va moliya (sotuv, tannarx, foyda) — lid birinchi marta «Yutildi» bo‘lgan sana bo‘yicha. To‘lovlar — to‘lov <b>qabul qilingan</b> sana bo‘yicha. Buyurtmalar CSV — buyurtma yaratilgan sana bo‘yicha. Filtr «Qidirish» bosilganda qo‘llanadi.
+        </Help>
       </p>
 
       <Async state={state}>
@@ -333,7 +336,7 @@ export default function DashboardPage() {
 
               <h2 className="section-title">Qo‘shimcha ko‘rsatkichlar</h2>
               <p className="muted">
-                Ma’lumotlar to‘liq yig‘ila boshlangan sana: {fmtDateTime(d.dataQuality.dataCollectionStartedAt)} · {d.notes.sourceMode}
+                Ma’lumotlar to‘liq yig‘ila boshlangan sana: {fmtDateTime(d.dataQuality.dataCollectionStartedAt)}
               </p>
               <div className="grid" style={{ margin: '10px 0 18px' }}>
                 <Kpi label="Murojaatlar (unique)" value={pm.inquiries} />

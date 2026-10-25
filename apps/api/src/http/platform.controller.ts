@@ -110,14 +110,16 @@ export class PlatformController {
 
   /** Mantiqiy eksport (o'chiriladigan qatorlar to'liq). Faqat administrator. */
   @Get('api/v1/admin/maintenance/demo-cleanup/export')
-  async demoCleanupExport(@Actor() actor: UserActor, @Res() res: Response) {
-    send(res, 200, await this.core.demoCleanup.export(actor));
+  async demoCleanupExport(@Actor() actor: UserActor, @Query() q: { contacts?: string; leads?: string }, @Res() res: Response) {
+    const list = (v?: string) => (v ? v.split(',').map((x) => x.trim()).filter(Boolean) : []);
+    const include = list(q.contacts).length || list(q.leads).length ? { contacts: list(q.contacts), leads: list(q.leads) } : undefined;
+    send(res, 200, await this.core.demoCleanup.export(actor, include));
   }
 
   /** O'chirish: eksport hash'i va tasdiqlash matni bilan; bitta tranzaksiya. Faqat administrator. */
   @Post('api/v1/admin/maintenance/demo-cleanup/execute')
-  async demoCleanupExecute(@Actor() actor: UserActor, @Body() body: { manifestHash?: string; confirm?: string; allowPaymentDeletion?: string; only?: { contacts: string[]; leads: string[]; orders: string[] }; cutoff?: string }, @Res() res: Response) {
-    send(res, 200, await this.core.demoCleanup.execute(actor, { manifestHash: String(body?.manifestHash ?? ''), confirm: String(body?.confirm ?? ''), allowPaymentDeletion: String(body?.allowPaymentDeletion ?? ''), ...(body?.only ? { only: { contacts: [...body.only.contacts], leads: [...body.only.leads], orders: [...body.only.orders] } } : {}), ...(body?.cutoff ? { cutoff: String(body.cutoff) } : {}) }));
+  async demoCleanupExecute(@Actor() actor: UserActor, @Body() body: { manifestHash?: string; confirm?: string; allowPaymentDeletion?: string; only?: { contacts: string[]; leads: string[]; orders: string[] }; cutoff?: string; include?: { contacts: string[]; leads: string[] } }, @Res() res: Response) {
+    send(res, 200, await this.core.demoCleanup.execute(actor, { manifestHash: String(body?.manifestHash ?? ''), confirm: String(body?.confirm ?? ''), allowPaymentDeletion: String(body?.allowPaymentDeletion ?? ''), ...(body?.only ? { only: { contacts: [...body.only.contacts], leads: [...body.only.leads], orders: [...body.only.orders] } } : {}), ...(body?.cutoff ? { cutoff: String(body.cutoff) } : {}), ...(body?.include ? { include: { contacts: [...(body.include.contacts ?? [])], leads: [...(body.include.leads ?? [])] } } : {}) }));
   }
 
   @Post('api/v1/integrations/instagram/profiles/sync')
