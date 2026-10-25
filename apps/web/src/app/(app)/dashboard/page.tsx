@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState, type ReactNode } from 'react';
 import { SOURCE_LABELS, STAGE_LABELS, fmtDate, fmtDateTime, isoToDmy, parseDmy, useApi, type Loadable } from '../../../lib/api';
-import { Async, Badge, DateInput, Field, Help, InstagramLink } from '../../../components/ui';
+import { Async, Badge, DateInput, Field, InstagramLink } from '../../../components/ui';
 import { Icon, type IconName } from '../../../components/icons';
 import { CURRENCIES, fmtAmount, money, CURRENCY_LABEL } from '../../../lib/format';
 import { canDo, useMe } from '../../../components/shell';
@@ -237,12 +237,6 @@ export default function DashboardPage() {
           {filterError}
         </div>
       )}
-      <p className="muted" role="note">
-        Sana oralig‘i Toshkent vaqti bilan, ikkala kun ham kiradi.
-        <Help label="Ko‘rsatkichlar qaysi sanaga asoslanadi">
-          Yangi lidlar, manbalar, konversiya va lidlar jadvali — lid <b>yaratilgan</b> sana bo‘yicha. Sotuv va moliya (sotuv, tannarx, foyda) — lid birinchi marta «Yutildi» bo‘lgan sana bo‘yicha. To‘lovlar — to‘lov <b>qabul qilingan</b> sana bo‘yicha. Buyurtmalar CSV — buyurtma yaratilgan sana bo‘yicha. Filtr «Qidirish» bosilganda qo‘llanadi.
-        </Help>
-      </p>
 
       <Async state={state}>
         {(d) => {
@@ -254,8 +248,6 @@ export default function DashboardPage() {
           const fr = pm.firstResponse;
           return (
             <>
-              {d.dataQuality.stale && <div className="state stale">Ma’lumotlar eskirgan bo‘lishi mumkin: integratsiya holati to‘liq emas.</div>}
-
               <div className="stat-row">
                 <Stat icon="leads" label="Yangi lidlar" value={pm.newLeads} note={`${pm.inquiries} ta unique murojaat`} />
                 <Stat icon="chart" label="Kohorta konversiyasi" value={pm.cohortConversion.display} note={`${pm.cohortConversion.numerator}/${pm.cohortConversion.denominator} lid → sotuv`} />
@@ -493,15 +485,7 @@ function FinanceBlock({ f }: { f: FinanceDash }) {
           <h2>{cost ? 'Moliya: sotuv, tannarx va foyda' : 'Moliya: sotuv va qaytarimlar'}</h2>
           <span className="muted">tasdiqlangan sotuvlar · valyutalar alohida</span>
         </header>
-        <p className="hint">
-          {cost ? (
-            <>
-              <b>Dastlabki foyda = sotuv narxi − tannarx.</b> <b>Qaytarimdan keyingi foyda = (sotuv − mijozga qaytarilgan) − (tannarx − yetkazib beruvchidan qaytgan).</b> {f.rules.confirmed} Qo‘shimcha xarajatlar hisobga olinmagan: bu buxgalteriya bo‘yicha yakuniy «sof foyda» emas.
-            </>
-          ) : (
-            <>{f.rules.confirmed} Tannarx va foydani ko‘rish uchun alohida ruxsat kerak (administrator beradi).</>
-          )}
-        </p>
+        {!cost && <p className="muted">Tannarx va foyda ko‘rinmaydi: alohida ruxsat kerak.</p>}
         {ccys.length === 0 ? (
           <div className="state empty">Tanlangan davrda tasdiqlangan (yopilgan) sotuv yo‘q.</div>
         ) : (
@@ -596,6 +580,17 @@ function FinanceBlock({ f }: { f: FinanceDash }) {
         <details className="fin-rules">
           <summary>Hisoblash qoidalari</summary>
           <ul>
+            {cost && (
+              <>
+                <li>
+                  <b>Dastlabki foyda = sotuv narxi − tannarx.</b>
+                </li>
+                <li>
+                  <b>Qaytarimdan keyingi foyda = (sotuv − mijozga qaytarilgan) − (tannarx − yetkazib beruvchidan qaytgan).</b>
+                </li>
+                <li>Qo‘shimcha xarajatlar hisobga olinmagan: bu buxgalteriya bo‘yicha yakuniy «sof foyda» emas.</li>
+              </>
+            )}
             {Object.entries(f.rules).map(([k, v]) => (
               <li key={k}>{v}</li>
             ))}
