@@ -1,7 +1,7 @@
 'use client';
 
-import type { ReactNode } from 'react';
-import type { ApiError, Loadable } from '../lib/api';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { fmtDate, localToDmyHm, parseDmy, parseDmyHm, type ApiError, type Loadable } from '../lib/api';
 
 export function Loading({ label = 'Yuklanmoqda…' }: { label?: string }) {
   return (
@@ -73,6 +73,89 @@ export function DateInput({ value, onChange, label }: { value: string; onChange:
     return [d.slice(0, 2), d.slice(2, 4), d.slice(4, 8)].filter(Boolean).join('.') + (d.length === 2 || d.length === 4 ? '.' : '');
   };
   return <input value={value} onChange={(e) => onChange(mask(e.target.value))} inputMode="numeric" placeholder="DD.MM.YYYY" maxLength={10} aria-label={label} autoComplete="off" />;
+}
+
+const maskDigits = (raw: string, groups: number[], seps: string[]) => {
+  const d = raw.replace(/\D/g, '').slice(0, groups.reduce((a, b) => a + b, 0));
+  let out = '';
+  let i = 0;
+  groups.forEach((g, gi) => {
+    const part = d.slice(i, i + g);
+    i += g;
+    if (part) out += (gi > 0 ? seps[gi - 1] : '') + part;
+  });
+  return out;
+};
+
+/** Lid/buyurtma kartalari: sana «DD.MM.YYYY» ko'rinishida kiritiladi, qiymat «YYYY-MM-DD» (ISO) bo'lib qoladi. */
+export function IsoDateField({ value, onValue, required, disabled }: { value: string; onValue: (v: string) => void; required?: boolean; disabled?: boolean }) {
+  const [text, setText] = useState(value ? fmtDate(value) : '');
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if ((parseDmy(text) ?? '') !== value) setText(value ? fmtDate(value) : '');
+  }, [value]);
+  const invalid = text !== '' && parseDmy(text) === null;
+  useEffect(() => ref.current?.setCustomValidity(invalid ? 'Sanani DD.MM.YYYY ko‘rinishida kiriting' : ''), [invalid]);
+  return (
+    <input
+      ref={ref}
+      value={text}
+      inputMode="numeric"
+      placeholder="DD.MM.YYYY"
+      maxLength={10}
+      required={required}
+      disabled={disabled}
+      aria-invalid={invalid}
+      autoComplete="off"
+      onChange={(e) => {
+        const t = maskDigits(e.target.value, [2, 2, 4], ['.', '.']);
+        setText(t);
+        onValue(parseDmy(t) ?? '');
+      }}
+    />
+  );
+}
+
+/** Sana-vaqt: «DD.MM.YYYY HH:mm»; qiymat «YYYY-MM-DDTHH:mm». */
+export function LocalDateTimeField({ value, onValue, required, disabled }: { value: string; onValue: (v: string) => void; required?: boolean; disabled?: boolean }) {
+  const [text, setText] = useState(localToDmyHm(value));
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if ((parseDmyHm(text) ?? '') !== value) setText(localToDmyHm(value));
+  }, [value]);
+  const invalid = text !== '' && parseDmyHm(text) === null;
+  useEffect(() => ref.current?.setCustomValidity(invalid ? 'Sana-vaqtni DD.MM.YYYY HH:mm ko‘rinishida kiriting' : ''), [invalid]);
+  return (
+    <input
+      ref={ref}
+      value={text}
+      inputMode="numeric"
+      placeholder="DD.MM.YYYY HH:mm"
+      maxLength={16}
+      required={required}
+      disabled={disabled}
+      aria-invalid={invalid}
+      autoComplete="off"
+      onChange={(e) => {
+        const raw = e.target.value.replace(/\D/g, '').slice(0, 12);
+        const t = [raw.slice(0, 2), raw.slice(2, 4), raw.slice(4, 8)].filter(Boolean).join('.') + (raw.length > 8 ? ` ${[raw.slice(8, 10), raw.slice(10, 12)].filter(Boolean).join(':')}` : '');
+        setText(t);
+        onValue(parseDmyHm(t) ?? '');
+      }}
+    />
+  );
+}
+
+/** Qisqa yordam: uzun tushuntirish yordam belgisi ichida. */
+export function Help({ children, label = 'Yordam' }: { children: ReactNode; label?: string }) {
+  return (
+    <details className="help">
+      <summary aria-label={label} title={label}>
+        ⓘ
+      </summary>
+      <div className="help-body muted">{children}</div>
+    </details>
+  );
 }
 
 export function Field({ label, error, children, hint }: { label: string; error?: string; children: ReactNode; hint?: string }) {

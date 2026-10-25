@@ -59,7 +59,7 @@ export default function SuppliersPage() {
     <>
       <h1>Turoperatorlar va yetkazib beruvchilar</h1>
       <p className="muted">
-        Bu ma’lumotnoma xizmatni <b>yetkazib beruvchini</b> bildiradi. Reklama manbasi (masalan, «Instagram Ads») bilan aralashtirmang: manba — mijoz qayerdan kelgani. Ma’lumotnomadagi keyingi o‘zgarishlar eski buyurtmalarning narxlariga ta’sir qilmaydi.
+        Xizmat <b>yetkazib beruvchilari</b> ro‘yxati. Reklama manbasi emas. O‘zgarishlar eski buyurtma narxlariga ta’sir qilmaydi.
       </p>
 
       <Section title="Filtr">
@@ -197,7 +197,7 @@ export default function SuppliersPage() {
           </form>
         </Section>
       ) : (
-        <p className="muted">Ma’lumotnomani o‘zgartirish rahbar va administrator uchun. Siz lidga turoperator tanlay olasiz; aloqa ma’lumotlari ko‘rsatilmaydi.</p>
+        <p className="muted">O‘zgartirish rahbar va administrator uchun. Siz lidga turoperator tanlay olasiz.</p>
       )}
     </>
   );

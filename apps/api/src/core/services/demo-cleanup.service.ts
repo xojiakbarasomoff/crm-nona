@@ -43,6 +43,12 @@ interface Only {
   orders: string[];
 }
 
+/** Foydalanuvchi aniq ID bilan sun'iy deb tasdiqlagan yozuvlar (avtomatik tasniflash «noaniq» desa ham); haqiqiy yozuvga hech qachon qo'llanmaydi. */
+interface Include {
+  contacts: string[];
+  leads: string[];
+}
+
 interface TableSpec {
   table: string;
   where: string;
@@ -97,7 +103,7 @@ export class DemoCleanupService {
   }
 
   /** Sun'iy / haqiqiy / noaniq to'plamlar va barcha bog'liq ID'lar. */
-  private async buildSets(companyId: string, only?: Only) {
+  private async buildSets(companyId: string, only?: Only, include?: Include) {
     const p = this.d.prisma;
     const [conns, contacts, convs, inquiries, leads, orders] = await Promise.all([
       p.integrationConnection.findMany({ where: { companyId }, select: { id: true, provider: true, mode: true, accountId: true, disconnectedAt: true } }),
@@ -130,6 +136,22 @@ export class DemoCleanupService {
     let C = pick(contactKind, 'demo');
     let L = pick(leadKind, 'demo');
     let O = pick(orderKind, 'demo');
+    if (include) {
+      // Faqat «noaniq» yozuvlar sun'iy deb belgilanadi; haqiqiy (jonli suhbatli) bo'lsa — rad etiladi. Bog'liq buyurtma bo'lsa u ham tekshiruvdan o'tmaguncha to'xtatiladi.
+      for (const id of [...include.contacts, ...include.leads]) {
+        if (realContacts.has(id) || leadKind.get(id) === 'real') throw conflict('INCLUDE_IS_REAL', 'Qo‘shilgan yozuv haqiqiy Instagram mijoziga tegishli; to‘xtatildi');
+      }
+      for (const id of include.contacts) if (!contactKind.has(id)) throw conflict('INCLUDE_NOT_FOUND', 'Qo‘shilgan kontakt topilmadi');
+      for (const id of include.leads) if (!leadKind.has(id)) throw conflict('INCLUDE_NOT_FOUND', 'Qo‘shilgan lid topilmadi');
+      const leadContact = new Map(leads.map((l) => [l.id, l.contactId]));
+      const extraOrders = orders.filter((o) => (o.leadId && include.leads.includes(o.leadId)) || include.contacts.includes(o.contactId)).map((o) => o.id);
+      C = [...new Set([...C, ...include.contacts, ...include.leads.map((id) => leadContact.get(id)!)])].sort();
+      L = [...new Set([...L, ...include.leads, ...leads.filter((l) => include.contacts.includes(l.contactId)).map((l) => l.id)])].sort();
+      O = [...new Set([...O, ...extraOrders])].sort();
+      // Qo'shilgan kontaktda boshqa lid bo'lsa (tasdiqlanmagan) — to'xtatamiz.
+      const strangers = leads.filter((l) => C.includes(l.contactId) && !L.includes(l.id));
+      if (strangers.length) throw conflict('INCLUDE_HAS_OTHER_LEADS', 'Qo‘shilgan kontaktda ro‘yxatda yo‘q boshqa lid bor; to‘xtatildi');
+    }
     if (only) {
       // Faqat tasdiqlangan eksportdagi ID'lar: ularning har biri hozir ham sun'iy bo'lishi shart; eksportdan keyin kelgan yangi yozuvlarga tegilmaydi.
       for (const [name, list, cur] of [['contacts', only.contacts, C], ['leads', only.leads, L], ['orders', only.orders, O]] as const) {
@@ -170,7 +192,8 @@ export class DemoCleanupService {
     };
     // Himoya: o'chiriladigan to'plamlar haqiqiy/noaniq bilan kesishmasligi va jonli suhbatlarga tegmasligi shart.
     const del = new Set([...sets.C, ...sets.L]);
-    const protect = [...sets.realContacts, ...sets.realLeads, ...sets.uncertainContacts, ...sets.uncertainLeads];
+    const included = new Set([...(include?.contacts ?? []), ...(include?.leads ?? []), ...C, ...L]);
+    const protect = [...sets.realContacts, ...sets.realLeads, ...sets.uncertainContacts.filter((id) => !included.has(id)), ...sets.uncertainLeads.filter((id) => !included.has(id))];
     if (protect.some((id) => del.has(id)) || sets.CONV.some((id) => sets.liveConvIds.includes(id))) throw conflict('CLEANUP_SAFETY', 'Himoya tekshiruvi: o‘chirish to‘plami haqiqiy yozuv bilan kesishdi; to‘xtatildi');
     const info = {
       conns, contacts, leads, orders, contactKind, leadKind, orderKind, synthEvidence,
@@ -231,9 +254,9 @@ export class DemoCleanupService {
   }
 
   /** Mantiqiy eksport: o'chiriladigan HAR BIR qator to'liq (DB ustun nomlari bilan, to_jsonb). Tiklash: jsonb_populate_recordset. */
-  async export(actor: UserActor) {
+  async export(actor: UserActor, include?: Include) {
     this.requireAdmin(actor);
-    const { sets } = await this.buildSets(actor.companyId);
+    const { sets } = await this.buildSets(actor.companyId, undefined, include);
     const rx = this.regexes(sets);
     const tables: Array<{ table: string; count: number; sha256: string; rows: unknown[] }> = [];
     const counts: Record<string, number> = {};
@@ -298,12 +321,12 @@ export class DemoCleanupService {
    * O'chirish: faqat eksport hash'i mos kelganda; bitta tranzaksiya; har jadvalda o'chirilgan soni oldindan sanalgan songa teng bo'lishi shart.
    * Dashboard keshi (faqat `dash:<kompaniya>:*`) tozalanadi; Redis/navbatlar umumiy tozalanmaydi.
    */
-  async execute(actor: UserActor, input: { manifestHash: string; confirm: string; allowPaymentDeletion?: string; only?: Only; cutoff?: string }) {
+  async execute(actor: UserActor, input: { manifestHash: string; confirm: string; allowPaymentDeletion?: string; only?: Only; cutoff?: string; include?: Include }) {
     this.requireAdmin(actor);
     if (input.confirm !== 'DELETE-DEMO-RECORDS') throw unprocessable('CONFIRM_REQUIRED', 'Tasdiqlash matni noto‘g‘ri');
     const cutoff = input.cutoff ? new Date(input.cutoff).toISOString() : null;
     if (input.only && !cutoff) throw unprocessable('CUTOFF_REQUIRED', 'only bilan birga eksport vaqti (cutoff) ham kerak');
-    const { sets } = await this.buildSets(actor.companyId, input.only);
+    const { sets } = await this.buildSets(actor.companyId, input.only, input.include);
     const counts = await this.countRows(sets, cutoff);
     if (this.manifestHash(sets, counts) !== input.manifestHash) throw conflict('MANIFEST_MISMATCH', 'Ma’lumotlar eksport qilinganidan keyin o‘zgargan; qayta eksport qiling');
     const rx = this.regexes(sets, cutoff);

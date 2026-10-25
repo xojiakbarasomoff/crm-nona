@@ -101,9 +101,11 @@ export function Shell({ children }: { children: ReactNode }) {
                 <div className="muted">{me.role === 'ADMIN' ? 'Administrator' : me.role === 'HEAD' ? 'Savdo rahbari' : 'Menejer'}</div>
               </div>
             </div>
-            <div className="muted" title="Realtime holati">
-              {live === 'live' ? '● Jonli yangilanish' : '○ 30 s polling'}
-            </div>
+            {me.role === 'ADMIN' && (
+              <div className="muted" title="Yangilanish holati (administrator uchun)">
+                {live === 'live' ? '● Jonli yangilanish' : '○ Davriy yangilanish'}
+              </div>
+            )}
             <Link href="/notifications">Bildirishnomalar {unread > 0 && <span className="badge bad">{unread}</span>}</Link>
             <button
               type="button"
@@ -120,7 +122,13 @@ export function Shell({ children }: { children: ReactNode }) {
         <main className="content">
           {me.appMode === 'demo' && (
             <div className="demo-banner" role="note">
-              <b>Ish holati.</b> Instagram Direct kiruvchi xabarlar: {me.liveStatus?.instagramDirectInboundVerified ? 'jonli sinovdan o‘tgan' : 'jonli sinovdan o‘tmagan'} · amoCRM: demo (sinxronizatsiya soxta) · CRM’dan javob yuborish va Lead Ads: ulanmagan.
+              Instagram kiruvchi xabarlar — {me.liveStatus?.instagramDirectInboundVerified ? 'ulangan' : 'sinovdan o‘tmagan'}. amoCRM, CRM’dan javob va reklama formalari — ulanmagan.
+              {canDo(me, 'integrations.manage') && (
+                <>
+                  {' '}
+                  <Link href="/integrations">Batafsil</Link>
+                </>
+              )}
             </div>
           )}
           {children}

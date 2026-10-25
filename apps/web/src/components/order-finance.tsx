@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import type { ApiError } from '../lib/api';
 import { CURRENCIES, fmtMoney, MEAL_PLANS, profitPreview, SERVICE_TYPE_LABELS, SUPPLIER_KIND_LABELS } from '../lib/format';
-import { Badge, Field, FormError, Section } from './ui';
+import { Badge, Field, FormError, Help, IsoDateField, LocalDateTimeField, Section } from './ui';
 
 /** Tannarx va foyda maydonlari faqat `finance.cost.view` huquqi bo'lsa keladi (`costHidden=false`). */
 export interface FinanceView {
@@ -283,7 +283,8 @@ export function ServicesSection({
   return (
     <Section title="Xizmatlar: mehmonxona, transfer, avia va boshqalar">
       <p className="muted">
-        Har bir xizmat qatorida sotuv narxi, tannarx va yetkazib beruvchi alohida bo‘lishi mumkin. Jami qiymat turpaket narxi + paketdan <b>tashqari</b> xizmatlar yig‘indisi; «paketga kiritilgan» xizmat jamiga qo‘shilmaydi (ikki marta sanalmasin). Reyslar «Reys segmentlari» bo‘limida.
+        Jami = turpaket narxi + paketdan <b>tashqari</b> xizmatlar. «Paketga kiritilgan» xizmat jamiga qo‘shilmaydi.
+        <Help label="Xizmatlar haqida">Har bir xizmatda sotuv narxi, tannarx va yetkazib beruvchi alohida bo‘lishi mumkin. Reyslar «Reys segmentlari» bo‘limida.</Help>
       </p>
       {services.length > 0 && (
         <div className="table-wrap">
@@ -446,10 +447,10 @@ function ServiceForm({
             <input value={f.address} onChange={set('address')} disabled={disabled} />
           </Field>
           <Field label="Kirish sanasi">
-            <input type="date" value={f.checkIn} onChange={set('checkIn')} required disabled={disabled} />
+            <IsoDateField value={f.checkIn} onValue={(v) => set('checkIn')({ target: { value: v } } as never)} required disabled={disabled} />
           </Field>
           <Field label="Chiqish sanasi">
-            <input type="date" value={f.checkOut} onChange={set('checkOut')} required disabled={disabled} />
+            <IsoDateField value={f.checkOut} onValue={(v) => set('checkOut')({ target: { value: v } } as never)} required disabled={disabled} />
           </Field>
           <Field label="Xona turi">
             <input value={f.roomType} onChange={set('roomType')} placeholder="Double, Family…" disabled={disabled} />
@@ -470,7 +471,7 @@ function ServiceForm({
             <input value={f.route} onChange={set('route')} required placeholder="Aeroport → mehmonxona" disabled={disabled} />
           </Field>
           <Field label="Sana va vaqt">
-            <input type="datetime-local" value={f.pickupAt} onChange={set('pickupAt')} required disabled={disabled} />
+            <LocalDateTimeField value={f.pickupAt} onValue={(v) => set('pickupAt')({ target: { value: v } } as never)} required disabled={disabled} />
           </Field>
           <Field label="Transport">
             <input value={f.vehicle} onChange={set('vehicle')} placeholder="Minivan, sedan…" disabled={disabled} />
@@ -539,7 +540,7 @@ export function SupplierRefundsSection({
   const nameOf = (id: string | null) => suppliers.find((x) => x.id === id)?.name ?? '—';
   return (
     <Section title="Yetkazib beruvchidan qaytgan summa">
-      <p className="muted">Bu mijozga qaytarimdan alohida: yetkazib beruvchi (turoperator, mehmonxona…) bizga qaytargan pul. Valyuta buyurtma narxlari valyutasiga mos bo‘lishi va tannarxdan oshmasligi shart.</p>
+      <p className="muted">Yetkazib beruvchi bizga qaytargan pul (mijoz qaytarimidan alohida). Valyuta buyurtma valyutasiga mos bo‘lishi va tannarxdan oshmasligi kerak.</p>
       {refunds.length > 0 && (
         <div className="table-wrap">
           <table>
@@ -591,7 +592,7 @@ export function SupplierRefundsSection({
             </select>
           </Field>
           <Field label="Qabul qilingan sana">
-            <input type="date" value={f.receivedAt} onChange={set('receivedAt')} required disabled={disabled} />
+            <IsoDateField value={f.receivedAt} onValue={(v) => set('receivedAt')({ target: { value: v } } as never)} required disabled={disabled} />
           </Field>
           <Field label="Yetkazib beruvchi">
             <select value={f.supplierId} onChange={set('supplierId')} disabled={disabled}>

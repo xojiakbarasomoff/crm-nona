@@ -199,6 +199,46 @@ describe('demo tozalash: eksport → tiklash tekshiruvi → o‘chirish', () => 
       expect(await guard()).toBe('O');
     }));
 
+  it('aniq ID bilan «sun’iy» deb tasdiqlangan noaniq (qo‘lda yaratilgan) lid tozalanadi, boshqa qo‘lda yaratilgani («r») va haqiqiy Instagram saqlanadi; haqiqiy yozuvni include qilib bo‘lmaydi', () =>
+    withEnv(async () => {
+      const demo = await newLead(app, core);
+      const sinov = (await head.post('/api/v1/leads', { firstName: 'Sinov', lastName: 'Namuna', phone: '+998710000001', telegram: 'sinov_namuna_1' })).body;
+      const r = (await head.post('/api/v1/leads', { firstName: 'r' })).body;
+      const real = await makeReal('d');
+      await drain(core);
+      const plan = (await admin.get('/api/v1/admin/maintenance/demo-cleanup/plan')).body;
+      expect(plan.delete.leads.map((l: { id: string }) => l.id)).toEqual([demo.id]); // include'siz faqat avtomatik sun'iy
+      // Haqiqiy yozuvni include qilish — rad etiladi
+      const bad = await admin.get(`/api/v1/admin/maintenance/demo-cleanup/export?leads=${real.lead.id}`);
+      expect(bad.status).toBe(409);
+      expect(bad.body.error.code).toBe('INCLUDE_IS_REAL');
+      // SINOV lidi aniq ID bilan
+      const exp = (await admin.get(`/api/v1/admin/maintenance/demo-cleanup/export?leads=${sinov.id}&contacts=${sinov.contactId}`)).body as ExportFile & { sets: { contacts: string[]; leads: string[]; orders: string[] }; generatedAt: string };
+      expect(exp.sets.leads.sort()).toEqual([demo.id, sinov.id].sort());
+      expect(exp.tables.find((t) => t.table === 'contact_identifiers')!.count).toBeGreaterThanOrEqual(2); // SINOV telefon identifikatori ham eksportda
+      expect((await restoreAndVerify(exp, process.env.TEST_DATABASE_URL!, root)).ok).toBe(true);
+      const before = await counts();
+      const run = await admin.post('/api/v1/admin/maintenance/demo-cleanup/execute', {
+        manifestHash: exp.manifestHash,
+        confirm: 'DELETE-DEMO-RECORDS',
+        only: { contacts: exp.sets.contacts, leads: exp.sets.leads, orders: exp.sets.orders },
+        cutoff: exp.generatedAt,
+        include: { contacts: [sinov.contactId], leads: [sinov.id] },
+      });
+      expect(run.status).toBe(200);
+      expect(await p().lead.findUnique({ where: { id: sinov.id } })).toBeNull();
+      expect(await p().contact.findUnique({ where: { id: sinov.contactId } })).toBeNull();
+      expect(await p().lead.findUnique({ where: { id: demo.id } })).toBeNull();
+      expect(await p().lead.findUnique({ where: { id: r.id } })).not.toBeNull(); // «r» saqlandi
+      expect(await p().lead.findUnique({ where: { id: real.lead.id } })).not.toBeNull();
+      expect(await p().message.count({ where: { conversationId: real.conv.id } })).toBe(1);
+      const after = await counts();
+      expect(after.leads).toBe(before.leads - 2);
+      expect(after.conversations).toBe(before.conversations);
+      expect(after.messages).toBe(before.messages);
+      expect(after.users).toBe(before.users);
+    }));
+
   it('to‘lov himoyasi aniq so‘ralganda faqat shu tranzaksiyada ochiladi: sun’iy to‘lov o‘chadi, trigger qayta yoqiladi, boshqa to‘lov hamon o‘chmaydi, haqiqiy yozuvlar saqlanadi', () =>
     withEnv(async () => {
       const lead = await newLead(app, core);

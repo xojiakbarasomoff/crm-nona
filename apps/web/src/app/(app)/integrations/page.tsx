@@ -27,6 +27,10 @@ interface Health {
   storage: { name: string; kind: string };
 }
 
+const PROVIDER_LABEL: Record<string, string> = { AMOCRM_REST: 'amoCRM', AMOCRM_CHATS: 'amoCRM chat', META_DIRECT: 'Instagram Direct', META_LEADS: 'Reklama formalari (Lead Ads)' };
+const HEALTH_LABEL: Record<string, string> = { ok: 'Ishlayapti', degraded: 'Cheklangan', paused: 'To‘xtatilgan', disconnected: 'Uzilgan', down: 'Ishlamayapti' };
+const REASON_LABEL: Record<string, string> = { awaiting_live_verification: 'javob sinovi kutilmoqda', webhook_subscription_unconfirmed: 'obuna tasdiqlanmagan', token_refresh_failed: 'token yangilanmadi' };
+
 export default function IntegrationsPage() {
   const me = useMe();
   const state = useApi<Health>('/api/v1/integrations/health', { pollMs: 10_000 });
@@ -49,27 +53,16 @@ export default function IntegrationsPage() {
       <Async state={state}>
         {(h) => (
           <>
-            <Section title="Adapterlar">
-              <p>
-                Rejim: <b>{h.appMode}</b> · Direct kanali: <b>{h.directChannelMode}</b>
-              </p>
-              {h.adapters.map((a) => (
-                <Badge key={a.name} tone={a.kind === 'mock' ? 'warn' : a.kind === 'live' ? 'ok' : 'neutral'}>
-                  {a.name} ({a.kind === 'mock' ? 'DEMO' : a.kind})
-                </Badge>
-              ))}
-              {h.appMode === 'demo' && <p className="muted">Demo adapterlar real integratsiya ishlaganini isbotlamaydi. Live holat: docs/feasibility.md.</p>}
-            </Section>
             <Section title="Ulanishlar">
               <div className="table-wrap">
                 <table>
                   <thead>
                     <tr>
-                      <th>Provider</th>
+                      <th>Ulanish</th>
                       <th>Akkaunt</th>
                       <th>Holat</th>
-                      <th>Oxirgi webhook</th>
-                      <th>Oxirgi sync</th>
+                      <th>Oxirgi xabar</th>
+                      <th>Oxirgi sinxronlash</th>
                       <th>Xato</th>
                       <th />
                     </tr>
@@ -78,11 +71,11 @@ export default function IntegrationsPage() {
                     {h.connections.map((c) => (
                       <tr key={c.id}>
                         <td>
-                          {c.provider} <Badge>{c.mode}</Badge>
+                          {PROVIDER_LABEL[c.provider] ?? c.provider} {c.mode === 'demo' && <Badge tone="warn">demo</Badge>}
                         </td>
                         <td>{c.accountDomain ?? c.accountId}</td>
                         <td>
-                          <Badge tone={c.health === 'ok' ? 'ok' : 'bad'}>{c.health}</Badge> <span className="muted">{c.healthReason}</span>
+                          <Badge tone={c.health === 'ok' ? 'ok' : 'warn'}>{HEALTH_LABEL[c.health] ?? c.health}</Badge> <span className="muted">{c.healthReason ? REASON_LABEL[c.healthReason] ?? c.healthReason : ''}</span>
                         </td>
                         <td>{fmtDateTime(c.lastWebhookAt)}</td>
                         <td>{fmtDateTime(c.lastSyncAt)}</td>
@@ -120,24 +113,31 @@ export default function IntegrationsPage() {
               )}
             </Section>
             {canDo(me, 'integrations.manage') && (
-              <Section title="Instagram Direct (Instagram API with Instagram Login)">
+              <Section title="Instagram Direct">
                 <p className="muted">
-                  Akkaunt egasi o‘z Instagram sessiyasida rasmiy ruxsat beradi; parol yoki token bu yerga kiritilmaydi. Instagram <b>professional</b> (Business/Creator) akkaunt kerak. Facebook Page talab qilinmaydi. Meta ilovasi Development rejimida yoki App Review’dan o‘tmaguncha faqat ilovaga qo‘shilgan test akkauntlar bilan ishlaydi — bu barcha mijozlar uchun tayyor integratsiya emas.
+                  Kompaniya akkaunti egasi Instagram oynasida ruxsat beradi; parol bu yerga kiritilmaydi. Professional (Business/Creator) akkaunt kerak.
                 </p>
-                {ig.data && !ig.data.configured && <div className="state error">Sozlanmagan: INSTAGRAM_APP_ID, INSTAGRAM_APP_SECRET va META_GRAPH_VERSION kerak (docs/instagram-direct-setup.md).</div>}
+                {ig.data && !ig.data.configured && <div className="state error">Instagram ulanishi sozlanmagan: administrator sozlamalarni kiritishi kerak.</div>}
                 {ig.data && (
-                  <ul className="hint">
-                    <li>OAuth redirect URI: <code>{ig.data.oauthRedirectUri}</code></li>
-                    <li>Webhook callback: <code>{typeof window === 'undefined' ? '' : window.location.origin}{ig.data.webhookCallbackPath}</code> · verify token: {ig.data.verifyTokenConfigured ? 'sozlangan' : 'YO‘Q'} · imzo siri: {ig.data.signatureSecretConfigured ? 'sozlangan' : 'YO‘Q'}</li>
-                  </ul>
+                  <details className="help">
+                    <summary>Texnik sozlamalar</summary>
+                    <ul className="hint">
+                      <li>
+                        OAuth redirect URI: <code>{ig.data.oauthRedirectUri}</code>
+                      </li>
+                      <li>
+                        Webhook manzili: <code>{typeof window === 'undefined' ? '' : window.location.origin}{ig.data.webhookCallbackPath}</code> · verify token: {ig.data.verifyTokenConfigured ? 'sozlangan' : 'YO‘Q'} · imzo siri: {ig.data.signatureSecretConfigured ? 'sozlangan' : 'YO‘Q'}
+                      </li>
+                    </ul>
+                  </details>
                 )}
                 {ig.data?.connections.map((c) => (
                   <div key={c.id} className="state">
                     <b>@{c.username ?? c.accountId}</b>{' '}
-                    {c.state === 'ready' && <Badge tone="ok">Tayyor: kiruvchi va chiquvchi haqiqiy sinovdan o‘tgan</Badge>}
-                    {c.state === 'inbound_verified' && <Badge tone="warn">Kiruvchi tasdiqlangan; chiquvchi javob sinovi kutilmoqda (tayyor emas)</Badge>}
-                    {c.state === 'outbound_verified' && <Badge tone="warn">Chiquvchi tasdiqlangan; kiruvchi sinov kutilmoqda (tayyor emas)</Badge>}
-                    {c.state === 'not_ready' && <Badge tone="warn">Ulangan, lekin haqiqiy sinov o‘tmagan — faol deb hisoblanmaydi</Badge>}
+                    {c.state === 'ready' && <Badge tone="ok">Ulangan: kiruvchi va javob sinovdan o‘tgan</Badge>}
+                    {c.state === 'inbound_verified' && <Badge tone="warn">Kiruvchi xabarlar ulangan · javob yuborish ulanmagan</Badge>}
+                    {c.state === 'outbound_verified' && <Badge tone="warn">Javob yuborish sinalgan · kiruvchi sinov kutilmoqda</Badge>}
+                    {c.state === 'not_ready' && <Badge tone="warn">Ulangan, sinov kutilmoqda</Badge>}
                     {c.state === 'problem' && <Badge tone="bad">Muammo: {c.healthReason}</Badge>}
                     {c.state === 'disconnected' && <Badge>Uzilgan</Badge>}
                     <div className="muted">Kiruvchi: {c.verifiedInboundAt ? fmtDateTime(c.verifiedInboundAt) : '—'} · Chiquvchi: {c.verifiedOutboundAt ? fmtDateTime(c.verifiedOutboundAt) : '—'} · Token muddati: {c.expiresAt ? fmtDateTime(c.expiresAt) : '—'}</div>
@@ -158,6 +158,47 @@ export default function IntegrationsPage() {
                 </button>
               </Section>
             )}
+            <Section title="Xavfsizlik va saqlash">
+              <p>
+                Fayl skaneri: <Badge tone={h.scanner.kind === 'clamav' ? 'ok' : 'warn'}>{h.scanner.name}</Badge> · Saqlash: {h.storage.name} · Skan kutayotgan fayllar: {h.attachmentsPendingScan} · Ochiq SLA buzilishlari: {h.slaBreachesOpen}
+              </p>
+              <p>
+                Retention:{' '}
+                {h.retention.status === 'active' ? (
+                  <Badge tone="ok">
+                    Faol: webhook {h.retention.rawWebhookDays} kun, yozishma {h.retention.messageContentMonths} oy
+                  </Badge>
+                ) : (
+                  <Badge tone="warn">Tasdiqlanmagan — tozalash o‘chirilgan</Badge>
+                )}
+              </p>
+              {me.role === 'ADMIN' && h.retention.status !== 'active' && (
+                <button
+                  className="btn secondary"
+                  type="button"
+                  onClick={() =>
+                    window.confirm('Taklif etilgan muddatlarni (webhook 30 kun, texnik log 90 kun, yozishma 12 oy) kompaniya nomidan tasdiqlaysizmi?') &&
+                    act(() => api('/api/v1/privacy/retention/confirm', { method: 'POST', body: { rawWebhookDays: 30, technicalLogDays: 90, messageContentMonths: 12 } }))
+                  }
+                >
+                  Retention siyosatini tasdiqlash
+                </button>
+              )}
+            </Section>
+            {canDo(me, 'integrations.manage') && (
+              <details className="admin-diag">
+                <summary>Administrator diagnostikasi</summary>
+            <Section title="Adapterlar">
+              <p>
+                Rejim: <b>{h.appMode}</b> · Direct kanali: <b>{h.directChannelMode}</b>
+              </p>
+              {h.adapters.map((a) => (
+                <Badge key={a.name} tone={a.kind === 'mock' ? 'warn' : a.kind === 'live' ? 'ok' : 'neutral'}>
+                  {a.name} ({a.kind === 'mock' ? 'DEMO' : a.kind})
+                </Badge>
+              ))}
+              {h.appMode === 'demo' && <p className="muted">Demo adapterlar real integratsiya ishlaganini isbotlamaydi. Live holat: docs/feasibility.md.</p>}
+            </Section>
             <Section title="Navbatlar va monitoring">
               <div className="grid">
                 <div className="kpi">
@@ -249,34 +290,9 @@ export default function IntegrationsPage() {
               </table>
               <p className="muted">Lead Ads: saqlanish oynasidan oldingi davr bo‘shliq sifatida ko‘rsatiladi — barcha eski lidlarni qaytarish va’da qilinmaydi.</p>
             </Section>
-            <Section title="Xavfsizlik va saqlash">
-              <p>
-                Fayl skaneri: <Badge tone={h.scanner.kind === 'clamav' ? 'ok' : 'warn'}>{h.scanner.name}</Badge> · Saqlash: {h.storage.name} · Skan kutayotgan fayllar: {h.attachmentsPendingScan} · Ochiq SLA buzilishlari: {h.slaBreachesOpen}
-              </p>
-              <p>
-                Retention:{' '}
-                {h.retention.status === 'active' ? (
-                  <Badge tone="ok">
-                    Faol: webhook {h.retention.rawWebhookDays} kun, yozishma {h.retention.messageContentMonths} oy
-                  </Badge>
-                ) : (
-                  <Badge tone="warn">Tasdiqlanmagan — tozalash o‘chirilgan</Badge>
-                )}
-              </p>
-              {me.role === 'ADMIN' && h.retention.status !== 'active' && (
-                <button
-                  className="btn secondary"
-                  type="button"
-                  onClick={() =>
-                    window.confirm('Taklif etilgan muddatlarni (webhook 30 kun, texnik log 90 kun, yozishma 12 oy) kompaniya nomidan tasdiqlaysizmi?') &&
-                    act(() => api('/api/v1/privacy/retention/confirm', { method: 'POST', body: { rawWebhookDays: 30, technicalLogDays: 90, messageContentMonths: 12 } }))
-                  }
-                >
-                  Retention siyosatini tasdiqlash
-                </button>
-              )}
-            </Section>
             {h.appMode === 'demo' && canDo(me, 'integrations.manage') && <DemoTools onDone={() => state.reload()} />}
+              </details>
+            )}
           </>
         )}
       </Async>
