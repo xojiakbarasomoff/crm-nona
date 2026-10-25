@@ -96,6 +96,12 @@ export class PlatformController {
     send(res, 200, await this.core.instagram.subscriptionCheck(actor));
   }
 
+  @Get('api/v1/integrations/instagram/inbound-summary')
+  async igInboundSummary(@Actor() actor: UserActor, @Query() q: { marker?: string }, @Res() res: Response) {
+    requireCapOrThrow(actor, 'integrations.manage');
+    send(res, 200, await this.core.instagram.inboundSummary(actor, typeof q.marker === 'string' && q.marker.length >= 3 ? q.marker.slice(0, 64) : null));
+  }
+
   @Post('api/v1/integrations/instagram/sync-ids')
   async igSyncIds(@Actor() actor: UserActor, @Res() res: Response) {
     requireCapOrThrow(actor, 'integrations.manage');

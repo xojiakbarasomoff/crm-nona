@@ -108,6 +108,26 @@ export class InstagramService {
   }
 
   /**
+   * Diagnostika (faqat o'qish): so'nggi Direct hodisalari (inbox) va — `marker` berilsa — Instagram'dagi so'nggi suhbatning oxirgi xabari
+   * FAQAT matni `marker` ni o'z ichiga olsa qaytariladi (boshqa mijozlarning xabarlari chiqmaydi). Maqsad: webhook hodisasini aniq `mid` bilan bog'lash.
+   */
+  async inboundSummary(actor: UserActor, marker: string | null) {
+    requireCap(actor, 'integrations.manage');
+    const m = this.d.config.meta;
+    const rows = await this.d.prisma.webhookInbox.findMany({ where: { companyId: actor.companyId, provider: 'meta', eventType: { in: ['ig_message', 'ig_read'] } }, orderBy: { receivedAt: 'desc' }, take: 5, select: { eventType: true, externalEventId: true, state: true, attempts: true, lastError: true, receivedAt: true, processedAt: true } });
+    let graphMatch: { mid: string; createdTime: string | null; matchedMarker: true } | { matchedMarker: false; note: string } | null = null;
+    const conn = marker ? await this.d.prisma.integrationConnection.findFirst({ where: { companyId: actor.companyId, provider: 'META_DIRECT', mode: 'live', disconnectedAt: null, credentialsEnc: { not: null } } }) : null;
+    if (marker && conn) {
+      const creds = JSON.parse(decryptSecret(conn.credentialsEnc!, this.d.encryptionKey)) as StoredInstagramCreds;
+      const res = await this.fetchImpl(`https://graph.instagram.com/${m.graphVersion}/${conn.accountId}/conversations?platform=instagram&limit=1&fields=messages.limit(1){id,message,created_time}&access_token=${encodeURIComponent(creds.accessToken)}`, { method: 'GET' }).catch(() => null);
+      const body = res ? ((await res.json().catch(() => ({}))) as { data?: Array<{ messages?: { data?: Array<{ id?: string; message?: string; created_time?: string }> } }> }) : {};
+      const last = body.data?.[0]?.messages?.data?.[0];
+      graphMatch = last?.id && typeof last.message === 'string' && last.message.includes(marker) ? { mid: last.id, createdTime: last.created_time ?? null, matchedMarker: true } : { matchedMarker: false, note: 'so‘nggi suhbatning oxirgi xabari marker bilan mos kelmadi' };
+    }
+    return { inbox: rows, graphMatch };
+  }
+
+  /**
    * Mavjud ulanishga `/me → id` (app-scoped) ni yozadi (token orqali o'sha akkauntning o'zi aytgan ID). Webhook `recipient.id` ikkala
    * qiymatdan biri bilan kelishi mumkin; mos kelish faqat SHU ulanishning o'z ikki ID'si bilan bo'ladi, boshqa akkaunt qabul qilinmaydi.
    */
