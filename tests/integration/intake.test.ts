@@ -3,7 +3,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Core } from '../../apps/api/src/core';
 import { type DemoMetaDirectClient, signMetaBody } from '@crm/integrations';
-import { alwaysOnDuty, drain, login, makeApp, makeCore, sendChatReply, sendDirect, sendLeadAds, testConfig } from './helpers';
+import { alwaysOnDuty, drain, login, makeApp, makeCore, sendDirect, sendLeadAds, testConfig } from './helpers';
 import { createApp } from '../../apps/api/src/app';
 import { createCore } from '../../apps/api/src/core';
 
@@ -24,7 +24,7 @@ const p = () => core.deps.prisma;
 const phone = () => `+99891${Math.floor(1_000_000 + Math.random() * 8_999_999)}`;
 
 describe('Lead Ads (AC01, AC02, AC09)', () => {
-  it('AC01: one inquiry, contact, lead with correct source and owner; amoCRM lead + first-contact task', async () => {
+  it('AC01: one inquiry, contact, lead with correct source and owner; first-contact task', async () => {
     const ph = phone();
     const { res, leadgenId } = await sendLeadAds(app, core, { fullName: 'Ali Valiyev', phone: ph, platform: 'ig' });
     expect(res.status).toBe(200);
@@ -32,14 +32,13 @@ describe('Lead Ads (AC01, AC02, AC09)', () => {
     const inquiry = await p().inquiry.findFirstOrThrow({ where: { providerEventKey: `meta_leads:${leadgenId}` } });
     expect(inquiry).toMatchObject({ channel: 'instagram_lead_ads', placement: 'instagram', processingState: 'linked' });
     const lead = await p().lead.findUniqueOrThrow({ where: { id: inquiry.leadId! } });
-    expect(lead).toMatchObject({ stage: 'NEW', firstSource: 'instagram_lead_ads', syncState: 'synced', assignmentReason: 'round_robin' });
+    expect(lead).toMatchObject({ stage: 'NEW', firstSource: 'instagram_lead_ads', assignmentReason: 'round_robin' });
     expect(lead.ownerId).not.toBeNull();
-    expect(lead.amoLeadId).not.toBeNull();
     const contact = await p().contact.findUniqueOrThrow({ where: { id: lead.contactId } });
     expect(contact.primaryPhone).toBe(ph);
     const tasks = await p().crmTask.findMany({ where: { entityId: lead.id, kind: 'first_contact' } });
     expect(tasks).toHaveLength(1);
-    expect(tasks[0]!.amoTaskId).not.toBeNull();
+    expect(tasks[0]).toMatchObject({ responsibleUserId: lead.ownerId, state: 'pending' });
   });
 
   it('page leadgen without explicit platform stays meta_lead_ads / unknown placement', async () => {
@@ -168,9 +167,6 @@ describe('Direct (AC05, AC06, AC07, AC08) and echo', () => {
     expect(await p().message.count({ where: { conversationId: conv.id, direction: 'inbound' } })).toBe(3);
     expect(await p().lead.count({ where: { contactId: conv.contactId } })).toBe(1);
     expect(await p().inquiry.count({ where: { contactId: conv.contactId } })).toBe(1);
-    // Every inbound message was imported into the amoCRM chat once.
-    const msgs = await p().message.findMany({ where: { conversationId: conv.id } });
-    expect(msgs.every((m) => m.amoMessageId)).toBe(true);
   });
 
   it('duplicate message delivery (same mid) is stored once', async () => {
@@ -193,15 +189,23 @@ describe('Direct (AC05, AC06, AC07, AC08) and echo', () => {
     expect(lead.firstSource).toBe('instagram_direct');
   });
 
-  it('AC06 (demo adapter): owner reply typed in amoCRM is sent via Send API, provider id and state stored', async () => {
+  /** Javob yuborish uchun hozir CRM ichida ishlab chiqaruvchi yo‘q: `meta.send` ishlovchisi bevosita tekshiriladi. */
+  async function queueReply(conversationId: string, text: string) {
+    const conv = await p().conversation.findUniqueOrThrow({ where: { id: conversationId } });
+    const lead = await p().lead.findUniqueOrThrow({ where: { id: conv.leadId! } });
+    const msg = await p().message.create({
+      data: { companyId: conv.companyId, conversationId, connectionId: conv.connectionId, direction: 'outbound', type: 'text', content: text, state: 'queued', actorType: 'human', actorUserId: lead.ownerId },
+    });
+    const op = await p().outboxOperation.create({ data: { companyId: conv.companyId, operationKey: `direct.send:${msg.id}`, target: 'meta', action: 'meta.send', payload: { messageId: msg.id }, correlationId: msg.id } });
+    return { msg, op };
+  }
+
+  it('AC06 (demo adapter): queued reply is sent via Send API, provider id and state stored; echo is not a customer message', async () => {
     const sender = `95${Date.now()}`;
     await sendDirect(app, core, { sender, text: 'Savol' });
     await drain(core);
     const conv = await p().conversation.findFirstOrThrow({ where: { scopedPeerId: sender } });
-    const lead = await p().lead.findUniqueOrThrow({ where: { id: conv.leadId! } });
-    const owner = await p().user.findUniqueOrThrow({ where: { id: lead.ownerId! } });
-    const r = await sendChatReply(app, core, { conversationId: conv.id, receiver: sender, text: 'Javob', authorAmoUserId: owner.amoUserId! });
-    expect(r.status).toBe(200);
+    await queueReply(conv.id, 'Javob');
     await drain(core);
     const out = await p().message.findFirstOrThrow({ where: { conversationId: conv.id, direction: 'outbound' } });
     expect(out.state).toBe('accepted'); // never "delivered" without a delivery event
@@ -218,45 +222,13 @@ describe('Direct (AC05, AC06, AC07, AC08) and echo', () => {
     expect(await p().message.count({ where: { conversationId: conv.id, direction: 'outbound' } })).toBe(1);
   });
 
-  it('a manager who does not own the conversation cannot reply through amoCRM', async () => {
-    const sender = `94${Date.now()}`;
-    await sendDirect(app, core, { sender, text: 'Savol' });
-    await drain(core);
-    const conv = await p().conversation.findFirstOrThrow({ where: { scopedPeerId: sender } });
-    const lead = await p().lead.findUniqueOrThrow({ where: { id: conv.leadId! } });
-    const other = await p().user.findFirstOrThrow({ where: { role: 'MANAGER', id: { not: lead.ownerId! } } });
-    await sendChatReply(app, core, { conversationId: conv.id, receiver: sender, text: 'Begona', authorAmoUserId: other.amoUserId! });
-    await drain(core);
-    const out = await p().message.findFirstOrThrow({ where: { conversationId: conv.id, direction: 'outbound' } });
-    expect(out).toMatchObject({ state: 'failed', error: 'no_permission' });
-  });
-
-  it('AC07: closed messaging window blocks sending with a reason; internal reminders are unaffected', async () => {
-    const sender = `93${Date.now()}`;
-    await sendDirect(app, core, { sender, text: 'Eski savol', timestamp: Date.now() - 30 * 3600_000 });
-    await drain(core);
-    const conv = await p().conversation.findFirstOrThrow({ where: { scopedPeerId: sender } });
-    const lead = await p().lead.findUniqueOrThrow({ where: { id: conv.leadId! } });
-    const owner = await p().user.findUniqueOrThrow({ where: { id: lead.ownerId! } });
-    const before = (await (core.deps.adapters.metaDirect as DemoMetaDirectClient).sentMessages()).length;
-    await sendChatReply(app, core, { conversationId: conv.id, receiver: sender, text: 'Kech javob', authorAmoUserId: owner.amoUserId! });
-    await drain(core);
-    const out = await p().message.findFirstOrThrow({ where: { conversationId: conv.id, direction: 'outbound' } });
-    expect(out).toMatchObject({ state: 'failed', error: 'window_closed' });
-    expect((await (core.deps.adapters.metaDirect as DemoMetaDirectClient).sentMessages()).length).toBe(before);
-    const notif = await p().notification.findFirst({ where: { userId: owner.id, kind: 'direct_blocked' }, orderBy: { createdAt: 'desc' } });
-    expect(notif?.body).toContain('Javob oynasi yopilgan');
-  });
-
   it('send timeout → unknown state, no blind retry; echo reconciles it', async () => {
     const sender = `92${Date.now()}`;
     await sendDirect(app, core, { sender, text: 'Savol' });
     await drain(core);
     const conv = await p().conversation.findFirstOrThrow({ where: { scopedPeerId: sender } });
-    const lead = await p().lead.findUniqueOrThrow({ where: { id: conv.leadId! } });
-    const owner = await p().user.findUniqueOrThrow({ where: { id: lead.ownerId! } });
     await core.deps.adapters.demoStore!.injectFailure('meta_direct', 'timeout_after_create');
-    await sendChatReply(app, core, { conversationId: conv.id, receiver: sender, text: 'Noaniq javob', authorAmoUserId: owner.amoUserId! });
+    await queueReply(conv.id, 'Noaniq javob');
     await drain(core);
     const out = await p().message.findFirstOrThrow({ where: { conversationId: conv.id, direction: 'outbound' } });
     expect(out.state).toBe('unknown');
@@ -285,8 +257,10 @@ describe('durable ACK (AC26)', () => {
 });
 
 describe('session sanity', () => {
-  it('head can open the integrations health page', async () => {
-    const head = await login(app, 'rahbar@demo.local');
+  it('administrator can open the integrations health page; manager and user cannot', async () => {
+    const head = await login(app, 'admin2@demo.local');
+    expect((await (await login(app, 'menejer.a@demo.local')).get('/api/v1/integrations/health')).status).toBe(403);
+    expect((await (await login(app, 'user@demo.local')).get('/api/v1/integrations/health')).status).toBe(403);
     const r = await head.get('/api/v1/integrations/health');
     expect(r.status).toBe(200);
     expect(r.body.appMode).toBe('demo');

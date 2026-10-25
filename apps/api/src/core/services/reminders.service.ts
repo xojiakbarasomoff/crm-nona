@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Prisma, ReminderOccurrence, Tx } from '@crm/database';
 import {
   checkOccurrenceValidity,
-  formatAirportTimeUz,
+  formatAirportTimeRu,
   milestoneDedupeKey,
   nthOccurrence,
   planMilestones,
@@ -17,7 +17,6 @@ import { audit } from '../audit';
 import { systemActor, type Actor, type CoreDeps, type UserActor } from '../context';
 import { headRecipients, notify, publishEvent } from '../events';
 import { forbidden, unprocessable } from '../errors';
-import { enqueueOutbox } from '../queue';
 import { assertFound, canEditRecord, orderWhere, requireCap } from '../scope';
 
 const ACTIVE_STATES = ['scheduled', 'dispatching', 'due', 'snoozed'] as const;
@@ -60,12 +59,12 @@ export class RemindersService {
         key: `segment:${segment.id}:rev:${segment.scheduleRevision}:missing_departure`,
         entityId: order.leadId,
         kind: 'missing_departure',
-        text: `Reys vaqti kiritilmagan: ${order.orderNo}, ${segment.originIata}–${segment.destinationIata} ${segment.marketingCarrier} ${segment.flightNumber}`,
+        text: `Не указано время рейса: ${order.orderNo}, ${segment.originIata}–${segment.destinationIata} ${segment.marketingCarrier} ${segment.flightNumber}`,
         responsibleUserId: assigneeId,
         dueAt: new Date(now.getTime() + 3600_000),
       });
       if (assigneeId) {
-        await notify(tx, { companyId, userId: assigneeId, kind: 'missing_departure', dedupeKey: `missing_departure:${segment.id}:${segment.scheduleRevision}`, title: `Reys vaqti kiritilmagan: ${order.orderNo}`, link: `/orders/${order.id}` });
+        await notify(tx, { companyId, userId: assigneeId, kind: 'missing_departure', dedupeKey: `missing_departure:${segment.id}:${segment.scheduleRevision}`, title: `Не указано время рейса: ${order.orderNo}`, link: `/orders/${order.id}` });
       }
       return { planned: 0 };
     }
@@ -109,14 +108,14 @@ export class RemindersService {
     const stale = await tx.reminderOccurrence.findMany({ where: { companyId, segmentId, kind: 'milestone', scheduleRevision: { lt: currentRevision }, state: { in: [...ACTIVE_STATES] } } });
     if (!stale.length) return 0;
     await tx.reminderOccurrence.updateMany({ where: { id: { in: stale.map((s) => s.id) } }, data: { state: 'superseded', cancelReason: 'schedule_revision_changed', leaseUntil: null } });
-    await this.closeLinkedTasks(tx, companyId, stale.map((s) => s.id), 'Reys jadvali o‘zgardi; yangi eslatma yaratildi');
+    await this.closeLinkedTasks(tx, companyId, stale.map((s) => s.id), 'Расписание рейса изменилось; создано новое напоминание');
     return stale.length;
   }
 
   async cancelForSegment(tx: Tx, companyId: string, segmentId: string, reason: string) {
     const rows = await tx.reminderOccurrence.findMany({ where: { companyId, segmentId, state: { in: [...ACTIVE_STATES] } } });
     await tx.reminderOccurrence.updateMany({ where: { id: { in: rows.map((r) => r.id) } }, data: { state: 'cancelled', cancelledAt: this.d.clock.now(), cancelReason: reason, leaseUntil: null } });
-    await this.closeLinkedTasks(tx, companyId, rows.map((r) => r.id), 'Eslatma bekor qilindi');
+    await this.closeLinkedTasks(tx, companyId, rows.map((r) => r.id), 'Напоминание отменено');
     await this.refreshNextReminder(tx, companyId, segmentId);
     return rows.length;
   }
@@ -126,18 +125,17 @@ export class RemindersService {
     await this.d.prisma.$transaction(async (tx) => {
       const rows = await tx.reminderOccurrence.findMany({ where: { companyId: actor.companyId, orderId, state: { in: [...ACTIVE_STATES] } } });
       await tx.reminderOccurrence.updateMany({ where: { id: { in: rows.map((r) => r.id) } }, data: { state: 'cancelled', cancelledAt: this.d.clock.now(), cancelReason: reason, leaseUntil: null } });
-      await this.closeLinkedTasks(tx, actor.companyId, rows.map((r) => r.id), 'Buyurtma bekor qilindi');
+      await this.closeLinkedTasks(tx, actor.companyId, rows.map((r) => r.id), 'Заказ отменён');
       await tx.flightSegment.updateMany({ where: { companyId: actor.companyId, orderId }, data: { nextReminderAt: null } });
       await audit(tx, actor, { entityType: 'order', entityId: orderId, action: 'reminders_cancelled', newValue: { count: rows.length, reason } });
     });
   }
 
-  private async closeLinkedTasks(tx: Tx, companyId: string, occurrenceIds: string[], resultText: string) {
+  private async closeLinkedTasks(tx: Tx, companyId: string, occurrenceIds: string[], _resultText: string) {
     if (!occurrenceIds.length) return;
     const tasks = await tx.crmTask.findMany({ where: { companyId, entityType: 'occurrence', entityId: { in: occurrenceIds }, state: { in: ['pending', 'open'] } } });
     for (const t of tasks) {
       await tx.crmTask.update({ where: { id: t.id }, data: { state: 'cancelled' } });
-      await enqueueOutbox(tx, { companyId, operationKey: `task.complete:${t.id}`, target: 'amocrm', action: 'task.complete', payload: { crmTaskId: t.id, result: resultText } });
     }
     await tx.notificationDelivery.updateMany({ where: { companyId, occurrenceId: { in: occurrenceIds }, state: 'pending' }, data: { state: 'cancelled' } });
   }
@@ -198,23 +196,18 @@ export class RemindersService {
       await tx.notificationDelivery.createMany({
         data: [
           { companyId: occ.companyId, occurrenceId: occ.id, channel: 'in_app', state: occ.assigneeId ? 'sent' : 'failed', lastError: occ.assigneeId ? null : 'no_assignee', attempts: 1 },
-          { companyId: occ.companyId, occurrenceId: occ.id, channel: 'amocrm_task', state: 'pending' },
         ],
         skipDuplicates: true,
       });
       if (order) {
-        const res = await tx.crmTask.createMany({
+        await tx.crmTask.createMany({
           data: [{ companyId: occ.companyId, automationKey: `occ:${occ.id}:task`, entityType: 'occurrence', entityId: occ.id, kind: 'flight_check', text: occ.body ?? occ.title, responsibleUserId: occ.assigneeId, dueAt: segment?.departureAtUtc ?? new Date(now.getTime() + 3600_000), state: 'pending' }],
           skipDuplicates: true,
         });
-        if (res.count) {
-          const task = await tx.crmTask.findUniqueOrThrow({ where: { companyId_automationKey: { companyId: occ.companyId, automationKey: `occ:${occ.id}:task` } } });
-          await enqueueOutbox(tx, { companyId: occ.companyId, operationKey: `task.create:${task.id}`, target: 'amocrm', action: 'task.create', payload: { crmTaskId: task.id, leadId: order.leadId, occurrenceId: occ.id } });
-        }
       }
       if (!occ.assigneeId) {
         for (const uid of await headRecipients(tx, occ.companyId)) {
-          await notify(tx, { companyId: occ.companyId, userId: uid, kind: 'reminder_unassigned', dedupeKey: `occ:${occ.id}:unassigned:${uid}`, title: `Mas’ulsiz eslatma: ${occ.title}`, link, occurrenceId: occ.id });
+          await notify(tx, { companyId: occ.companyId, userId: uid, kind: 'reminder_unassigned', dedupeKey: `occ:${occ.id}:unassigned:${uid}`, title: `Напоминание без ответственного: ${occ.title}`, link, occurrenceId: occ.id });
         }
       }
       if (occ.kind === 'manual' && occ.seriesId !== null && occ.recurrence) await this.scheduleNextInSeries(tx, occ);
@@ -238,7 +231,7 @@ export class RemindersService {
         if (upd.count !== 1) return;
         const occ = await tx.reminderOccurrence.findUniqueOrThrow({ where: { id } });
         for (const uid of await headRecipients(tx, occ.companyId)) {
-          await notify(tx, { companyId: occ.companyId, userId: uid, kind: 'reminder_escalated', dedupeKey: `occ:${id}:escalated:${uid}`, title: `Eskalatsiya: ${occ.title}`, body: occ.body, link: occ.orderId ? `/orders/${occ.orderId}` : null, occurrenceId: id });
+          await notify(tx, { companyId: occ.companyId, userId: uid, kind: 'reminder_escalated', dedupeKey: `occ:${id}:escalated:${uid}`, title: `Эскалация: ${occ.title}`, body: occ.body, link: occ.orderId ? `/orders/${occ.orderId}` : null, occurrenceId: id });
         }
         await audit(tx, systemActor(occ.companyId, 'scheduler'), { entityType: 'reminder', entityId: id, action: 'escalated', newValue: { milestone: occ.milestone } });
       });
@@ -285,15 +278,15 @@ export class RemindersService {
         return null;
       }
     })();
-    if (!firstDue) throw unprocessable('INVALID_START', 'Boshlanish vaqti yoki zona noto‘g‘ri', { localStart: 'invalid' });
+    if (!firstDue) throw unprocessable('INVALID_START', 'Неверно указано время начала или часовой пояс', { localStart: 'invalid' });
     return this.d.prisma.$transaction(async (tx) => {
-      const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: input.orderId }) }), 'Buyurtma');
+      const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: input.orderId }) }), 'Заказ');
       if (!canEditRecord(actor, order.ownerId)) throw forbidden();
-      if (input.segmentId) assertFound(await tx.flightSegment.findFirst({ where: { id: input.segmentId, orderId: order.id, companyId: actor.companyId } }), 'Segment');
+      if (input.segmentId) assertFound(await tx.flightSegment.findFirst({ where: { id: input.segmentId, orderId: order.id, companyId: actor.companyId } }), 'Сегмент');
       const assigneeId = input.assigneeId ?? actor.id;
       if (assigneeId !== actor.id) {
         requireCap(actor, 'reminders.assign_others');
-        assertFound(await tx.user.findFirst({ where: { id: assigneeId, companyId: actor.companyId, status: 'active' } }), 'Xodim');
+        assertFound(await tx.user.findFirst({ where: { id: assigneeId, companyId: actor.companyId, status: 'active' } }), 'Сотрудник');
       }
       const seriesId = randomUUID();
       const occ = await tx.reminderOccurrence.create({
@@ -322,10 +315,10 @@ export class RemindersService {
   }
 
   private async loadForActor(tx: Tx, actor: UserActor, id: string) {
-    const occ = assertFound(await tx.reminderOccurrence.findFirst({ where: { id, companyId: actor.companyId } }), 'Eslatma');
+    const occ = assertFound(await tx.reminderOccurrence.findFirst({ where: { id, companyId: actor.companyId } }), 'Напоминание');
     if (!can(actor.role, 'records.view_all')) {
       const order = occ.orderId ? await tx.order.findFirst({ where: { id: occ.orderId, companyId: actor.companyId }, select: { ownerId: true } }) : null;
-      if (occ.assigneeId !== actor.id && order?.ownerId !== actor.id) throw assertFound(null, 'Eslatma');
+      if (occ.assigneeId !== actor.id && order?.ownerId !== actor.id) throw assertFound(null, 'Напоминание');
     }
     return occ;
   }
@@ -333,7 +326,7 @@ export class RemindersService {
   async snooze(actor: UserActor, id: string, minutes: number) {
     return this.d.prisma.$transaction(async (tx) => {
       const occ = await this.loadForActor(tx, actor, id);
-      if (!['scheduled', 'due', 'snoozed'].includes(occ.state)) throw unprocessable('NOT_ACTIVE', 'Eslatma faol emas');
+      if (!['scheduled', 'due', 'snoozed'].includes(occ.state)) throw unprocessable('NOT_ACTIVE', 'Напоминание неактивно');
       let next: Date;
       try {
         next = snoozeUntil(this.d.clock.now(), minutes);
@@ -350,9 +343,9 @@ export class RemindersService {
     return this.d.prisma.$transaction(async (tx) => {
       const occ = await this.loadForActor(tx, actor, id);
       if (occ.kind === 'milestone') requireCap(actor, 'records.edit_all');
-      if (!(ACTIVE_STATES as readonly string[]).includes(occ.state)) throw unprocessable('NOT_ACTIVE', 'Eslatma faol emas');
+      if (!(ACTIVE_STATES as readonly string[]).includes(occ.state)) throw unprocessable('NOT_ACTIVE', 'Напоминание неактивно');
       const updated = await tx.reminderOccurrence.update({ where: { id }, data: { state: 'cancelled', cancelledAt: this.d.clock.now(), cancelReason: reason, leaseUntil: null } });
-      await this.closeLinkedTasks(tx, actor.companyId, [id], 'Eslatma bekor qilindi');
+      await this.closeLinkedTasks(tx, actor.companyId, [id], 'Напоминание отменено');
       await audit(tx, actor, { entityType: 'reminder', entityId: id, action: 'cancelled', newValue: { reason } });
       return updated;
     });
@@ -360,13 +353,13 @@ export class RemindersService {
 
   /**
    * Completes a manual reminder. Milestone reminders are completed only by saving a flight check
-   * (closing the amoCRM task never counts as a check, AC23).
+   * (closing a task never counts as a check, AC23).
    */
   async complete(actor: UserActor, id: string, note: string | null) {
     return this.d.prisma.$transaction(async (tx) => {
       const occ = await this.loadForActor(tx, actor, id);
-      if (occ.kind === 'milestone') throw unprocessable('CHECK_RESULT_REQUIRED', 'Natija kiritilishi kerak: reys tekshiruvi natijasini buyurtmada saqlang');
-      if (!['due', 'snoozed', 'scheduled'].includes(occ.state)) throw unprocessable('NOT_ACTIVE', 'Eslatma faol emas');
+      if (occ.kind === 'milestone') throw unprocessable('CHECK_RESULT_REQUIRED', 'Нужно ввести результат: сохраните итог проверки рейса в заказе');
+      if (!['due', 'snoozed', 'scheduled'].includes(occ.state)) throw unprocessable('NOT_ACTIVE', 'Напоминание неактивно');
       const updated = await tx.reminderOccurrence.update({ where: { id }, data: { state: 'completed', completedAt: this.d.clock.now(), completedById: actor.id, resultNote: note } });
       await this.closeLinkedTasks(tx, actor.companyId, [id], note ?? 'Bajarildi');
       await audit(tx, actor, { entityType: 'reminder', entityId: id, action: 'completed', newValue: { note } });
@@ -394,7 +387,7 @@ export class RemindersService {
   async updateRule(actor: UserActor, milestone: string, patch: { offsetSeconds?: number; enabled?: boolean; escalateAfterMinutes?: number }) {
     requireCap(actor, 'integrations.manage');
     const changed = await this.d.prisma.$transaction(async (tx) => {
-      const current = assertFound(await tx.reminderRule.findFirst({ where: { companyId: actor.companyId, milestone, current: true } }), 'Qoida');
+      const current = assertFound(await tx.reminderRule.findFirst({ where: { companyId: actor.companyId, milestone, current: true } }), 'Правило');
       await tx.reminderRule.update({ where: { id: current.id }, data: { current: false } });
       const next = await tx.reminderRule.create({
         data: {
@@ -440,6 +433,6 @@ export function reminderText(
   customer: string | null,
   s: { originIata: string; destinationIata: string; marketingCarrier: string; flightNumber: string; departureAtUtc: Date | null; departureTimezone: string },
 ): string {
-  const when = s.departureAtUtc ? formatAirportTimeUz(s.departureAtUtc, s.departureTimezone) : 'vaqti kiritilmagan';
-  return `Diqqat. ${orderNo} buyurtmasi bo‘yicha uchish yaqinlashmoqda. Mijoz: ${customer ?? '—'}. ${s.originIata}–${s.destinationIata}, ${s.marketingCarrier} ${s.flightNumber}, ${when}. Reys holati, uchish vaqti va aeroport ma’lumotlarini tekshiring. Natijani buyurtmada qayd eting.`;
+  const when = s.departureAtUtc ? formatAirportTimeRu(s.departureAtUtc, s.departureTimezone) : 'время не указано';
+  return `Внимание. По заказу ${orderNo} приближается вылет. Клиент: ${customer ?? '—'}. ${s.originIata}–${s.destinationIata}, ${s.marketingCarrier} ${s.flightNumber}, ${when}. Проверьте статус рейса, время вылета и данные аэропорта. Зафиксируйте результат в заказе.`;
 }

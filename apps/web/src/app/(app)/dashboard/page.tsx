@@ -42,15 +42,15 @@ interface Dash {
   finance: FinanceDash;
 }
 
-/** Tannarx/foyda maydonlari faqat `finance.cost.view` huquqi bo'lsa keladi (aks holda `costHidden=true`). */
+/** Поля себестоимости и прибыли приходят только при праве `finance.cost.view` (иначе `costHidden=true`). */
 interface Agg {
   sales: string;
   customerRefunded: string;
   ordersWithRefund: number;
   supplierRefunded?: string;
-  /** Dastlabki foyda: sotuv − tannarx (tannarxi aniq buyurtmalar bo'yicha). */
+  /** Первоначальная прибыль: продажа − себестоимость (по заказам с известной себестоимостью). */
   profitBasis?: { sales: string; net: string; profit: string; orders: number; marginPercent: string | null };
-  /** Qaytarimdan keyingi: (sotuv − mijozga qaytarilgan) − (tannarx − yetkazib beruvchidan qaytgan). */
+  /** После возвратов: (продажа − возвращено клиенту) − (себестоимость − возвращено поставщиком). */
   afterRefund?: { sales: string; net: string; profit: string; marginPercent: string | null };
   undetermined?: { orders: number; sales: string };
 }
@@ -83,9 +83,9 @@ interface FlightRow {
   operationalStatus: string;
 }
 
-/** Bugungi sana kompaniya vaqt zonasida (Asia/Tashkent), brauzer/UTC zonasida emas. */
+/** Сегодняшняя дата в часовом поясе компании (Asia/Tashkent), а не в поясе браузера/UTC. */
 const tashkentToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tashkent' }).format(new Date());
-const mins = (s: number | null) => (s === null ? '—' : `${Math.round(s / 60)} daq`);
+const mins = (s: number | null) => (s === null ? '—' : `${Math.round(s / 60)} мин.`);
 const initials = (name: string) =>
   name
     .replace(/\(.*?\)/g, '')
@@ -103,7 +103,7 @@ export default function DashboardPage() {
   const me = useMe();
   const router = useRouter();
   const defaults = () => ({ from: `${tashkentToday().slice(0, 8)}01`, to: tashkentToday(), source: '', bucket: 'day', operator: '', currency: '' });
-  // Qoralama (maydonlardagi qiymat) va qo'llangan filtr alohida: natijalar faqat «Qidirish» bosilganda yangilanadi.
+  // Черновик (значения в полях) и применённый фильтр раздельны: результаты обновляются только по кнопке «Найти».
   const [from, setFrom] = useState(() => isoToDmy(defaults().from));
   const [to, setTo] = useState(() => isoToDmy(defaults().to));
   const [source, setSource] = useState('');
@@ -116,8 +116,8 @@ export default function DashboardPage() {
   const apply = () => {
     const f = parseDmy(from);
     const t = parseDmy(to);
-    if (!f || !t) return setFilterError('Sanani DD.MM.YYYY ko‘rinishida kiriting (masalan, 25.10.2026).');
-    if (f > t) return setFilterError('Boshlanish sanasi tugash sanasidan keyin bo‘lishi mumkin emas.');
+    if (!f || !t) return setFilterError('Введите дату в формате ДД.ММ.ГГГГ (например, 25.10.2026).');
+    if (f > t) return setFilterError('Дата начала не может быть позже даты окончания.');
     setFilterError(null);
     setApplied({ from: f, to: t, source, bucket, operator, currency });
   };
@@ -143,10 +143,9 @@ export default function DashboardPage() {
     <>
       <header className="page-head">
         <div>
-          <h1>Boshqaruv paneli</h1>
+          <h1>Панель управления</h1>
           <p className="muted">
             {fmtDate(applied.from)} – {fmtDate(applied.to)}
-            {state.data ? ` · Oxirgi sinxronlash: ${fmtDateTime(state.data.dataQuality.lastSyncAt)}` : ''}
           </p>
         </div>
         <form
@@ -158,24 +157,24 @@ export default function DashboardPage() {
           }}
         >
           <Icon name="search" />
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Lid, mijoz, telefon, @username…" aria-label="Lid qidirish" />
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Лид, клиент, телефон, @username…" aria-label="Поиск лида" />
         </form>
-        <Link href="/notifications" className="iconbtn" aria-label={`Bildirishnomalar${unread ? `: ${unread} ta o‘qilmagan` : ''}`}>
+        <Link href="/notifications" className="iconbtn" aria-label={`Уведомления${unread ? `: непрочитанных ${unread}` : ''}`}>
           <Icon name="bell" size={20} />
           {unread > 0 && <span className="dot" aria-hidden="true" />}
         </Link>
       </header>
 
-      <section className="filter-card" aria-label="Filtrlar">
-        <Field label="Boshlanish (Asia/Tashkent)">
-          <DateInput value={from} onChange={setFrom} label="Boshlanish sanasi (DD.MM.YYYY)" />
+      <section className="filter-card" aria-label="Фильтры">
+        <Field label="Начало (Asia/Tashkent)">
+          <DateInput value={from} onChange={setFrom} label="Дата начала (ДД.ММ.ГГГГ)" />
         </Field>
-        <Field label="Tugash (kiradi)">
-          <DateInput value={to} onChange={setTo} label="Tugash sanasi (DD.MM.YYYY)" />
+        <Field label="Конец (включительно)">
+          <DateInput value={to} onChange={setTo} label="Дата окончания (ДД.ММ.ГГГГ)" />
         </Field>
-        <Field label="Birinchi manba">
+        <Field label="Источник">
           <select value={source} onChange={(e) => setSource(e.target.value)}>
-            <option value="">Barchasi</option>
+            <option value="">Все</option>
             {Object.entries(SOURCE_LABELS).map(([k, v]) => (
               <option key={k} value={k}>
                 {v}
@@ -183,20 +182,20 @@ export default function DashboardPage() {
             ))}
           </select>
         </Field>
-        <Field label="Turoperator">
+        <Field label="Туроператор">
           <select value={operator} onChange={(e) => setOperator(e.target.value)}>
-            <option value="">Barchasi</option>
+            <option value="">Все</option>
             {(operators.data?.items ?? []).map((o) => (
               <option key={o.id} value={o.id}>
                 {o.name}
-                {o.status === 'archived' ? ' (arxiv)' : ''}
+                {o.status === 'archived' ? ' (архив)' : ''}
               </option>
             ))}
           </select>
         </Field>
-        <Field label="Valyuta">
+        <Field label="Валюта">
           <select value={currency} onChange={(e) => setCurrency(e.target.value)}>
-            <option value="">Barchasi</option>
+            <option value="">Все</option>
             {CURRENCIES.map((c) => (
               <option key={c} value={c}>
                 {c}
@@ -204,31 +203,31 @@ export default function DashboardPage() {
             ))}
           </select>
         </Field>
-        <Field label="Kesim">
+        <Field label="Группировка">
           <select value={bucket} onChange={(e) => setBucket(e.target.value)}>
-            <option value="day">Kun</option>
-            <option value="week">Hafta</option>
-            <option value="month">Oy</option>
+            <option value="day">По дням</option>
+            <option value="week">По неделям</option>
+            <option value="month">По месяцам</option>
           </select>
         </Field>
         <div className="filter-actions" style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
           <button className="btn" type="button" onClick={apply}>
-            Qidirish
+            Найти
           </button>
           <button className="btn secondary" type="button" onClick={clear}>
-            Tozalash
+            Сбросить
           </button>
         </div>
         {canDo(me, 'export') && (
           <a className="btn secondary with-icon" href={`/api/v1/exports/leads.csv?${q}`}>
             <Icon name="download" size={16} />
-            CSV eksport
+            Экспорт лидов (CSV)
           </a>
         )}
         {canDo(me, 'export') && (
           <a className="btn secondary with-icon" href={`/api/v1/exports/orders.csv?${q}`}>
             <Icon name="download" size={16} />
-            Buyurtmalar CSV (foyda)
+            Экспорт заказов (CSV, прибыль)
           </a>
         )}
       </section>
@@ -249,10 +248,10 @@ export default function DashboardPage() {
           return (
             <>
               <div className="stat-row">
-                <Stat icon="leads" label="Yangi lidlar" value={pm.newLeads} note={`${pm.inquiries} ta unique murojaat`} />
-                <Stat icon="chart" label="Kohorta konversiyasi" value={pm.cohortConversion.display} note={`${pm.cohortConversion.numerator}/${pm.cohortConversion.denominator} lid → sotuv`} />
-                <Stat icon="wallet" label="Sotuv summasi (foyda emas)" value={money(pm.salesByCurrency)} note={`Qabul qilingan to‘lov: ${money(pm.paymentsByCurrency)}`} />
-                <Stat icon="clock" label="Birinchi javob (median / p90)" value={`${mins(fr.medianSeconds)} / ${mins(fr.p90Seconds)}`} note={`Kuzatilgan ${fr.observed}, javobsiz ${fr.unanswered}`} />
+                <Stat icon="leads" label="Новые лиды" value={pm.newLeads} note={`Уникальных обращений: ${pm.inquiries}`} />
+                <Stat icon="chart" label="Конверсия когорты" value={pm.cohortConversion.display} note={`${pm.cohortConversion.numerator}/${pm.cohortConversion.denominator} лидов → продажа`} />
+                <Stat icon="wallet" label="Сумма продаж (не прибыль)" value={money(pm.salesByCurrency)} note={`Получено платежей: ${money(pm.paymentsByCurrency)}`} />
+                <Stat icon="clock" label="Первый ответ (медиана / p90)" value={`${mins(fr.medianSeconds)} / ${mins(fr.p90Seconds)}`} note={`Наблюдений ${fr.observed}, без ответа ${fr.unanswered}`} />
               </div>
 
               <FinanceBlock f={d.finance} />
@@ -260,8 +259,8 @@ export default function DashboardPage() {
               <div className="dash-grid">
                 <section className="card panel">
                   <header className="card-head">
-                    <h2>Savdo voronkasi</h2>
-                    <span className="muted">hozirgi holat · {fmtDateTime(d.snapshot.asOf)}</span>
+                    <h2>Воронка продаж</h2>
+                    <span className="muted">текущее состояние · {fmtDateTime(d.snapshot.asOf)}</span>
                   </header>
                   <div className="funnel">
                     {funnelStages.map((k) => {
@@ -290,14 +289,14 @@ export default function DashboardPage() {
 
                 <section className="card panel">
                   <header className="card-head">
-                    <h2>Menejerlar</h2>
-                    <span className="muted">tanlangan davr</span>
+                    <h2>Менеджеры</h2>
+                    <span className="muted">выбранный период</span>
                   </header>
                   <div className="mgr-head" aria-hidden="true">
-                    <span>Menejer</span>
-                    <span>Lid</span>
-                    <span>Konv.</span>
-                    <span>Summa</span>
+                    <span>Менеджер</span>
+                    <span>Лиды</span>
+                    <span>Конв.</span>
+                    <span>Сумма</span>
                   </div>
                   {d.managers.map((m) => (
                     <div key={m.userId ?? 'none'} className="mgr-row">
@@ -308,7 +307,7 @@ export default function DashboardPage() {
                         <span>
                           <b>{m.name}</b>
                           <small className="muted">
-                            {m.won} sotuv · {m.inProgress} jarayonda
+                            {m.won} продаж · {m.inProgress} в работе
                           </small>
                           <span className="mini-track" aria-hidden="true">
                             <span style={{ width: `${(m.newLeads / maxLeads) * 100}%` }} />
@@ -326,35 +325,35 @@ export default function DashboardPage() {
 
               <FlightsCard state={flights} />
 
-              <h2 className="section-title">Qo‘shimcha ko‘rsatkichlar</h2>
+              <h2 className="section-title">Дополнительные показатели</h2>
               <p className="muted">
-                Ma’lumotlar to‘liq yig‘ila boshlangan sana: {fmtDateTime(d.dataQuality.dataCollectionStartedAt)}
+                Полный сбор данных начался: {fmtDateTime(d.dataQuality.dataCollectionStartedAt)}
               </p>
               <div className="grid" style={{ margin: '10px 0 18px' }}>
-                <Kpi label="Murojaatlar (unique)" value={pm.inquiries} />
-                <Kpi label="Ads lidlari" value={pm.adsLeads} />
-                <Kpi label="Direct lidlari" value={pm.directLeads} />
-                <Kpi label="Qayta ishlangan" value={pm.processed} />
-                <Kpi label="Muvaffaqiyatli sotuvlar" value={pm.won} />
-                <Kpi label="Bekor qilingan lidlar" value={pm.lost} />
-                <Kpi label="Bekor qilingan buyurtmalar" value={pm.cancelledOrders} />
-                <Kpi label="Yopilganlar konversiyasi" value={pm.closedConversion.display} hint={`${pm.closedConversion.numerator}/${pm.closedConversion.denominator}`} />
-                <Kpi label="Qaytarim" value={money(pm.refundsByCurrency)} />
-                <Kpi label="Ish vaqti bo‘yicha birinchi javob (median)" value={fr.slaWorkingMinutesMedian === null ? '—' : `${fr.slaWorkingMinutesMedian} daq`} />
-                <Kpi label="Jarayonda (snapshot)" value={d.snapshot.inProgress} />
-                <Kpi label="Javob kutilmoqda (snapshot)" value={d.snapshot.awaitingReply} />
+                <Kpi label="Обращения (уникальные)" value={pm.inquiries} />
+                <Kpi label="Лиды из рекламы" value={pm.adsLeads} />
+                <Kpi label="Лиды из Direct" value={pm.directLeads} />
+                <Kpi label="Обработано" value={pm.processed} />
+                <Kpi label="Успешные продажи" value={pm.won} />
+                <Kpi label="Отменённые лиды" value={pm.lost} />
+                <Kpi label="Отменённые заказы" value={pm.cancelledOrders} />
+                <Kpi label="Конверсия закрытых" value={pm.closedConversion.display} hint={`${pm.closedConversion.numerator}/${pm.closedConversion.denominator}`} />
+                <Kpi label="Возвраты" value={money(pm.refundsByCurrency)} />
+                <Kpi label="Первый ответ в рабочее время (медиана)" value={fr.slaWorkingMinutesMedian === null ? '—' : `${fr.slaWorkingMinutesMedian} мин.`} />
+                <Kpi label="В работе (срез)" value={d.snapshot.inProgress} />
+                <Kpi label="Ожидают ответа (срез)" value={d.snapshot.awaitingReply} />
               </div>
 
               <div className="split">
                 <section className="card panel">
                   <header className="card-head">
-                    <h2>Kunlar bo‘yicha</h2>
+                    <h2>Динамика</h2>
                   </header>
                   <Bars rows={d.series.map((s) => ({ label: s.bucket, a: s.newLeads, b: s.won }))} />
                 </section>
                 <section className="card panel">
                   <header className="card-head">
-                    <h2>Manbalar (birinchi manba)</h2>
+                    <h2>Источники</h2>
                   </header>
                   {Object.entries(pm.bySource).map(([k, v]) => (
                     <div key={k} className="source-row">
@@ -363,7 +362,7 @@ export default function DashboardPage() {
                     </div>
                   ))}
                   <p className="muted">
-                    <Badge tone="info">CPL/ROAS</Badge> reklama sarfi ma’lumoti ulanmagani uchun hisoblanmaydi. {d.notes.currency}
+                    <Badge tone="info">CPL/ROAS</Badge> не считаются: данные о рекламных расходах не подключены. {d.notes.currency}
                   </p>
                 </section>
               </div>
@@ -388,38 +387,38 @@ interface DashLead {
   telegramUsername: string | null;
 }
 
-/** Filtrga mos lidlar (yaratilgan sana bo'yicha): yuklanish, xato va bo'sh natija alohida ko'rinadi; eski davr natijasi saqlanmaydi. */
+/** Лиды по фильтру (по дате создания): загрузка, ошибка и пустой результат показываются отдельно; результат прошлого периода не сохраняется. */
 function DashLeads({ query }: { query: string }) {
   const res = useApi<{ total: number; truncated: boolean; items: DashLead[] }>(`/api/v1/dashboard/leads?${query}`, { reset: true });
   const team = useApi<{ items: Array<{ id: string; fullName: string }> }>('/api/v1/team');
-  const owner = (id: string | null) => team.data?.items.find((u) => u.id === id)?.fullName ?? (id ? '—' : 'Taqsimlanmagan');
+  const owner = (id: string | null) => team.data?.items.find((u) => u.id === id)?.fullName ?? (id ? '—' : 'Не назначен');
   return (
-    <section className="card panel" aria-label="Filtrga mos lidlar">
+    <section className="card panel" aria-label="Лиды по фильтру">
       <header className="card-head">
-        <h2>Filtrga mos lidlar</h2>
-        <span className="muted">{res.data ? `Topilgan lidlar: ${res.data.total}${res.data.truncated ? ` (birinchi ${res.data.items.length} tasi ko‘rsatilgan)` : ''}` : ''}</span>
+        <h2>Лиды по фильтру</h2>
+        <span className="muted">{res.data ? `Найдено лидов: ${res.data.total}${res.data.truncated ? ` (показаны первые ${res.data.items.length})` : ''}` : ''}</span>
       </header>
-      {res.loading && !res.data && <div className="state">Yuklanmoqda…</div>}
+      {res.loading && !res.data && <div className="state">Загрузка…</div>}
       {res.error && !res.data && (
         <div className="state error" role="alert">
-          So‘rov xatosi: {res.error.message}{' '}
+          Ошибка запроса: {res.error.message}{' '}
           <button className="btn secondary" type="button" onClick={() => void res.reload()}>
-            Qayta urinish
+            Повторить
           </button>
         </div>
       )}
-      {res.data && res.data.items.length === 0 && <div className="state empty">Tanlangan davrda ma’lumot topilmadi</div>}
+      {res.data && res.data.items.length === 0 && <div className="state empty">За выбранный период данных нет</div>}
       {res.data && res.data.items.length > 0 && (
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Mijoz / @username</th>
-                <th>Manba</th>
-                <th>Mas’ul</th>
-                <th>Bosqich</th>
-                <th>Yaratilgan</th>
-                <th>Karta</th>
+                <th>Клиент / @username</th>
+                <th>Источник</th>
+                <th>Ответственный</th>
+                <th>Этап</th>
+                <th>Создан</th>
+                <th>Карточка</th>
               </tr>
             </thead>
             <tbody>
@@ -448,25 +447,25 @@ function DashLeads({ query }: { query: string }) {
 
 const isNeg = (v: string) => v.startsWith('-');
 
-/** Foyda: tannarxi aniq buyurtma bo'lmasa «Aniqlanmagan» (0 emas); qisman bo'lsa belgi bilan. */
+/** Прибыль: если нет заказов с известной себестоимостью — «Не определена» (не 0); при частичных данных — со значком. */
 function ProfitText({ a, c }: { a: Agg; c: string }) {
-  if (!a.profitBasis || a.profitBasis.orders === 0) return <Badge tone="warn">Aniqlanmagan</Badge>;
+  if (!a.profitBasis || a.profitBasis.orders === 0) return <Badge tone="warn">Не определена</Badge>;
   return (
     <>
       <b className={a.profitBasis.profit.startsWith('-') ? 'neg' : 'pos'}>{money({ [c]: a.profitBasis.profit })}</b>
       {a.afterRefund && a.ordersWithRefund > 0 && (
         <div className="muted">
-          qaytarimdan keyin: <b className={a.afterRefund.profit.startsWith('-') ? 'neg' : 'pos'}>{money({ [c]: a.afterRefund.profit })}</b>
+          после возвратов: <b className={a.afterRefund.profit.startsWith('-') ? 'neg' : 'pos'}>{money({ [c]: a.afterRefund.profit })}</b>
         </div>
       )}
-      {a.undetermined && a.undetermined.orders > 0 && <span className="muted" title="Tannarxi kiritilmagan buyurtmalar foydaga kirmaydi"> *</span>}
+      {a.undetermined && a.undetermined.orders > 0 && <span className="muted" title="Заказы без указанной себестоимости в прибыль не входят"> *</span>}
     </>
   );
 }
 const profitCls = (v: string) => (isNeg(v) ? 'neg' : 'pos');
 const sel = (m: Record<string, unknown>) => Object.keys(m);
 
-/** Tasdiqlangan sotuvlar bo'yicha sotuv / tannarx / foyda (valyutalar alohida), kutilayotgan foyda va kesimlar. */
+/** Подтверждённые продажи: продажа / себестоимость / прибыль (валюты отдельно), ожидаемая прибыль и разрезы. */
 function FinanceBlock({ f }: { f: FinanceDash }) {
   const ccys = sel(f.confirmed);
   const cost = !f.costHidden;
@@ -479,15 +478,15 @@ function FinanceBlock({ f }: { f: FinanceDash }) {
       <span className="muted">—</span>
     );
   return (
-    <section className="finance-block" aria-label="Moliyaviy ko‘rsatkichlar">
+    <section className="finance-block" aria-label="Финансовые показатели">
       <div className="card panel">
         <header className="card-head">
-          <h2>{cost ? 'Moliya: sotuv, tannarx va foyda' : 'Moliya: sotuv va qaytarimlar'}</h2>
-          <span className="muted">tasdiqlangan sotuvlar · valyutalar alohida</span>
+          <h2>{cost ? 'Финансы: продажи, себестоимость и прибыль' : 'Финансы: продажи и возвраты'}</h2>
+          <span className="muted">подтверждённые продажи · валюты отдельно</span>
         </header>
-        {!cost && <p className="muted">Tannarx va foyda ko‘rinmaydi: alohida ruxsat kerak.</p>}
+        {!cost && <p className="muted">Себестоимость и прибыль не отображаются: нужно отдельное разрешение.</p>}
         {ccys.length === 0 ? (
-          <div className="state empty">Tanlangan davrda tasdiqlangan (yopilgan) sotuv yo‘q.</div>
+          <div className="state empty">За выбранный период подтверждённых (закрытых) продаж нет.</div>
         ) : (
           ccys.map((c) => {
             const a = f.confirmed[c]!;
@@ -497,56 +496,56 @@ function FinanceBlock({ f }: { f: FinanceDash }) {
                 <h3 className="fin-ccy-title">{c}</h3>
                 <div className="stat-row">
                   <div className="stat">
-                    <div className="stat-label">Jami sotuv summasi</div>
+                    <div className="stat-label">Общая сумма продаж</div>
                     <div className="stat-value">{fmtAmount(a.sales)} <small>{CURRENCY_LABEL[c] ?? c}</small></div>
-                    <div className="stat-note">barcha tasdiqlangan buyurtmalar</div>
+                    <div className="stat-note">все подтверждённые заказы</div>
                   </div>
                   <div className="stat">
-                    <div className="stat-label">Mijozga qaytarilgan</div>
+                    <div className="stat-label">Возвращено клиенту</div>
                     <div className="stat-value">{fmtAmount(a.customerRefunded)} <small>{CURRENCY_LABEL[c] ?? c}</small></div>
-                    <div className="stat-note">{a.ordersWithRefund} ta buyurtmada qaytarim bor</div>
+                    <div className="stat-note">заказов с возвратом: {a.ordersWithRefund}</div>
                   </div>
                   {cost && pb && (
                     <>
                       <div className="stat">
-                        <div className="stat-label">Jami tannarx</div>
+                        <div className="stat-label">Общая себестоимость</div>
                         {pb.orders === 0 ? <div className="stat-value">—</div> : <div className="stat-value">{fmtAmount(pb.net)} <small>{CURRENCY_LABEL[c] ?? c}</small></div>}
-                        <div className="stat-note">{pb.orders === 0 ? 'tannarxi ma’lum buyurtma yo‘q' : `tannarxi ma’lum ${pb.orders} ta buyurtma bo‘yicha`}</div>
+                        <div className="stat-note">{pb.orders === 0 ? 'нет заказов с известной себестоимостью' : `по заказам с известной себестоимостью: ${pb.orders}`}</div>
                       </div>
                       <div className="stat">
-                        <div className="stat-label">Dastlabki foyda</div>
+                        <div className="stat-label">Первоначальная прибыль</div>
                         {pb.orders === 0 ? (
                           <div className="stat-value">
-                            <Badge tone="warn">Aniqlanmagan</Badge>
+                            <Badge tone="warn">Не определена</Badge>
                           </div>
                         ) : (
                           <div className={`stat-value ${profitCls(pb.profit)}`}>{fmtAmount(pb.profit)} <small>{CURRENCY_LABEL[c] ?? c}</small></div>
                         )}
                         <div className="stat-note">
-                          {pb.orders === 0 ? 'tannarx kiritilmaguncha hisoblanmaydi' : `sotuv ${fmtAmount(pb.sales)} − tannarx ${fmtAmount(pb.net)}`}
-                          {pb.orders > 0 && pb.marginPercent !== null && ` · marja ${pb.marginPercent.replace('.', ',')}%`}
+                          {pb.orders === 0 ? 'не считается, пока не указана себестоимость' : `продажа ${fmtAmount(pb.sales)} − себестоимость ${fmtAmount(pb.net)}`}
+                          {pb.orders > 0 && pb.marginPercent !== null && ` · маржа ${pb.marginPercent.replace('.', ',')}%`}
                         </div>
                       </div>
                       <div className="stat">
-                        <div className="stat-label">Yetkazib beruvchidan qaytgan</div>
+                        <div className="stat-label">Возвращено поставщиком</div>
                         <div className="stat-value">{fmtAmount(a.supplierRefunded ?? '0.00')} <small>{CURRENCY_LABEL[c] ?? c}</small></div>
-                        <div className="stat-note">tannarxni qaytarish (mijoz qaytarimidan alohida)</div>
+                        <div className="stat-note">возврат себестоимости (отдельно от возврата клиенту)</div>
                       </div>
                       <div className="stat">
-                        <div className="stat-label">Qaytarimdan keyingi foyda</div>
+                        <div className="stat-label">Прибыль после возвратов</div>
                         {pb.orders === 0 || !a.afterRefund ? (
                           <div className="stat-value">
-                            <Badge tone="warn">Aniqlanmagan</Badge>
+                            <Badge tone="warn">Не определена</Badge>
                           </div>
                         ) : (
                           <div className={`stat-value ${profitCls(a.afterRefund.profit)}`}>{fmtAmount(a.afterRefund.profit)} <small>{CURRENCY_LABEL[c] ?? c}</small></div>
                         )}
-                        <div className="stat-note">{a.afterRefund ? `(${fmtAmount(a.afterRefund.sales)}) − (${fmtAmount(a.afterRefund.net)})` : 'tannarx kiritilmaguncha hisoblanmaydi'}</div>
+                        <div className="stat-note">{a.afterRefund ? `(${fmtAmount(a.afterRefund.sales)}) − (${fmtAmount(a.afterRefund.net)})` : 'не считается, пока не указана себестоимость'}</div>
                       </div>
                       <div className="stat">
-                        <div className="stat-label">Foyda aniqlanmagan</div>
-                        <div className="stat-value">{a.undetermined?.orders ?? 0} <small>ta buyurtma</small></div>
-                        <div className="stat-note">tannarx kiritilmagan; sotuvi {fmtAmount(a.undetermined?.sales ?? '0.00')} {CURRENCY_LABEL[c] ?? c} — foydaga kirmaydi, 0 deb hisoblanmaydi</div>
+                        <div className="stat-label">Прибыль не определена</div>
+                        <div className="stat-value">{a.undetermined?.orders ?? 0} <small>заказов</small></div>
+                        <div className="stat-note">себестоимость не указана; продажи {fmtAmount(a.undetermined?.sales ?? '0.00')} {CURRENCY_LABEL[c] ?? c} в прибыль не входят и не считаются за 0</div>
                       </div>
                     </>
                   )}
@@ -555,40 +554,40 @@ function FinanceBlock({ f }: { f: FinanceDash }) {
             );
           })
         )}
-        {f.unpricedOrders > 0 && <p className="hint">Narxi umuman kiritilmagan tasdiqlangan buyurtmalar: {f.unpricedOrders} ta.</p>}
-        {cost && !!f.refundMismatchOrders && <div className="state error">{f.refundMismatchOrders} ta buyurtmada qaytarim valyutasi narx valyutasiga mos emas — ularning qaytarimdan keyingi foydasi hisoblanmadi.</div>}
+        {f.unpricedOrders > 0 && <p className="hint">Подтверждённых заказов без цены: {f.unpricedOrders}.</p>}
+        {cost && !!f.refundMismatchOrders && <div className="state error">В заказах с несовпадением валюты возврата и цены: {f.refundMismatchOrders} — их прибыль после возвратов не рассчитана.</div>}
         <div className="fin-extra">
           {cost && (
             <div>
-              <b>Kutilayotgan foyda</b> <span className="muted">(ochiq buyurtmalar, tasdiqlanmagan)</span>
+              <b>Ожидаемая прибыль</b> <span className="muted">(открытые заказы, не подтверждены)</span>
               {sel(f.expected).length === 0 ? (
                 <div className="muted">—</div>
               ) : (
                 sel(f.expected).map((c) => (
                   <div key={c}>
-                    <b className={profitCls(f.expected[c]!.profit)}>{money({ [c]: f.expected[c]!.profit })}</b> <span className="muted">· {f.expected[c]!.orders} ta buyurtma{f.expected[c]!.undeterminedOrders ? `, ${f.expected[c]!.undeterminedOrders} tasida tannarx yo‘q` : ''}</span>
+                    <b className={profitCls(f.expected[c]!.profit)}>{money({ [c]: f.expected[c]!.profit })}</b> <span className="muted">· заказов: {f.expected[c]!.orders}{f.expected[c]!.undeterminedOrders ? `, без себестоимости: ${f.expected[c]!.undeterminedOrders}` : ''}</span>
                   </div>
                 ))
               )}
             </div>
           )}
           <div>
-            <b>Bekor qilingan buyurtmalar</b> <span className="muted">(jamiga kirmaydi, tarixda saqlanadi)</span>
-            {sel(f.cancelled).length === 0 ? <div className="muted">—</div> : sel(f.cancelled).map((c) => <div key={c}>{money({ [c]: f.cancelled[c]!.sales })} <span className="muted">· {f.cancelled[c]!.orders} ta</span></div>)}
+            <b>Отменённые заказы</b> <span className="muted">(в итог не входят, хранятся в истории)</span>
+            {sel(f.cancelled).length === 0 ? <div className="muted">—</div> : sel(f.cancelled).map((c) => <div key={c}>{money({ [c]: f.cancelled[c]!.sales })} <span className="muted">· {f.cancelled[c]!.orders} шт.</span></div>)}
           </div>
         </div>
         <details className="fin-rules">
-          <summary>Hisoblash qoidalari</summary>
+          <summary>Правила расчёта</summary>
           <ul>
             {cost && (
               <>
                 <li>
-                  <b>Dastlabki foyda = sotuv narxi − tannarx.</b>
+                  <b>Первоначальная прибыль = цена продажи − себестоимость.</b>
                 </li>
                 <li>
-                  <b>Qaytarimdan keyingi foyda = (sotuv − mijozga qaytarilgan) − (tannarx − yetkazib beruvchidan qaytgan).</b>
+                  <b>Прибыль после возвратов = (продажа − возвращено клиенту) − (себестоимость − возвращено поставщиком).</b>
                 </li>
-                <li>Qo‘shimcha xarajatlar hisobga olinmagan: bu buxgalteriya bo‘yicha yakuniy «sof foyda» emas.</li>
+                <li>Дополнительные расходы не учтены: это не итоговая «чистая прибыль» по бухгалтерии.</li>
               </>
             )}
             {Object.entries(f.rules).map(([k, v]) => (
@@ -601,20 +600,20 @@ function FinanceBlock({ f }: { f: FinanceDash }) {
       <div className="dash-grid">
         <section className="card panel">
           <header className="card-head">
-            <h2>Turoperatorlar kesimida</h2>
-            <span className="muted">{cost ? 'sotuv va foyda (turoperator — buyurtmaning tarixiy bog‘lanishi)' : 'sotuv'}</span>
+            <h2>По туроператорам</h2>
+            <span className="muted">{cost ? 'продажи и прибыль (туроператор — историческая связь заказа)' : 'продажи'}</span>
           </header>
           {f.byOperator.length === 0 ? (
-            <div className="state empty">Ma’lumot yo‘q</div>
+            <div className="state empty">Нет данных</div>
           ) : (
             <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>Turoperator</th>
-                    <th>Buyurtma</th>
-                    <th>Sotuv</th>
-                    {cost && <th>Foyda</th>}
+                    <th>Туроператор</th>
+                    <th>Заказы</th>
+                    <th>Продажи</th>
+                    {cost && <th>Прибыль</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -622,7 +621,7 @@ function FinanceBlock({ f }: { f: FinanceDash }) {
                     <tr key={r.operatorId ?? 'none'}>
                       <td>
                         <b>{r.name}</b>
-                        {cost && !!r.undeterminedOrders && <div className="muted">foyda aniqlanmagan: {r.undeterminedOrders} ta</div>}
+                        {cost && !!r.undeterminedOrders && <div className="muted">прибыль не определена: {r.undeterminedOrders} шт.</div>}
                       </td>
                       <td>{r.orders}</td>
                       <td>{cell(r.currencies, (a, c) => money({ [c]: a.sales }))}</td>
@@ -636,20 +635,20 @@ function FinanceBlock({ f }: { f: FinanceDash }) {
         </section>
         <section className="card panel">
           <header className="card-head">
-            <h2>Menejerlar kesimida</h2>
-            <span className="muted">{cost ? 'sotuv va foyda (yopilish paytidagi mas’ul)' : 'sotuv (yopilish paytidagi mas’ul)'}</span>
+            <h2>По менеджерам</h2>
+            <span className="muted">{cost ? 'продажи и прибыль (ответственный на момент закрытия)' : 'продажи (ответственный на момент закрытия)'}</span>
           </header>
           {f.byManager.length === 0 ? (
-            <div className="state empty">Ma’lumot yo‘q</div>
+            <div className="state empty">Нет данных</div>
           ) : (
             <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>Menejer</th>
-                    <th>Buyurtma</th>
-                    <th>Sotuv</th>
-                    {cost && <th>Foyda</th>}
+                    <th>Менеджер</th>
+                    <th>Заказы</th>
+                    <th>Продажи</th>
+                    {cost && <th>Прибыль</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -657,7 +656,7 @@ function FinanceBlock({ f }: { f: FinanceDash }) {
                     <tr key={r.userId ?? 'none'}>
                       <td>
                         <b>{r.name}</b>
-                        {cost && !!r.undeterminedOrders && <div className="muted">foyda aniqlanmagan: {r.undeterminedOrders} ta</div>}
+                        {cost && !!r.undeterminedOrders && <div className="muted">прибыль не определена: {r.undeterminedOrders} шт.</div>}
                       </td>
                       <td>{r.orders}</td>
                       <td>{cell(r.currencies, (a, c) => money({ [c]: a.sales }))}</td>
@@ -690,42 +689,42 @@ function Stat({ icon, label, value, note }: { icon: IconName; label: string; val
 }
 
 function FlightsCard({ state }: { state: Loadable<{ items: FlightRow[] }> }) {
-  // Reys ma’lumotlari bu rol uchun ochiq bo‘lmasa (403) yoki hali yuklanmagan bo‘lsa, blok ko‘rsatilmaydi.
+  // Если данные о рейсах недоступны для роли (403) или ещё не загружены, блок не показывается.
   if (!state.data) return null;
   const rows = state.data.items.slice(0, 5);
   return (
     <section className="card panel">
       <header className="card-head">
-        <h2>Yaqin reyslar</h2>
-        <span className="legend" aria-label="Rang belgilari">
+        <h2>Ближайшие рейсы</h2>
+        <span className="legend" aria-label="Обозначения цветов">
           <span>
             <i className="sw brand" />
-            Brend urg‘usi
+            Фирменный акцент
           </span>
           <span>
             <i className="sw bad" />
-            Tekshirish kerak
+            Нужна проверка
           </span>
           <span>
             <i className="sw cancel" />
-            Bekor qilingan
+            Отменён
           </span>
         </span>
       </header>
       {rows.length === 0 ? (
-        <div className="state empty">Yaqin reyslar yo‘q</div>
+        <div className="state empty">Ближайших рейсов нет</div>
       ) : (
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Reys</th>
-                <th>Yo‘nalish</th>
-                <th>Uchish</th>
-                <th>Mijoz</th>
-                <th>Mas’ul</th>
-                <th>Qoldi</th>
-                <th>Holat</th>
+                <th>Рейс</th>
+                <th>Маршрут</th>
+                <th>Вылет</th>
+                <th>Клиент</th>
+                <th>Ответственный</th>
+                <th>Осталось</th>
+                <th>Статус</th>
               </tr>
             </thead>
             <tbody>
@@ -771,11 +770,11 @@ function FlightsCard({ state }: { state: Loadable<{ items: FlightRow[] }> }) {
 }
 
 function flightState(s: FlightRow): { tone: 'ok' | 'warn' | 'bad' | 'cancel' | 'neutral'; icon: IconName; label: string; cancelled: boolean } {
-  if (s.operationalStatus === 'cancelled') return { tone: 'cancel', icon: 'x', label: 'Bekor qilingan', cancelled: true };
-  if (s.operationalStatus === 'schedule_changed') return { tone: 'warn', icon: 'clock', label: 'Vaqt o‘zgardi', cancelled: false };
-  if (s.checkState === 'due' || s.checkState === 'recheck_required') return { tone: 'bad', icon: 'alert', label: 'Tekshirish kerak', cancelled: false };
-  if (s.checkState === 'checked') return { tone: 'ok', icon: 'check', label: 'Tekshirilgan', cancelled: false };
-  return { tone: 'neutral', icon: 'clock', label: 'Kutilmoqda', cancelled: false };
+  if (s.operationalStatus === 'cancelled') return { tone: 'cancel', icon: 'x', label: 'Отменён', cancelled: true };
+  if (s.operationalStatus === 'schedule_changed') return { tone: 'warn', icon: 'clock', label: 'Время изменилось', cancelled: false };
+  if (s.checkState === 'due' || s.checkState === 'recheck_required') return { tone: 'bad', icon: 'alert', label: 'Нужна проверка', cancelled: false };
+  if (s.checkState === 'checked') return { tone: 'ok', icon: 'check', label: 'Проверен', cancelled: false };
+  return { tone: 'neutral', icon: 'clock', label: 'Ожидает', cancelled: false };
 }
 
 function timeLeft(utc: string | null): string {
@@ -783,7 +782,7 @@ function timeLeft(utc: string | null): string {
   const ms = new Date(utc).getTime() - Date.now();
   if (ms <= 0) return '—';
   const h = Math.floor(ms / 3_600_000);
-  return h >= 24 ? `${Math.floor(h / 24)} kun` : `${h} soat`;
+  return h >= 24 ? `${Math.floor(h / 24)} дн.` : `${h} ч.`;
 }
 
 function Kpi({ label, value, hint }: { label: string; value: string | number; hint?: ReactNode }) {
@@ -798,9 +797,9 @@ function Kpi({ label, value, hint }: { label: string; value: string | number; hi
 
 function Bars({ rows }: { rows: Array<{ label: string; a: number; b: number }> }) {
   const max = Math.max(1, ...rows.map((r) => r.a));
-  if (!rows.length) return <div className="state empty">Tanlangan davrda lid yo‘q</div>;
+  if (!rows.length) return <div className="state empty">За выбранный период лидов нет</div>;
   return (
-    <div role="table" aria-label="Yangi lidlar va sotuvlar">
+    <div role="table" aria-label="Новые лиды и продажи">
       {rows.map((r) => (
         <div key={r.label} role="row" style={{ display: 'grid', gridTemplateColumns: '90px 1fr 70px', gap: 8, alignItems: 'center', marginBottom: 4 }}>
           <span role="cell" className="muted">
@@ -810,7 +809,7 @@ function Bars({ rows }: { rows: Array<{ label: string; a: number; b: number }> }
             <div className="bar" style={{ width: `${(r.a / max) * 100}%` }} />
           </span>
           <span role="cell">
-            {r.a} / {r.b} WON
+            {r.a} / {r.b} продаж
           </span>
         </div>
       ))}

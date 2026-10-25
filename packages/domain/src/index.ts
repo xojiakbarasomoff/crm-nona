@@ -11,3 +11,4 @@ export * from './kpi';
 export * from './messaging-policy';
 export * from './misc';
 export * from './rbac';
+export * from './labels';

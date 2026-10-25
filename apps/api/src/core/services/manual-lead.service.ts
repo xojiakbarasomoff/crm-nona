@@ -66,7 +66,7 @@ export class ManualLeadService {
     if (!t) return null;
     const r = normalizePhone(t, await this.phoneRule(companyId));
     if (r.status === 'ok') return { normalized: r.normalized, original: r.original };
-    throw unprocessable('PHONE_INVALID', r.status === 'needs_review' ? 'Telefon raqamini davlat kodi bilan kiriting (masalan, +998901234567)' : 'Telefon raqami noto‘g‘ri', { phone: r.status === 'needs_review' ? 'needs_country_code' : 'invalid' });
+    throw unprocessable('PHONE_INVALID', r.status === 'needs_review' ? 'Введите номер телефона с кодом страны (например, +998901234567)' : 'Неверный номер телефона', { phone: r.status === 'needs_review' ? 'needs_country_code' : 'invalid' });
   }
 
   /** Telefon boshqa faol kontaktlarda bormi (shu kontaktning o'zi hisobga olinmaydi). Menejerga faqat o'zining yoki egasiz kontaktlari ko'rsatiladi. */
@@ -85,15 +85,15 @@ export class ManualLeadService {
   }
 
   private phoneConflict(h: { total: number; visible: unknown[] }) {
-    return new AppError(409, 'PHONE_EXISTS', 'Bu telefon raqami boshqa kontaktda mavjud. Mavjud kontaktni tanlang yoki yangisini yarating.', undefined, { candidates: h.visible, hiddenCount: h.total - h.visible.length });
+    return new AppError(409, 'PHONE_EXISTS', 'Этот номер телефона уже есть у другого контакта. Выберите существующий контакт или создайте новый.', undefined, { candidates: h.visible, hiddenCount: h.total - h.visible.length });
   }
 
   async create(actor: UserActor, input: ManualLeadInput) {
     const first = clean(input.firstName);
     const last = clean(input.lastName);
     const tg = normalizeTelegram(input.telegram);
-    if (tg === 'invalid') throw unprocessable('TELEGRAM_INVALID', 'Telegram username noto‘g‘ri (5–32 belgi: harf, raqam, pastki chiziq)', { telegram: 'invalid' });
-    if (!input.existingContactId && !first && !last) throw unprocessable('NAME_REQUIRED', 'Ism yoki familiyadan kamida bittasini kiriting', { firstName: 'required', lastName: 'required' });
+    if (tg === 'invalid') throw unprocessable('TELEGRAM_INVALID', 'Неверный Telegram username (5–32 символа: буквы, цифры, подчёркивание)', { telegram: 'invalid' });
+    if (!input.existingContactId && !first && !last) throw unprocessable('NAME_REQUIRED', 'Укажите хотя бы имя или фамилию', { firstName: 'required', lastName: 'required' });
     const phone = input.existingContactId ? null : await this.parsePhone(actor.companyId, input.phone);
     const note = clean(input.note);
     const leadTitle = clean(input.name);
@@ -101,11 +101,11 @@ export class ManualLeadService {
     // Mas'ul: menejer — faqat o'zi; rahbar/admin — tanlagan xodim yoki mavjud tayinlash qoidalari.
     let explicitOwner: string | null = null;
     if (actor.role === 'MANAGER') {
-      if (input.ownerId && input.ownerId !== actor.id) throw forbidden('Menejer lidni faqat o‘ziga biriktira oladi');
+      if (input.ownerId && input.ownerId !== actor.id) throw forbidden('Менеджер может назначить лид только себе');
       explicitOwner = actor.id;
     } else if (input.ownerId) {
       const u = await this.d.prisma.user.findFirst({ where: { id: input.ownerId, companyId: actor.companyId, status: 'active' }, select: { id: true } });
-      if (!u) throw unprocessable('ASSIGNEE_INVALID', 'Tanlangan xodim faol emas', { ownerId: 'invalid' });
+      if (!u) throw unprocessable('ASSIGNEE_INVALID', 'Выбранный сотрудник неактивен', { ownerId: 'invalid' });
       explicitOwner = u.id;
     }
 
@@ -120,7 +120,7 @@ export class ManualLeadService {
       let contactId: string;
       let createdContact = false;
       if (input.existingContactId) {
-        const c = assertFound(await tx.contact.findFirst({ where: { id: input.existingContactId, companyId: actor.companyId, deletedAt: null, mergedIntoId: null, piiErasedAt: null } }), 'Kontakt');
+        const c = assertFound(await tx.contact.findFirst({ where: { id: input.existingContactId, companyId: actor.companyId, deletedAt: null, mergedIntoId: null, piiErasedAt: null } }), 'Контакт');
         if (!can(actor.role, 'records.view_all') && c.ownerId !== null && c.ownerId !== actor.id) throw forbidden();
         contactId = c.id;
       } else {
@@ -141,7 +141,7 @@ export class ManualLeadService {
       }
 
       const existingContact = input.existingContactId ? await tx.contact.findUniqueOrThrow({ where: { id: contactId } }) : null;
-      const title = leadTitle ?? (existingContact ? existingContact.fullName ?? (existingContact.instagramUsername ? `@${existingContact.instagramUsername}` : 'Yangi lid') : fullNameOf(first, last) ?? 'Yangi lid');
+      const title = leadTitle ?? (existingContact ? existingContact.fullName ?? (existingContact.instagramUsername ? `@${existingContact.instagramUsername}` : 'Новый лид') : fullNameOf(first, last) ?? 'Новый лид');
       // createLead(deferAssignment) — mas'ul pastda: tayinlash qoidalari tranzaksiyaning OXIRGI qadami bo'lishi kerak.
       const lead = await this.leads.createLead(tx, { companyId: actor.companyId, contactId, name: title, channel: 'manual', placement: 'manual', inquiryId: null, serviceType: null, at: now, actor, deferAssignment: true, note });
       let result;
@@ -150,7 +150,8 @@ export class ManualLeadService {
         await tx.contact.updateMany({ where: { id: contactId, ownerId: null }, data: { ownerId: explicitOwner } });
         await tx.leadEvent.create({ data: { companyId: actor.companyId, leadId: lead.id, kind: 'created', newStage: 'NEW', newOwnerId: explicitOwner, reason: 'manual_selection', origin: 'local', algorithmVersion: 'manual', effectiveAt: now } });
         await audit(tx, actor, { entityType: 'lead', entityId: lead.id, action: 'assigned', newValue: { ownerId: explicitOwner, reason: 'manual_selection' } });
-        if (explicitOwner !== actor.id) await notify(tx, { companyId: actor.companyId, userId: explicitOwner, kind: 'lead_assigned', dedupeKey: `lead_assigned:${lead.id}:${explicitOwner}`, title: `Yangi lid: ${title}`, link: `/leads/${lead.id}` });
+        if (explicitOwner !== actor.id) await notify(tx, { companyId: actor.companyId, userId: explicitOwner, kind: 'lead_assigned', dedupeKey: `lead_assigned:${lead.id}:${explicitOwner}`, title: `Новый лид: ${title}`, link: `/leads/${lead.id}` });
+        await this.leads.createCrmTask(tx, { companyId: actor.companyId, key: `${lead.id}:first_contact:created`, entityId: lead.id, kind: 'first_contact', text: `Первый контакт: ${title}`, responsibleUserId: explicitOwner, dueAt: result.firstResponseDueAt ?? new Date(now.getTime() + 15 * 60_000) });
       } else {
         result = await this.leads.assignLead(tx, lead, { companyId: actor.companyId, contactId, name: title, serviceType: null, at: now, actor });
       }
@@ -162,10 +163,10 @@ export class ManualLeadService {
   /** Lid kartasidagi mijozni tahrirlash: ism, familiya, telefon, Telegram. Instagram identifikatorlari va yozishmalar o'zgarmaydi. */
   async editContact(actor: UserActor, leadId: string, input: ContactEditInput) {
     return this.d.prisma.$transaction(async (tx) => {
-      const lead = assertFound(await tx.lead.findFirst({ where: leadWhere(actor, { id: leadId }) }), 'Lid');
+      const lead = assertFound(await tx.lead.findFirst({ where: leadWhere(actor, { id: leadId }) }), 'Лид');
       if (!canEditRecord(actor, lead.ownerId)) throw forbidden();
-      const c = assertFound(await tx.contact.findFirst({ where: { id: lead.contactId, companyId: actor.companyId, deletedAt: null } }), 'Kontakt');
-      if (c.piiErasedAt) throw unprocessable('CONTACT_ERASED', 'Shaxsiy ma’lumotlari o‘chirilgan kontaktni tahrirlab bo‘lmaydi');
+      const c = assertFound(await tx.contact.findFirst({ where: { id: lead.contactId, companyId: actor.companyId, deletedAt: null } }), 'Контакт');
+      if (c.piiErasedAt) throw unprocessable('CONTACT_ERASED', 'Нельзя редактировать контакт, чьи персональные данные удалены');
       const data: Prisma.ContactUpdateInput = { version: { increment: 1 } };
       const before: Record<string, unknown> = {};
       const after: Record<string, unknown> = {};
@@ -174,14 +175,14 @@ export class ManualLeadService {
       if (nameTouched) {
         const first = input.firstName !== undefined ? clean(input.firstName) : c.firstName;
         const last = input.lastName !== undefined ? clean(input.lastName) : c.lastName;
-        if (!first && !last) throw unprocessable('NAME_REQUIRED', 'Ism yoki familiyadan kamida bittasi qolishi kerak', { firstName: 'required', lastName: 'required' });
+        if (!first && !last) throw unprocessable('NAME_REQUIRED', 'Должно остаться хотя бы имя или фамилия', { firstName: 'required', lastName: 'required' });
         Object.assign(data, { firstName: first, lastName: last, fullName: fullNameOf(first, last) });
         Object.assign(before, { firstName: c.firstName, lastName: c.lastName, fullName: c.fullName });
         Object.assign(after, { firstName: first, lastName: last, fullName: fullNameOf(first, last) });
       }
       if (input.telegram !== undefined) {
         const tg = normalizeTelegram(input.telegram);
-        if (tg === 'invalid') throw unprocessable('TELEGRAM_INVALID', 'Telegram username noto‘g‘ri (5–32 belgi: harf, raqam, pastki chiziq)', { telegram: 'invalid' });
+        if (tg === 'invalid') throw unprocessable('TELEGRAM_INVALID', 'Неверный Telegram username (5–32 символа: буквы, цифры, подчёркивание)', { telegram: 'invalid' });
         data.telegramUsername = tg;
         before.telegram = c.telegramUsername;
         after.telegram = tg;

@@ -3,7 +3,8 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { SOURCE_LABELS, STAGE_LABELS, fmtDateTime, useApi } from '../../../lib/api';
-import { Async, Badge, Field, InstagramLink, Section, SyncBadge } from '../../../components/ui';
+import { Async, Badge, Field, InstagramLink, Section } from '../../../components/ui';
+import { canWrite, useMe } from '../../../components/shell';
 import { NewLeadForm } from '../../../components/manual-lead';
 
 interface LeadRow {
@@ -11,7 +12,6 @@ interface LeadRow {
   name: string;
   stage: string;
   firstSource: string;
-  syncState: string;
   createdAt: string;
   ownerId: string | null;
   anomaly: unknown;
@@ -21,9 +21,10 @@ interface LeadRow {
 }
 
 export default function LeadsPage() {
+  const me = useMe();
   const [stage, setStage] = useState('');
   const [search, setSearch] = useState('');
-  // Boshqaruv paneli qidiruvi /leads?search=... orqali keladi (bir marta o'qiladi).
+  // Поиск с панели управления приходит как /leads?search=... (читается один раз).
   useEffect(() => {
     const s = new URLSearchParams(window.location.search).get('search');
     if (s) setSearch(s);
@@ -33,22 +34,24 @@ export default function LeadsPage() {
   const q = new URLSearchParams({ limit: '50', ...(stage ? { stage } : {}), ...(search ? { search } : {}), ...(cursor ? { cursor } : {}) });
   const state = useApi<{ items: LeadRow[]; nextCursor: string | null }>(`/api/v1/leads?${q}`);
   const team = useApi<{ items: Array<{ id: string; fullName: string }> }>('/api/v1/team');
-  const name = (id: string | null) => team.data?.items.find((u) => u.id === id)?.fullName ?? (id ? '—' : 'Taqsimlanmagan');
+  const name = (id: string | null) => team.data?.items.find((u) => u.id === id)?.fullName ?? (id ? '—' : 'Не назначен');
 
   return (
     <>
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-        <h1>Lidlar</h1>
-        <button className="btn" type="button" onClick={() => setCreating((v) => !v)}>
-          + Yangi lid
-        </button>
+        <h1>Лиды</h1>
+        {canWrite(me) && (
+          <button className="btn" type="button" onClick={() => setCreating((v) => !v)}>
+            + Создать лид
+          </button>
+        )}
       </div>
       {creating && <NewLeadForm onClose={() => setCreating(false)} />}
-      <Section title="Filtr">
+      <Section title="Фильтры">
         <div className="row">
-          <Field label="Bosqich">
+          <Field label="Этап">
             <select value={stage} onChange={(e) => (setCursor(undefined), setStage(e.target.value))}>
-              <option value="">Barchasi</option>
+              <option value="">Все</option>
               {Object.entries(STAGE_LABELS).map(([k, v]) => (
                 <option key={k} value={k}>
                   {v}
@@ -56,8 +59,8 @@ export default function LeadsPage() {
               ))}
             </select>
           </Field>
-          <Field label="Qidiruv">
-            <input value={search} onChange={(e) => (setCursor(undefined), setSearch(e.target.value))} placeholder="Ism, telefon yoki @username" />
+          <Field label="Поиск">
+            <input value={search} onChange={(e) => (setCursor(undefined), setSearch(e.target.value))} placeholder="Имя, телефон или @username" />
           </Field>
         </div>
       </Section>
@@ -67,12 +70,11 @@ export default function LeadsPage() {
             <table>
               <thead>
                 <tr>
-                  <th>Lid</th>
-                  <th>Bosqich</th>
-                  <th>Birinchi manba</th>
-                  <th>Mas’ul</th>
-                  <th>Yaratilgan</th>
-                  <th>Sinxron</th>
+                  <th>Лид</th>
+                  <th>Этап</th>
+                  <th>Источник</th>
+                  <th>Ответственный</th>
+                  <th>Создан</th>
                 </tr>
               </thead>
               <tbody>
@@ -86,22 +88,19 @@ export default function LeadsPage() {
                           <InstagramLink username={l.contactInstagramUsername} withHandle={false} />
                         </span>
                       )}{' '}
-                      {l.anomaly ? <Badge tone="warn">Anomaliya</Badge> : null} {l.slaBreachedAt && !l.firstHumanActionAt ? <Badge tone="bad">SLA buzildi</Badge> : null}
+                      {l.anomaly ? <Badge tone="warn">Аномалия</Badge> : null} {l.slaBreachedAt && !l.firstHumanActionAt ? <Badge tone="bad">Срок ответа нарушен</Badge> : null}
                     </td>
                     <td>{STAGE_LABELS[l.stage]}</td>
                     <td>{SOURCE_LABELS[l.firstSource] ?? l.firstSource}</td>
                     <td>{name(l.ownerId)}</td>
                     <td>{fmtDateTime(l.createdAt)}</td>
-                    <td>
-                      <SyncBadge state={l.syncState} />
-                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
             {d.nextCursor && (
               <button className="btn secondary" type="button" onClick={() => setCursor(d.nextCursor!)}>
-                Keyingi sahifa
+                Следующая страница
               </button>
             )}
           </div>

@@ -61,7 +61,7 @@ describe('SSE respects object-level access (AC12)', () => {
     const other = await core.deps.prisma.user.findFirstOrThrow({ where: { role: 'MANAGER', id: { not: owner.id }, email: { endsWith: '@demo.local' } } });
     const sOwner = await login(app, owner.email);
     const sOther = await login(app, other.email);
-    const sHead = await login(app, 'rahbar@demo.local');
+    const sHead = await login(app, 'admin2@demo.local');
     const fire = () => publishEvent(core.deps.redis, { companyId, entityType: 'lead', entityId: lead.id, ownerId: owner.id, kind: 'updated' });
 
     const [ownerEvents, otherEvents, headEvents] = await Promise.all([collect(sOwner, 700, fire), collect(sOther, 700, async () => undefined), collect(sHead, 700, async () => undefined)]);
@@ -77,7 +77,7 @@ describe('SSE respects object-level access (AC12)', () => {
   });
 
   it('events of another company are never forwarded', async () => {
-    const sHead = await login(app, 'rahbar@demo.local');
+    const sHead = await login(app, 'admin2@demo.local');
     const events = await collect(sHead, 500, () => publishEvent(core.deps.redis, { companyId: '00000000-0000-4000-8000-0000000000ff', entityType: 'lead', entityId: '00000000-0000-4000-8000-0000000000aa', kind: 'updated' }));
     expect(events).toEqual([]);
   });

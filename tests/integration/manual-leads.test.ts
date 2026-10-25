@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Core } from '../../apps/api/src/core';
 import { alwaysOnDuty, drain, login, makeApp, makeCore, type Session } from './helpers';
 
-/** Qo'lda lid yaratish va mijozni tahrirlash. Tashqi provayderlar demo adapter (amoCRM — soxta). */
+/** Qo'lda lid yaratish va mijozni tahrirlash. Tashqi provayderlar demo adapter. */
 let core: Core;
 let app: INestApplication;
 let admin: Session;
@@ -19,7 +19,7 @@ beforeAll(async () => {
   await alwaysOnDuty(core);
   app = await makeApp(core);
   admin = await login(app, 'admin@demo.local');
-  head = await login(app, 'rahbar@demo.local');
+  head = await login(app, 'admin2@demo.local');
   mgrA = await login(app, 'menejer.a@demo.local');
   mgrB = await login(app, 'menejer.b@demo.local');
 });
@@ -31,7 +31,7 @@ afterAll(async () => {
 const userId = async (email: string) => (await p().user.findUniqueOrThrow({ where: { email } })).id;
 
 describe('qo‘lda lid yaratish', () => {
-  it('faqat ismdan 201: «Yangi lid», manba «manual» (Instagram emas), mavjud qoidalar bilan mas’ul, amoCRM navbatiga tushadi', async () => {
+  it('faqat ismdan 201: «Yangi lid», manba «manual» (Instagram emas), mavjud qoidalar bilan mas’ul, birinchi aloqa vazifasi yaratiladi', async () => {
     const r = await head.post('/api/v1/leads', { firstName: 'Aziza', note: 'Instagramdan emas, telefonda so‘radi' });
     expect(r.status).toBe(201);
     expect(r.body).toMatchObject({ stage: 'NEW', firstSource: 'manual', firstPlacement: 'manual', note: 'Instagramdan emas, telefonda so‘radi' });
@@ -43,8 +43,7 @@ describe('qo‘lda lid yaratish', () => {
     expect(contact).toMatchObject({ firstName: 'Aziza', lastName: null, fullName: 'Aziza', primaryPhone: null, telegramUsername: null });
     expect(await p().contactIdentifier.count({ where: { contactId: contact.id } })).toBe(0); // telefon/Telegram majburiy emas
     await drain(core);
-    const synced = await p().lead.findUniqueOrThrow({ where: { id: r.body.id } });
-    expect(synced.amoLeadId).toBeTruthy(); // mavjud sinxronizatsiya mexanizmi
+    expect(await p().crmTask.count({ where: { entityId: r.body.id, kind: 'first_contact', responsibleUserId: r.body.ownerId } })).toBe(1);
     expect(await p().auditLog.count({ where: { entityId: r.body.id, action: 'manual_created' } })).toBe(1);
   });
 
@@ -153,8 +152,8 @@ describe('mijozni tahrirlash (lid kartasi)', () => {
   });
 
   it('Instagram mijozida: ism/telefon/Telegram tahrirlanadi, lekin sender ID, akkaunt ID va yozishma bog‘lanishi o‘zgarmaydi; profil yangilanishi qo‘lda kiritilgan ismni bosib ketmaydi', async () => {
-    const company = await p().company.findFirstOrThrow();
-    const contact = await p().contact.create({ data: { companyId: company.id, fullName: null, syncState: 'pending_create' } });
+    const company = await p().company.findFirstOrThrow({ orderBy: { createdAt: 'asc' } });
+    const contact = await p().contact.create({ data: { companyId: company.id, fullName: null, syncState: 'local_only' } });
     await p().contactIdentifier.create({ data: { companyId: company.id, contactId: contact.id, type: 'instagram_scoped', value: `IGS${uniq()}`, scope: 'ACC_TEST_1', verified: true } });
     const lead = await p().$transaction((tx) =>
       core.leads.createLead(tx, { companyId: company.id, contactId: contact.id, name: 'Instagram foydalanuvchisi', channel: 'instagram_direct', placement: 'instagram', inquiryId: null, serviceType: null, at: new Date(), actor: { type: 'system', companyId: company.id, name: 'test' } as never }),

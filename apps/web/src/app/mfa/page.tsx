@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { api, type ApiError } from '../../lib/api';
 import { Field, FormError } from '../../components/ui';
 
-/** Administrator MFA enrollment (TZ §6.2). */
+/** Настройка MFA для администратора (TZ §6.2). */
 export default function MfaPage() {
   const router = useRouter();
   const [secret, setSecret] = useState<{ secret: string; otpauthUrl: string } | null>(null);
@@ -13,8 +13,8 @@ export default function MfaPage() {
   const [error, setError] = useState<ApiError | null>(null);
   return (
     <div className="card login">
-      <h1>MFA sozlash</h1>
-      <p>Administrator hisobi uchun ikki bosqichli tasdiqlash majburiy.</p>
+      <h1>Настройка MFA</h1>
+      <p>Для учётной записи администратора обязательна двухфакторная проверка.</p>
       {!secret ? (
         <button
           className="btn"
@@ -29,7 +29,7 @@ export default function MfaPage() {
             }
           }}
         >
-          Sozlashni boshlash
+          Начать настройку
         </button>
       ) : (
         <form
@@ -43,13 +43,13 @@ export default function MfaPage() {
             }
           }}
         >
-          <p>Authenticator ilovasiga quyidagi kalitni kiriting:</p>
+          <p>Введите этот ключ в приложение-аутентификатор:</p>
           <code style={{ wordBreak: 'break-all' }}>{secret.secret}</code>
-          <Field label="6 xonali kod">
+          <Field label="Код из 6 цифр">
             <input inputMode="numeric" pattern="\d{6}" value={code} onChange={(e) => setCode(e.target.value)} required />
           </Field>
           <button className="btn" type="submit">
-            Tasdiqlash
+            Подтвердить
           </button>
         </form>
       )}

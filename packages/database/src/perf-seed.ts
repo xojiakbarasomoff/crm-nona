@@ -21,7 +21,7 @@ async function main() {
     const c = DEMO_COMPANY_ID;
     const users = await prisma.user.findMany({ where: { companyId: c }, select: { id: true } });
     for (let i = users.length; i < 20; i++) {
-      await prisma.user.create({ data: { companyId: c, email: `perf${i}@demo.local`, fullName: `Perf Menejer ${i}`, role: 'MANAGER', status: 'active', amoUserId: `91${i}` } });
+      await prisma.user.create({ data: { companyId: c, email: `perf${i}@demo.local`, fullName: `Perf Menejer ${i}`, role: 'MANAGER', status: 'active' } });
     }
     const managerIds = (await prisma.user.findMany({ where: { companyId: c, role: 'MANAGER' }, select: { id: true } })).map((u) => u.id);
     const direct = await prisma.integrationConnection.findFirstOrThrow({ where: { companyId: c, provider: 'META_DIRECT' } });

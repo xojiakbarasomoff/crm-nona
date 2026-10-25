@@ -15,7 +15,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import type { NextFunction, Request, Response } from 'express';
 import type { ZodTypeAny, z } from 'zod';
-import { CurrencyMismatchError, InvalidMoneyError, sha256Hex, stableStringify } from '@crm/domain';
+import { CurrencyMismatchError, InvalidMoneyError, isReadOnlyRole, sha256Hex, stableStringify } from '@crm/domain';
 import { AppError, conflict, forbidden, notFound, unauthorized, unprocessable, type Core, type UserActor } from '../core';
 import type { SessionInfo } from '../core/services/auth.service';
 
@@ -72,11 +72,13 @@ export class AuthGuard implements CanActivate {
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
       const cookie = req.cookies?.[CSRF_COOKIE];
       const header = req.header('x-csrf-token');
-      if (!cookie || !header || cookie !== header) throw new AppError(403, 'CSRF_FAILED', 'CSRF tekshiruvi muvaffaqiyatsiz. Sahifani yangilang.');
+      if (!cookie || !header || cookie !== header) throw new AppError(403, 'CSRF_FAILED', 'Ошибка проверки безопасности (CSRF). Обновите страницу.');
+      // Роль «Пользователь» — только чтение: любой изменяющий запрос отклоняется на сервере (выход из системы разрешён).
+      if (isReadOnlyRole(info.actor.role) && !req.path.endsWith('/auth/logout')) throw new AppError(403, 'READ_ONLY_ROLE', 'Роль «Пользователь» доступна только для просмотра');
     }
     const allowWithoutMfa = this.reflector.getAllAndOverride<boolean>(ALLOW_WITHOUT_MFA, [ctx.getHandler(), ctx.getClass()]);
     if (info.mfaRequired && !info.mfaVerified && !allowWithoutMfa) {
-      throw new AppError(403, info.mfaEnrolled ? 'MFA_REQUIRED' : 'MFA_ENROLLMENT_REQUIRED', 'Administrator uchun MFA majburiy');
+      throw new AppError(403, info.mfaEnrolled ? 'MFA_REQUIRED' : 'MFA_ENROLLMENT_REQUIRED', 'Для администратора обязательна двухфакторная защита (MFA)');
     }
     return true;
   }
@@ -100,12 +102,12 @@ export class ErrorFilter implements ExceptionFilter {
     }
     if (err instanceof HttpException) {
       const status = err.getStatus();
-      res.status(status).json({ error: { code: status === 404 ? 'NOT_FOUND' : 'HTTP_ERROR', message: status === 404 ? 'Topilmadi' : err.message }, request_id: requestId });
+      res.status(status).json({ error: { code: status === 404 ? 'NOT_FOUND' : 'HTTP_ERROR', message: status === 404 ? 'Не найдено' : err.message }, request_id: requestId });
       return;
     }
     const pgDown = /Can't reach database|ECONNREFUSED|P1001|P1017|Connection terminated/i.test(String((err as Error)?.message));
     this.log({ requestId, err: (err as Error)?.message, path: req.path }, 'unhandled error');
-    res.status(pgDown ? 503 : 500).json({ error: { code: pgDown ? 'SERVICE_UNAVAILABLE' : 'INTERNAL', message: 'Ichki xato. Keyinroq qayta urinib ko‘ring.' }, request_id: requestId });
+    res.status(pgDown ? 503 : 500).json({ error: { code: pgDown ? 'SERVICE_UNAVAILABLE' : 'INTERNAL', message: 'Внутренняя ошибка. Повторите позже.' }, request_id: requestId });
   }
 }
 
@@ -114,7 +116,7 @@ export function parse<S extends ZodTypeAny>(schema: S, value: unknown): z.infer<
   if (r.success) return r.data;
   const fieldErrors: Record<string, string> = {};
   for (const issue of r.error.issues) fieldErrors[issue.path.join('.') || '_'] = issue.message;
-  throw unprocessable('VALIDATION_FAILED', 'Kiritilgan ma’lumot noto‘g‘ri', fieldErrors);
+  throw unprocessable('VALIDATION_FAILED', 'Введены неверные данные', fieldErrors);
 }
 
 export const toDate = (v: string | null | undefined) => (v ? new Date(v) : v === null ? null : undefined);
@@ -126,17 +128,17 @@ export const toDate = (v: string | null | undefined) => (v ? new Date(v) : v ===
 export async function withIdempotency<T>(core: Core, actor: UserActor, req: AuthedRequest, required: boolean, fn: () => Promise<{ status: number; body: T }>): Promise<{ status: number; body: T }> {
   const key = req.header('idempotency-key');
   if (!key) {
-    if (required) throw unprocessable('IDEMPOTENCY_KEY_REQUIRED', 'Idempotency-Key sarlavhasi majburiy');
+    if (required) throw unprocessable('IDEMPOTENCY_KEY_REQUIRED', 'Нужен заголовок Idempotency-Key');
     return fn();
   }
-  if (!/^[\w-]{8,100}$/.test(key)) throw unprocessable('IDEMPOTENCY_KEY_INVALID', 'Idempotency-Key formati noto‘g‘ri');
+  if (!/^[\w-]{8,100}$/.test(key)) throw unprocessable('IDEMPOTENCY_KEY_INVALID', 'Неверный формат Idempotency-Key');
   const prisma = core.deps.prisma;
   const payloadHash = sha256Hex(stableStringify({ path: req.path, body: req.body }));
   const existing = await prisma.idempotencyKey.findUnique({ where: { companyId_userId_key: { companyId: actor.companyId, userId: actor.id, key } } });
   if (existing) {
-    if (existing.payloadHash !== payloadHash) throw conflict('IDEMPOTENCY_KEY_REUSED', 'Bu Idempotency-Key boshqa so‘rov uchun ishlatilgan');
+    if (existing.payloadHash !== payloadHash) throw conflict('IDEMPOTENCY_KEY_REUSED', 'Этот Idempotency-Key уже использован для другого запроса');
     if (existing.responseStatus) return { status: existing.responseStatus, body: existing.responseBody as T };
-    throw conflict('IDEMPOTENCY_IN_PROGRESS', 'So‘rov hali bajarilmoqda');
+    throw conflict('IDEMPOTENCY_IN_PROGRESS', 'Запрос ещё выполняется');
   }
   await prisma.idempotencyKey.create({ data: { companyId: actor.companyId, userId: actor.id, key, method: req.method, path: req.path, payloadHash, expiresAt: new Date(Date.now() + 24 * 3600_000) } });
   try {
@@ -159,7 +161,7 @@ export function send(res: Response, status: number, body: unknown) {
 }
 
 export function requireDemo(core: Core) {
-  if (core.deps.config.mode !== 'demo') throw forbidden('Faqat DEMO rejimida mavjud');
+  if (core.deps.config.mode !== 'demo') throw forbidden('Доступно только в ДЕМО-режиме');
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

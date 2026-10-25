@@ -32,12 +32,12 @@ export type PolicyDecision =
     };
 
 export function decideOutbound(ctx: OutboundContext, cfg: MessagingPolicyConfig): PolicyDecision {
-  if (!ctx.senderMayReply) return { allowed: false, reason: 'no_permission', message: 'Ushbu suhbatga javob berish huquqingiz yo‘q.' };
-  if (!ctx.connectionHealthy) return { allowed: false, reason: 'connection_down', message: 'Instagram ulanishi faol emas.' };
-  if (!ctx.recipientScopedIdVerified) return { allowed: false, reason: 'recipient_unverified', message: 'Qabul qiluvchi tasdiqlangan Instagram ID bilan aniqlanmagan.' };
-  if (!ctx.lastCustomerMessageAt) return { allowed: false, reason: 'no_customer_message', message: 'Mijoz hali yozmagan; birinchi xabar yuborib bo‘lmaydi.' };
+  if (!ctx.senderMayReply) return { allowed: false, reason: 'no_permission', message: 'У вас нет прав отвечать в этой переписке.' };
+  if (!ctx.connectionHealthy) return { allowed: false, reason: 'connection_down', message: 'Подключение Instagram неактивно.' };
+  if (!ctx.recipientScopedIdVerified) return { allowed: false, reason: 'recipient_unverified', message: 'Получатель не определён по подтверждённому Instagram ID.' };
+  if (!ctx.lastCustomerMessageAt) return { allowed: false, reason: 'no_customer_message', message: 'Клиент ещё не писал; первое сообщение отправить нельзя.' };
   if (ctx.purpose !== 'human_reply') {
-    return { allowed: false, reason: 'automated_not_allowed', message: 'Avtomatik xabarlar Instagram orqali yuborilmaydi; ichki eslatma ishlaydi.' };
+    return { allowed: false, reason: 'automated_not_allowed', message: 'Автоматические сообщения через Instagram не отправляются; работает внутреннее напоминание.' };
   }
   const elapsedH = (ctx.now.getTime() - ctx.lastCustomerMessageAt.getTime()) / 3_600_000;
   if (elapsedH <= cfg.standardWindowHours) return { allowed: true, tag: null };
@@ -47,6 +47,6 @@ export function decideOutbound(ctx: OutboundContext, cfg: MessagingPolicyConfig)
   return {
     allowed: false,
     reason: 'window_closed',
-    message: `Javob oynasi yopilgan: mijozning oxirgi xabaridan ${Math.floor(elapsedH)} soat o‘tdi.`,
+    message: `Окно ответа закрыто: с последнего сообщения клиента прошло ${Math.floor(elapsedH)} ч.`,
   };
 }

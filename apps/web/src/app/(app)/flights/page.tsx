@@ -26,12 +26,12 @@ interface Row {
 }
 
 const FILTERS: Array<[string, string]> = [
-  ['', 'Barchasi'],
-  ['today', 'Bugun'],
-  ['24h', '24 soat ichida'],
-  ['7d', '7 kun ichida'],
-  ['overdue', 'Tekshiruv kechikkan'],
-  ['changed', 'Vaqti o‘zgargan'],
+  ['', 'Все'],
+  ['today', 'Сегодня'],
+  ['24h', 'В течение 24 часов'],
+  ['7d', 'В течение 7 дней'],
+  ['overdue', 'Проверка просрочена'],
+  ['changed', 'Время изменилось'],
 ];
 
 export default function FlightsPage() {
@@ -39,9 +39,9 @@ export default function FlightsPage() {
   const state = useApi<{ items: Row[]; generatedAt: string }>(`/api/v1/flights?limit=200${filter ? `&filter=${filter}` : ''}`);
   return (
     <>
-      <h1>Reyslar</h1>
-      <p className="muted">Eng yaqin jo‘nashdan boshlab. Holat ma’lumotlari qo‘lda tekshiruv natijasi — jonli reys API ulanmagan.</p>
-      <div className="tabs" role="group" aria-label="Tezkor filtrlar">
+      <h1>Рейсы</h1>
+      <p className="muted">Начиная с ближайшего вылета. Данные о статусе введены вручную — подключения к онлайн-данным о рейсах нет.</p>
+      <div className="tabs" role="group" aria-label="Быстрые фильтры">
         {FILTERS.map(([k, v]) => (
           <button key={k} type="button" className="btn secondary" aria-pressed={filter === k} onClick={() => setFilter(k)}>
             {v}
@@ -51,18 +51,18 @@ export default function FlightsPage() {
       <Async state={state} isEmpty={(d) => d.items.length === 0}>
         {(d) => (
           <div className="card table-wrap">
-            <p className="muted">Yangilangan: {fmtDateTime(d.generatedAt)}</p>
+            <p className="muted">Обновлено: {fmtDateTime(d.generatedAt)}</p>
             <table>
               <thead>
                 <tr>
-                  <th>Jo‘nash (aeroport vaqti)</th>
-                  <th>Reys</th>
-                  <th>Yo‘nalish</th>
-                  <th>Mijoz / buyurtma</th>
-                  <th>Mas’ul</th>
-                  <th>Tekshiruv</th>
-                  <th>Oxirgi tekshiruv</th>
-                  <th>Keyingi eslatma</th>
+                  <th>Вылет (время аэропорта)</th>
+                  <th>Рейс</th>
+                  <th>Маршрут</th>
+                  <th>Клиент / заказ</th>
+                  <th>Ответственный</th>
+                  <th>Проверка</th>
+                  <th>Последняя проверка</th>
+                  <th>Следующее напоминание</th>
                 </tr>
               </thead>
               <tbody>
@@ -71,7 +71,7 @@ export default function FlightsPage() {
                     <td>
                       {s.departureLocal ? s.departureLocal.replace('T', ' ') : '—'}
                       <div className="muted">
-                        {s.departureTimezone} · Toshkent {fmtDateTime(s.departureAtUtc)}
+                        {s.departureTimezone} · Ташкент {fmtDateTime(s.departureAtUtc)}
                       </div>
                     </td>
                     <td>

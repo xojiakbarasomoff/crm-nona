@@ -10,7 +10,6 @@ export async function assignNewLead(
   p: { companyId: string; contactId: string; serviceType: string | null; at: Date },
 ): Promise<AssignmentDecision & { poolId: string | null; algorithm: string }> {
   const company = await tx.company.findUniqueOrThrow({ where: { id: p.companyId } });
-  const settings = (company.settings ?? {}) as { amoRequiresResponsible?: boolean };
 
   const contact = await tx.contact.findUnique({ where: { id: p.contactId }, select: { ownerId: true } });
 
@@ -45,7 +44,7 @@ export async function assignNewLead(
     contactOwner: contact?.ownerId ? { userId: contact.ownerId, eligible: !!ownerMember && isEligible(ownerMember, p.at, p.serviceType) } : null,
     stickyOwnerEnabled: company.stickyOwner,
     roundRobinPick: pick,
-    dutyUserId: settings.amoRequiresResponsible === false ? null : company.dutyUserId,
+    dutyUserId: company.dutyUserId,
   });
   if (pool && decision.reason === 'round_robin' && decision.nextPointer !== null) {
     await tx.managerPool.update({ where: { id: pool.id }, data: { pointer: decision.nextPointer } });

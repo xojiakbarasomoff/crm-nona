@@ -1,8 +1,7 @@
  
 import { randomBytes } from 'node:crypto';
 import { hash } from '@node-rs/argon2';
-import { DEFAULT_MILESTONE_RULES, STAGES } from '@crm/domain';
-import { DEMO_AMO_USERS, DEMO_PIPELINE_ID, DEMO_STATUS_IDS } from '@crm/integrations';
+import { DEFAULT_MILESTONE_RULES } from '@crm/domain';
 import { createPrisma, encryptSecret, loadEncryptionKey, type PrismaClient } from './index';
 
 /**
@@ -24,7 +23,7 @@ export const WORK_SCHEDULE = {
 
 /** DEMO_SIMPLE_LOGIN: weak, publicly known password for the three aliased demo accounts (demo mode only). */
 export const DEMO_SIMPLE_PASSWORD = '123123123';
-export const DEMO_SIMPLE_ACCOUNTS = ['admin@demo.local', 'rahbar@demo.local', 'menejer.a@demo.local'];
+export const DEMO_SIMPLE_ACCOUNTS = ['admin@demo.local', 'admin2@demo.local', 'menejer.a@demo.local'];
 
 export async function seed(prisma: PrismaClient, opts: { demoData: boolean; key: Buffer; simpleLogin?: boolean }) {
   const company = await prisma.company.upsert({
@@ -39,9 +38,7 @@ export async function seed(prisma: PrismaClient, opts: { demoData: boolean; key:
       stickyOwner: true,
       phoneRule: { countryCode: '998', nationalLength: 9, confirmed: false },
       settings: {
-        amoRequiresResponsible: true,
         leadForms: {},
-        amoPriceCurrency: null,
         // Proposed retention (TZ §21). Purge jobs run only after the company confirms it.
         retention: { confirmed: false, rawWebhookDays: 30, technicalLogDays: 90, messageContentMonths: 12 },
       },
@@ -58,11 +55,12 @@ export async function seed(prisma: PrismaClient, opts: { demoData: boolean; key:
 
   const passwordHash = await hash(DEMO_PASSWORD, { algorithm: 2, memoryCost: 19_456, timeCost: 2, parallelism: 1 });
   const users = [
-    { email: 'admin@demo.local', fullName: 'Admin (demo)', role: 'ADMIN' as const, amo: DEMO_AMO_USERS[0]!.id },
-    { email: 'rahbar@demo.local', fullName: 'Rahbar (demo)', role: 'HEAD' as const, amo: DEMO_AMO_USERS[1]!.id },
-    { email: 'menejer.a@demo.local', fullName: 'Menejer A (demo)', role: 'MANAGER' as const, amo: DEMO_AMO_USERS[2]!.id },
-    { email: 'menejer.b@demo.local', fullName: 'Menejer B (demo)', role: 'MANAGER' as const, amo: DEMO_AMO_USERS[3]!.id },
-    { email: 'menejer.c@demo.local', fullName: 'Menejer C (demo)', role: 'MANAGER' as const, amo: DEMO_AMO_USERS[4]!.id },
+    { email: 'admin@demo.local', fullName: 'Admin (demo)', role: 'ADMIN' as const },
+    { email: 'admin2@demo.local', fullName: 'Admin 2 (demo)', role: 'ADMIN' as const },
+    { email: 'menejer.a@demo.local', fullName: 'Menejer A (demo)', role: 'MANAGER' as const },
+    { email: 'menejer.b@demo.local', fullName: 'Menejer B (demo)', role: 'MANAGER' as const },
+    { email: 'menejer.c@demo.local', fullName: 'Menejer C (demo)', role: 'MANAGER' as const },
+    { email: 'user@demo.local', fullName: 'Foydalanuvchi (demo)', role: 'USER' as const },
   ];
   const ids: Record<string, string> = {};
   for (const u of users) {
@@ -76,7 +74,6 @@ export async function seed(prisma: PrismaClient, opts: { demoData: boolean; key:
         role: u.role,
         status: 'active',
         passwordHash,
-        amoUserId: u.amo,
         ...(u.role === 'ADMIN' ? { mfaEnabled: true, mfaSecretEnc: encryptSecret(DEMO_ADMIN_TOTP_SECRET, opts.key) } : {}),
       },
     });
@@ -86,7 +83,7 @@ export async function seed(prisma: PrismaClient, opts: { demoData: boolean; key:
     const simpleHash = await hash(DEMO_SIMPLE_PASSWORD, { algorithm: 2, memoryCost: 19_456, timeCost: 2, parallelism: 1 });
     await prisma.user.updateMany({ where: { email: { in: DEMO_SIMPLE_ACCOUNTS } }, data: { passwordHash: simpleHash } });
   }
-  await prisma.company.update({ where: { id: company.id }, data: { dutyUserId: ids['rahbar@demo.local'] } });
+  await prisma.company.update({ where: { id: company.id }, data: { dutyUserId: ids['admin2@demo.local'] } });
 
   const pool = await prisma.managerPool.findFirst({ where: { companyId: company.id, isDefault: true } });
   if (!pool) {
@@ -100,8 +97,6 @@ export async function seed(prisma: PrismaClient, opts: { demoData: boolean; key:
 
   // Demo integration connections (mode=demo). Real connections are created via OAuth.
   const conns = [
-    { provider: 'AMOCRM_REST' as const, accountId: '30000001', accountDomain: 'demo-turizm.amocrm.ru', settings: {} },
-    { provider: 'AMOCRM_CHATS' as const, accountId: 'demo-amojo', accountDomain: null, settings: { scopeId: 'demo_scope' } },
     { provider: 'META_LEADS' as const, accountId: DEMO_PAGE_ID, accountDomain: null, settings: {} },
     { provider: 'META_DIRECT' as const, accountId: DEMO_IG_BUSINESS_ID, accountDomain: null, settings: {} },
   ];
@@ -110,13 +105,6 @@ export async function seed(prisma: PrismaClient, opts: { demoData: boolean; key:
       where: { companyId_provider_accountId: { companyId: company.id, provider: c.provider, accountId: c.accountId } },
       update: {},
       create: { companyId: company.id, provider: c.provider, mode: 'demo', accountId: c.accountId, accountDomain: c.accountDomain, routeToken: `demo-${c.provider.toLowerCase()}-${randomBytes(8).toString('hex')}`, settings: c.settings },
-    });
-  }
-  for (const stage of STAGES) {
-    await prisma.integrationMapping.upsert({
-      where: { companyId_entityType_externalId: { companyId: company.id, entityType: 'pipeline_status', externalId: `${DEMO_PIPELINE_ID}:${DEMO_STATUS_IDS[stage]}` } },
-      update: {},
-      create: { companyId: company.id, entityType: 'pipeline_status', localId: stage, externalId: `${DEMO_PIPELINE_ID}:${DEMO_STATUS_IDS[stage]}` },
     });
   }
   return { company, ids };
@@ -132,7 +120,7 @@ async function main() {
   try {
     const simpleLogin = mode === 'demo' && ['true', '1'].includes(process.env.DEMO_SIMPLE_LOGIN ?? '');
     await seed(prisma, { demoData: mode === 'demo', key: loadEncryptionKey(), simpleLogin });
-    console.log(`Seed done (mode=${mode}). Demo users: admin@demo.local, rahbar@demo.local, menejer.a|b|c@demo.local — password "${DEMO_PASSWORD}" (DEMO ONLY).`);
+    console.log(`Seed done (mode=${mode}). Demo users: admin@demo.local, admin2@demo.local, menejer.a|b|c@demo.local, user@demo.local — password "${DEMO_PASSWORD}" (DEMO ONLY).`);
   } finally {
     await prisma.$disconnect();
   }

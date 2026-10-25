@@ -3,8 +3,7 @@ import { DateTime } from 'luxon';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Core } from '../../apps/api/src/core';
-import { DEMO_STATUS_IDS, type DemoAmoRestClient } from '@crm/integrations';
-import { amoCrmSignal, drain, login, makeApp, makeCore, newLead, userId, type Session } from './helpers';
+import { drain, login, markWon, makeApp, makeCore, newLead, userId, type Session } from './helpers';
 
 /**
  * Turoperatorlar, tannarx/sotuv/foyda, hujjat kategoriyalari va huquqlar (TZ qo'shimchasi §A–§E).
@@ -18,12 +17,11 @@ let mgrA: Session;
 let mgrB: Session;
 let admin: Session;
 const p = () => core.deps.prisma;
-const amo = () => core.deps.adapters.amoRest({ id: '', accountDomain: null, accountId: '' }) as DemoAmoRestClient;
 
 beforeAll(async () => {
   core = makeCore();
   app = await makeApp(core);
-  head = await login(app, 'rahbar@demo.local');
+  head = await login(app, 'admin2@demo.local');
   mgrA = await login(app, 'menejer.a@demo.local');
   mgrB = await login(app, 'menejer.b@demo.local');
   admin = await login(app, 'admin@demo.local');
@@ -45,13 +43,13 @@ async function makeOperator(name = `Turoperator ${Date.now()}-${++seq}`, kind = 
   return r.body as { id: string; name: string; version: number };
 }
 
-/** Lid rahbar tomonidan kerakli menejerga biriktiriladi (haqiqiy oqim: amoCRM tasdiqlaguncha pending). */
+/** Lid administrator tomonidan kerakli menejerga biriktiriladi (haqiqiy oqim: darhol qo‘llanadi). */
 async function leadOwnedBy(email: string, operatorId?: string) {
   const lead = await newLead(app, core);
   const uid = await userId(core, email);
   if (lead.ownerId !== uid) {
     const r = await head.patch(`/api/v1/leads/${lead.id}/assignee`, { userId: uid, reason: 'test' });
-    expect(r.status).toBe(202);
+    expect(r.status).toBe(200);
     await drain(core);
   }
   const fresh = await p().lead.findUniqueOrThrow({ where: { id: lead.id } });
@@ -65,9 +63,7 @@ async function leadOwnedBy(email: string, operatorId?: string) {
 }
 
 async function win(leadId: string) {
-  const lead = await p().lead.findUniqueOrThrow({ where: { id: leadId } });
-  await amo().simulateNativeEdit(lead.amoLeadId!, { statusId: DEMO_STATUS_IDS.WON }, new Date(Date.now() + 1000));
-  await amoCrmSignal(app, core, lead.amoLeadId!);
+  await markWon(core, leadId);
   await drain(core);
 }
 
@@ -175,7 +171,7 @@ describe('foyda = sotuv − tannarx (karta va dashboard mos)', () => {
     expect(c.order.agreedAmount).toBe('1200.00');
     expect(c.order.netPrice).toBe('1000.00');
     expect(c.finance.byCurrency.USD).toMatchObject({ selling: '1200.00', net: '1000.00', profit: '200.00', profitState: 'known', netComplete: true });
-    expect(c.finance.formula).toContain('sof foyda');
+    expect(c.finance.formula).toContain('чистая прибыль');
     // sotuv yopilmaguncha: tasdiqlangan emas, kutilayotgan foyda
     let d = await dashboard(head, `&tourOperatorId=${op.id}`);
     expect(d.finance.confirmed.USD).toBeUndefined();
@@ -401,32 +397,6 @@ describe('foyda = sotuv − tannarx (karta va dashboard mos)', () => {
   });
 });
 
-describe('amoCRM ga tannarx va foyda chiqmaydi', () => {
-  it('order.summary faqat sotuv jamini yuboradi (paket + paketdan tashqari xizmat); tannarx va foyda yo‘q', async () => {
-    // amoCRM maydon xaritasi (haqiqiyda amo-config CLI yaratadi): sotuv summasi va buyurtma raqami.
-    const fields: Array<[string, string]> = [['local_amount', 'cf_local_amount'], ['travel_order_id', 'cf_order_id']];
-    for (const [localId, externalId] of fields) {
-      await p().integrationMapping.upsert({
-        where: { companyId_entityType_externalId: { companyId: (await p().company.findFirstOrThrow()).id, entityType: 'custom_field', externalId } },
-        update: {},
-        create: { companyId: (await p().company.findFirstOrThrow()).id, entityType: 'custom_field', localId, externalId },
-      });
-    }
-    const lead = await leadOwnedBy('menejer.a@demo.local');
-    const o = await order(mgrA, lead.id, '1000.00', 'USD', '800.00');
-    await mgrA.post(`/api/v1/orders/${o.id}/services`, { serviceType: 'visa', description: 'Viza', amount: '100.00', netAmount: '60.00', currency: 'USD' });
-    await win(lead.id);
-    await drain(core, 60);
-    await core.deps.prisma.outboxOperation.updateMany({ where: { state: { in: ['failed', 'pending'] } }, data: { nextAttemptAt: new Date(0) } });
-    await drain(core);
-    const fresh = await p().lead.findUniqueOrThrow({ where: { id: lead.id } });
-    const remote = await amo().getLead(fresh.amoLeadId!);
-    const values = Object.values(remote?.customFields ?? {}).map(String);
-    expect(values.some((v) => v.includes('1100.00 USD'))).toBe(true); // jami sotuv
-    for (const secret of ['800.00', '860.00', '240.00', '860', '240']) expect(values.some((v) => v.includes(secret))).toBe(false);
-  });
-});
-
 describe('ruxsatlar: moliya, eksport va dashboard', () => {
   it('menejer faqat o‘z buyurtmasi moliyasini ko‘radi; boshqasiniki 404; dashboard o‘z doirasida', async () => {
     const op = await makeOperator();
@@ -462,11 +432,11 @@ describe('ruxsatlar: moliya, eksport va dashboard', () => {
     expect(r.status).toBe(200);
     const csv = r.text as string;
     const [header, ...rows] = csv.replace(String.fromCharCode(0xfeff), '').split('\n');
-    expect(header).toContain('selling_price,net_price,profit_initial,profit_state,customer_refunded,supplier_refunded,profit_after_refund');
+    expect(header).toContain('Цена продажи,Себестоимость,Первоначальная прибыль,Состояние прибыли,Возвращено клиенту,Возвращено поставщиком,Прибыль после возвратов');
     const kr = rows.find((x) => x.includes((known as unknown as { orderNo?: string }).orderNo ?? '__')) ?? rows[0]!;
     expect(rows).toHaveLength(2);
-    expect(rows.some((x) => x.includes(',1200.00,1000.00,200.00,known,'))).toBe(true);
-    expect(rows.some((x) => x.includes(',500.00,,,undetermined,'))).toBe(true);
+    expect(rows.some((x) => x.includes(',1200.00,1000.00,200.00,определена,'))).toBe(true);
+    expect(rows.some((x) => x.includes(',500.00,,,не определена,'))).toBe(true);
     void kr;
     void legacy;
     expect(await p().auditLog.count({ where: { entityType: 'export', action: 'orders_csv' } })).toBeGreaterThan(0);
@@ -600,11 +570,11 @@ describe('turoperator — buyurtmaning tarixiy bog‘lanishi', () => {
 });
 
 describe('tannarx va foydani ko‘rish huquqi (finance.cost.view)', () => {
-  it('standartda rahbar va administratorda bor; menejerda yo‘q; faqat administrator menejerga yoqadi', async () => {
+  it('standartda administratorda bor; menejerda yo‘q; faqat administrator menejerga yoqadi', async () => {
     const mgrBId = await userId(core, 'menejer.b@demo.local');
     expect((await mgrB.patch(`/api/v1/users/${mgrBId}/finance-access`, { enabled: true })).status).toBe(403); // menejer o'ziga bera olmaydi
-    expect((await head.patch(`/api/v1/users/${mgrBId}/finance-access`, { enabled: true })).status).toBe(403); // rahbar ham bera olmaydi
-    expect((await admin.patch(`/api/v1/users/${await userId(core, 'rahbar@demo.local')}/finance-access`, { enabled: true })).status).toBe(422); // faqat menejer uchun
+    expect((await mgrA.patch(`/api/v1/users/${mgrBId}/finance-access`, { enabled: true })).status).toBe(403); // boshqa menejer ham bera olmaydi
+    expect((await admin.patch(`/api/v1/users/${await userId(core, 'admin2@demo.local')}/finance-access`, { enabled: true })).status).toBe(422); // faqat menejer uchun
     expect((await admin.patch(`/api/v1/users/${mgrBId}/finance-access`, { enabled: false })).status).toBe(200);
     expect((await mgrB.get('/api/v1/me')).body.capabilities).not.toContain('finance.cost.view');
     expect((await head.get('/api/v1/me')).body.capabilities).toContain('finance.cost.view');
@@ -659,6 +629,6 @@ describe('tannarx va foydani ko‘rish huquqi (finance.cost.view)', () => {
   it('eksport: rahbarda tannarx va qaytarimdan keyingi foyda ustunlari bor', async () => {
     const r = await head.get(`/api/v1/exports/orders.csv?from=${today()}&to=${tomorrow()}`);
     expect(r.status).toBe(200);
-    expect(r.text).toContain('profit_after_refund');
+    expect(r.text).toContain('Прибыль после возвратов');
   });
 });

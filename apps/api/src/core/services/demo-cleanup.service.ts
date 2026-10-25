@@ -10,7 +10,7 @@ import { conflict, forbidden, unprocessable } from '../errors';
  * - HAQIQIY: jonli (mode='live') ulanishdagi suhbatga ega kontakt; uning barcha lidlari, murojaatlari, buyurtmalari va yozishmalari.
  * - SUN'IY: haqiqiy emas VA (demo-ulanishdagi suhbati bor YOKI Lead Ads kanalidan kelgan murojaati bor). Lead Ads integratsiyasi bloklangan,
  *   haqiqiy Lead Ads ulanishi yo'q, shuning uchun u kanaldagi har qanday yozuv demo adapterdan keladi.
- * - NOANIQ: boshqa hamma narsa (qo'lda yaratilgan, amoCRM'dan import qilingan va h.k.) — saqlanadi va hisobotda ko'rsatiladi.
+ * - NOANIQ: boshqa hamma narsa (qo'lda yaratilgan va h.k.) — saqlanadi va hisobotda ko'rsatiladi.
  *
  * O'chirish faqat aniq ID to'plamlari bo'yicha, bitta tranzaksiyada va faqat eksport hash'i mos kelganda; har bir jadval bo'yicha o'chirilgan
  * qatorlar soni eksportdagi soniga teng bo'lmasa — hammasi bekor qilinadi. TRUNCATE/reset/seed yo'q; audit jurnali tegilmaydi.
@@ -122,7 +122,7 @@ export class DemoCleanupService {
     const note = (id: string, why: string) => synthEvidence.set(id, [...(synthEvidence.get(id) ?? []), why]);
     for (const c of convs) {
       if (liveConn.has(c.connectionId)) realContacts.add(c.contactId);
-      else if (demoConn.has(c.connectionId)) note(c.contactId, 'demo-ulanishdagi suhbat');
+      else if (demoConn.has(c.connectionId)) note(c.contactId, 'беседа в демо-подключении');
     }
     for (const i of inquiries) if (i.contactId && LEAD_ADS.has(i.channel)) note(i.contactId, `Lead Ads murojaati (${i.channel})`);
 
@@ -139,10 +139,10 @@ export class DemoCleanupService {
     if (include) {
       // Faqat «noaniq» yozuvlar sun'iy deb belgilanadi; haqiqiy (jonli suhbatli) bo'lsa — rad etiladi. Bog'liq buyurtma bo'lsa u ham tekshiruvdan o'tmaguncha to'xtatiladi.
       for (const id of [...include.contacts, ...include.leads]) {
-        if (realContacts.has(id) || leadKind.get(id) === 'real') throw conflict('INCLUDE_IS_REAL', 'Qo‘shilgan yozuv haqiqiy Instagram mijoziga tegishli; to‘xtatildi');
+        if (realContacts.has(id) || leadKind.get(id) === 'real') throw conflict('INCLUDE_IS_REAL', 'Добавленная запись относится к реальному клиенту Instagram; остановлено');
       }
-      for (const id of include.contacts) if (!contactKind.has(id)) throw conflict('INCLUDE_NOT_FOUND', 'Qo‘shilgan kontakt topilmadi');
-      for (const id of include.leads) if (!leadKind.has(id)) throw conflict('INCLUDE_NOT_FOUND', 'Qo‘shilgan lid topilmadi');
+      for (const id of include.contacts) if (!contactKind.has(id)) throw conflict('INCLUDE_NOT_FOUND', 'Добавленный контакт не найден');
+      for (const id of include.leads) if (!leadKind.has(id)) throw conflict('INCLUDE_NOT_FOUND', 'Добавленный лид не найден');
       const leadContact = new Map(leads.map((l) => [l.id, l.contactId]));
       const extraOrders = orders.filter((o) => (o.leadId && include.leads.includes(o.leadId)) || include.contacts.includes(o.contactId)).map((o) => o.id);
       C = [...new Set([...C, ...include.contacts, ...include.leads.map((id) => leadContact.get(id)!)])].sort();
@@ -150,14 +150,14 @@ export class DemoCleanupService {
       O = [...new Set([...O, ...extraOrders])].sort();
       // Qo'shilgan kontaktda boshqa lid bo'lsa (tasdiqlanmagan) — to'xtatamiz.
       const strangers = leads.filter((l) => C.includes(l.contactId) && !L.includes(l.id));
-      if (strangers.length) throw conflict('INCLUDE_HAS_OTHER_LEADS', 'Qo‘shilgan kontaktda ro‘yxatda yo‘q boshqa lid bor; to‘xtatildi');
+      if (strangers.length) throw conflict('INCLUDE_HAS_OTHER_LEADS', 'У добавленного контакта есть другой лид, которого нет в списке; остановлено');
     }
     if (only) {
       // Faqat tasdiqlangan eksportdagi ID'lar: ularning har biri hozir ham sun'iy bo'lishi shart; eksportdan keyin kelgan yangi yozuvlarga tegilmaydi.
       for (const [name, list, cur] of [['contacts', only.contacts, C], ['leads', only.leads, L], ['orders', only.orders, O]] as const) {
         const have = new Set(cur);
         const bad = list.filter((id) => !have.has(id));
-        if (bad.length) throw conflict('EXPORT_RECORD_CHANGED', `Eksportdagi ${name} yozuvi endi sun’iy deb tasniflanmaydi yoki yo‘q (${bad.length}); to‘xtatildi`);
+        if (bad.length) throw conflict('EXPORT_RECORD_CHANGED', `Запись «${name}» из выгрузки больше не считается искусственной или отсутствует (${bad.length}); остановлено`);
       }
       C = [...only.contacts].sort();
       L = [...only.leads].sort();
@@ -194,7 +194,7 @@ export class DemoCleanupService {
     const del = new Set([...sets.C, ...sets.L]);
     const included = new Set([...(include?.contacts ?? []), ...(include?.leads ?? []), ...C, ...L]);
     const protect = [...sets.realContacts, ...sets.realLeads, ...sets.uncertainContacts.filter((id) => !included.has(id)), ...sets.uncertainLeads.filter((id) => !included.has(id))];
-    if (protect.some((id) => del.has(id)) || sets.CONV.some((id) => sets.liveConvIds.includes(id))) throw conflict('CLEANUP_SAFETY', 'Himoya tekshiruvi: o‘chirish to‘plami haqiqiy yozuv bilan kesishdi; to‘xtatildi');
+    if (protect.some((id) => del.has(id)) || sets.CONV.some((id) => sets.liveConvIds.includes(id))) throw conflict('CLEANUP_SAFETY', 'Проверка защиты: набор удаления пересёкся с реальной записью; остановлено');
     const info = {
       conns, contacts, leads, orders, contactKind, leadKind, orderKind, synthEvidence,
       nameOf: new Map(leads.map((l) => [l.id, l.name])),
@@ -231,7 +231,7 @@ export class DemoCleanupService {
     const uncertainSet = new Set(sets.uncertainContacts);
     return {
       generatedAt: this.d.clock.now().toISOString(),
-      note: 'Faqat reja (o‘qish). Hech narsa o‘chirilmadi.',
+      note: 'Только план (чтение). Ничего не удалено.',
       manifestHash: this.manifestHash(sets, counts),
       connections: info.conns.map((c) => ({ id: c.id, provider: c.provider, mode: c.mode, accountId: c.accountId, active: !c.disconnectedAt })),
       totals: { contacts: info.contacts.length, leads: info.leads.length, orders: info.orders.length },
@@ -271,7 +271,7 @@ export class DemoCleanupService {
       format: 'crm-demo-cleanup-export/1',
       generatedAt: this.d.clock.now().toISOString(),
       companyId: actor.companyId,
-      note: 'O‘chirish tartibi (bolalar → ota). Tiklash teskari tartibda: INSERT INTO t SELECT * FROM jsonb_populate_recordset(NULL::t, rows).',
+      note: 'Порядок удаления (дочерние → родительские). Восстановление в обратном порядке: INSERT INTO t SELECT * FROM jsonb_populate_recordset(NULL::t, rows).',
       manifestHash: this.manifestHash(sets, counts),
       sets: { contacts: sets.C, leads: sets.L, orders: sets.O, inquiries: sets.INQ, conversations: sets.CONV, passengers: sets.P, segments: sets.S, tickets: sets.T, occurrences: sets.OCC, tasks: sets.TASK, attachments: sets.ATT, demoAccounts: sets.demoAccounts },
       counts,
@@ -323,12 +323,12 @@ export class DemoCleanupService {
    */
   async execute(actor: UserActor, input: { manifestHash: string; confirm: string; allowPaymentDeletion?: string; only?: Only; cutoff?: string; include?: Include }) {
     this.requireAdmin(actor);
-    if (input.confirm !== 'DELETE-DEMO-RECORDS') throw unprocessable('CONFIRM_REQUIRED', 'Tasdiqlash matni noto‘g‘ri');
+    if (input.confirm !== 'DELETE-DEMO-RECORDS') throw unprocessable('CONFIRM_REQUIRED', 'Неверный текст подтверждения');
     const cutoff = input.cutoff ? new Date(input.cutoff).toISOString() : null;
-    if (input.only && !cutoff) throw unprocessable('CUTOFF_REQUIRED', 'only bilan birga eksport vaqti (cutoff) ham kerak');
+    if (input.only && !cutoff) throw unprocessable('CUTOFF_REQUIRED', 'Вместе с only нужно указать время выгрузки (cutoff)');
     const { sets } = await this.buildSets(actor.companyId, input.only, input.include);
     const counts = await this.countRows(sets, cutoff);
-    if (this.manifestHash(sets, counts) !== input.manifestHash) throw conflict('MANIFEST_MISMATCH', 'Ma’lumotlar eksport qilinganidan keyin o‘zgargan; qayta eksport qiling');
+    if (this.manifestHash(sets, counts) !== input.manifestHash) throw conflict('MANIFEST_MISMATCH', 'Данные изменились после выгрузки; выполните выгрузку заново');
     const rx = this.regexes(sets, cutoff);
     const before = await this.keepCounts(actor.companyId);
     const deleted: Record<string, number> = {};
@@ -336,10 +336,10 @@ export class DemoCleanupService {
       await this.runDelete(actor, input.manifestHash, sets, counts, rx, deleted, input.allowPaymentDeletion === 'DELETE-DEMO-PAYMENTS');
     } catch (err) {
       if (/payments cannot be deleted/i.test((err as Error).message ?? '')) {
-        throw conflict('PAYMENTS_PROTECTED', 'To‘lov qatorlarini bazaning moliyaviy himoyasi o‘chirishga yo‘l qo‘ymaydi (to‘lov faqat qaytarim/bekor qilish bilan o‘zgaradi). Hech narsa o‘chirilmadi.');
+        throw conflict('PAYMENTS_PROTECTED', 'Финансовая защита базы не позволяет удалять платежи (платёж меняется только возвратом/отменой). Ничего не удалено.');
       }
       if ((err as { meta?: { code?: string } }).meta?.code === '23503' || /foreign key/i.test((err as Error).message ?? '')) {
-        throw conflict('DELETE_BLOCKED_BY_REFERENCE', 'Boshqa (o‘chirilmaydigan) yozuv o‘chiriladigan yozuvga havola qiladi; hammasi bekor qilindi, trigger o‘zgarmadi.');
+        throw conflict('DELETE_BLOCKED_BY_REFERENCE', 'Другая (не удаляемая) запись ссылается на удаляемую; всё отменено, триггер не изменён.');
       }
       throw err;
     }
@@ -366,9 +366,9 @@ export class DemoCleanupService {
           if (unlock) {
             await tx.$executeRawUnsafe('ALTER TABLE "payments" ENABLE TRIGGER payments_no_delete');
             const t = await tx.$queryRawUnsafe<Array<{ tgenabled: string }>>(`SELECT tgenabled::text AS tgenabled FROM pg_trigger WHERE tgname = 'payments_no_delete' AND tgrelid = '"payments"'::regclass`);
-            if (t[0]?.tgenabled !== 'O') throw conflict('TRIGGER_NOT_RESTORED', 'payments_no_delete triggeri qayta yoqilmadi; hammasi bekor qilindi');
+            if (t[0]?.tgenabled !== 'O') throw conflict('TRIGGER_NOT_RESTORED', 'триггер payments_no_delete не включён обратно; всё отменено');
           }
-          if (n !== counts[spec.table]) throw conflict('DELETE_COUNT_MISMATCH', `${spec.table}: o‘chirilgan ${n}, kutilgan ${counts[spec.table]}; hammasi bekor qilindi`);
+          if (n !== counts[spec.table]) throw conflict('DELETE_COUNT_MISMATCH', `${spec.table}: удалено ${n}, ожидалось ${counts[spec.table]}; всё отменено`);
           deleted[spec.table] = n;
         }
         await audit(tx, actor, { entityType: 'company', entityId: actor.companyId, action: 'demo_cleanup_executed', newValue: { manifestHash, deleted } });

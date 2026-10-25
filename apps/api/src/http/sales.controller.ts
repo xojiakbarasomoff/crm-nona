@@ -3,7 +3,6 @@ import type { Response } from 'express';
 import {
   AssigneeSchema,
   DashboardQuery,
-  DuplicateResolveSchema,
   ContactEditSchema,
   LeadDetailsSchema,
   ManualLeadCreateSchema,
@@ -82,23 +81,23 @@ export class SalesController {
     send(res, 200, await this.core.leads.updateDetails(actor, id, version, { ...rest, offerPrepDueAt: toDate(offerPrepDueAt), nextContactAt: toDate(nextContactAt) }));
   }
 
-  /** 202: the change is applied after amoCRM confirms it (sync_state=pending meanwhile). */
+  /** Этап применяется сразу. */
   @Patch('leads/:id/stage')
   async stage(@Actor() actor: UserActor, @Param('id', uuid) id: string, @Body() body: unknown, @Res() res: Response) {
     const input = parse(StageChangeSchema, body);
-    send(res, 202, await this.core.leads.requestStageChange(actor, id, input.version, input.stage, { reason: input.reason ?? null }));
+    send(res, 200, await this.core.leads.requestStageChange(actor, id, input.version, input.stage, { reason: input.reason ?? null }));
   }
 
   @Patch('leads/:id/assignee')
   async assignee(@Actor() actor: UserActor, @Param('id', uuid) id: string, @Body() body: unknown, @Res() res: Response) {
     const input = parse(AssigneeSchema, body);
-    send(res, 202, await this.core.leads.requestReassign(actor, id, input.userId, input.reason));
+    send(res, 200, await this.core.leads.requestReassign(actor, id, input.userId, input.reason));
   }
 
   @Post('leads/:id/reopen')
   async reopen(@Actor() actor: UserActor, @Param('id', uuid) id: string, @Body() body: unknown, @Res() res: Response) {
     const input = parse(ReopenSchema, body);
-    send(res, 202, await this.core.leads.requestReopen(actor, id, input.reason, input.stage));
+    send(res, 200, await this.core.leads.requestReopen(actor, id, input.reason, input.stage));
   }
 
   @Post('leads/:id/offers')
@@ -123,13 +122,4 @@ export class SalesController {
     send(res, 200, await this.core.admin.getContact(actor, id));
   }
 
-  @Get('duplicates')
-  async duplicates(@Actor() actor: UserActor, @Res() res: Response) {
-    send(res, 200, { items: await this.core.admin.listDuplicates(actor) });
-  }
-
-  @Post('duplicates/:id/resolve')
-  async resolve(@Actor() actor: UserActor, @Param('id', uuid) id: string, @Body() body: unknown, @Res() res: Response) {
-    send(res, 200, await this.core.admin.resolveDuplicate(actor, id, parse(DuplicateResolveSchema, body)));
-  }
 }

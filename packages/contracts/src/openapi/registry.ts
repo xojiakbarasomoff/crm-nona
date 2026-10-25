@@ -32,15 +32,13 @@ export const ROUTES: Route[] = [
   { method: 'get', path: '/api/v1/leads', tag: 'leads', summary: 'Ro‘yxat, qidiruv va voronka', query: S.LeadListQuery },
   { method: 'get', path: '/api/v1/leads/{id}', tag: 'leads', summary: 'Lid va tarix' },
   { method: 'patch', path: '/api/v1/leads/{id}', tag: 'leads', summary: 'Turizm talablari va lokal maydonlar', body: S.LeadDetailsSchema },
-  { method: 'patch', path: '/api/v1/leads/{id}/stage', tag: 'leads', summary: 'Statusni biznes qoidalari bilan yangilash (amoCRM orqali, 202)', body: S.StageChangeSchema },
+  { method: 'patch', path: '/api/v1/leads/{id}/stage', tag: 'leads', summary: 'Statusni biznes qoidalari bilan yangilash', body: S.StageChangeSchema },
   { method: 'patch', path: '/api/v1/leads/{id}/assignee', tag: 'leads', summary: 'Rahbar tomonidan qayta tayinlash (202)', body: S.AssigneeSchema },
   { method: 'post', path: '/api/v1/leads/{id}/reopen', tag: 'leads', summary: 'Yopilgan lidni sabab bilan qayta ochish', body: S.ReopenSchema },
   { method: 'post', path: '/api/v1/leads/{id}/offers', tag: 'offers', summary: 'Taklif yoki yangi versiya', body: S.OfferSchema, idempotent: true },
   { method: 'post', path: '/api/v1/offers/{id}/sent', tag: 'offers', summary: 'Taklif yuborildi deb belgilash', body: S.OfferSentSchema },
   { method: 'post', path: '/api/v1/offers/{id}/accept', tag: 'offers', summary: 'Mijoz taklifni tasdiqladi' },
   { method: 'get', path: '/api/v1/contacts/{id}', tag: 'contacts', summary: 'Profil, murojaatlar va buyurtmalar' },
-  { method: 'get', path: '/api/v1/duplicates', tag: 'contacts', summary: 'Dublikat nomzodlari' },
-  { method: 'post', path: '/api/v1/duplicates/{id}/resolve', tag: 'contacts', summary: 'Bog‘lash yoki merge qarorini boshlash', body: S.DuplicateResolveSchema },
   { method: 'get', path: '/api/v1/orders', tag: 'orders', summary: 'Buyurtmalar', query: S.PaginationQuery },
   { method: 'post', path: '/api/v1/orders', tag: 'orders', summary: 'Buyurtma yaratish', body: S.OrderCreateSchema, idempotent: true },
   { method: 'get', path: '/api/v1/orders/{id}', tag: 'orders', summary: 'To‘liq buyurtma' },
@@ -69,8 +67,6 @@ export const ROUTES: Route[] = [
   { method: 'get', path: '/api/v1/notifications', tag: 'reminders', summary: 'Ilova bildirishnomalari' },
   { method: 'get', path: '/api/v1/integrations/health', tag: 'integrations', summary: 'Ulanish va navbat diagnostikasi' },
   { method: 'post', path: '/api/v1/integrations/replay/{id}', tag: 'integrations', summary: 'Ruxsatli operator tomonidan xavfsiz replay' },
-  { method: 'post', path: '/api/v1/integrations/amocrm/oauth/start', tag: 'integrations', summary: 'amoCRM OAuth boshlash', body: S.AmoOAuthStartSchema },
-  { method: 'get', path: '/api/v1/integrations/amocrm/oauth/callback', tag: 'integrations', summary: 'amoCRM OAuth callback', query: S.AmoOAuthCallbackQuery },
   { method: 'post', path: '/api/v1/integrations/{id}/disconnect', tag: 'integrations', summary: 'Ulanishni uzish' },
   { method: 'post', path: '/api/v1/attachments', tag: 'files', summary: 'Fayl yuklash (raw body; ownerType, ownerId, category query; X-File-Name)' },
   { method: 'get', path: '/api/v1/attachments', tag: 'files', summary: 'Obyekt fayllari (skan holati va kategoriya bilan). ownerType: order|lead|offer|contact|passenger; order uchun related=1 — yo‘lovchi va mijoz hujjatlari ham' },
@@ -82,13 +78,10 @@ export const ROUTES: Route[] = [
   { method: 'get', path: '/api/v1/privacy/retention', tag: 'privacy', summary: 'Retention siyosati holati' },
   { method: 'post', path: '/api/v1/privacy/retention/confirm', tag: 'privacy', summary: 'Retention muddatlarini tasdiqlash (admin)' },
   { method: 'post', path: '/api/v1/privacy/retention/run', tag: 'privacy', summary: 'Retention tozalashni ishga tushirish' },
-  { method: 'post', path: '/api/v1/integrations/amocrm/import', tag: 'integrations', summary: 'amoCRM boshlang‘ich importi (worker, 202)' },
   { method: 'post', path: '/api/v1/integrations/lead-ads/backfill', tag: 'integrations', summary: 'Lead Ads tarixini qayta olish (worker, 202)' },
   { method: 'get', path: '/api/v1/events', tag: 'realtime', summary: 'Huquqlarga mos SSE oqimi' },
   { method: 'get', path: '/webhooks/meta', tag: 'webhooks', summary: 'Meta verify challenge', auth: 'webhook' },
   { method: 'post', path: '/webhooks/meta', tag: 'webhooks', summary: 'Meta hodisalari (X-Hub-Signature-256)', auth: 'webhook' },
-  { method: 'post', path: '/webhooks/amocrm/crm/{opaque_connection}', tag: 'webhooks', summary: 'amoCRM CRM webhook (form-urlencoded)', auth: 'webhook' },
-  { method: 'post', path: '/webhooks/amocrm/chat/{scope}', tag: 'webhooks', summary: 'amoCRM Chats webhook (X-Signature)', auth: 'webhook' },
   { method: 'get', path: '/health', tag: 'ops', summary: 'Process liveness', auth: 'none' },
   { method: 'get', path: '/ready', tag: 'ops', summary: 'Readiness: DB, Redis', auth: 'none' },
 ];
@@ -126,7 +119,7 @@ export function buildOpenApi() {
   }
   return new OpenApiGeneratorV3(registry.definitions).generateDocument({
     openapi: '3.0.3',
-    info: { title: 'Turizm CRM backend API', version: '0.1.0', description: 'Backend API of this project (TZ §18). Not amoCRM/Meta endpoints. All times ISO 8601 with offset; money as decimal strings with ISO currency.' },
+    info: { title: 'Turizm CRM backend API', version: '0.1.0', description: 'Backend API of this project (TZ §18). All times ISO 8601 with offset; money as decimal strings with ISO currency.' },
     servers: [{ url: '/' }],
   });
 }

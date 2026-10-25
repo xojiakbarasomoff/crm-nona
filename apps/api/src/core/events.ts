@@ -38,9 +38,9 @@ export async function notify(
   return res.count > 0;
 }
 
-/** Users who receive head-of-sales signals: active HEAD users plus the configured duty user. */
+/** Кому идут сигналы руководства: активные администраторы и назначенный дежурный. */
 export async function headRecipients(tx: Tx, companyId: string): Promise<string[]> {
   const company = await tx.company.findUnique({ where: { id: companyId }, select: { dutyUserId: true } });
-  const heads = await tx.user.findMany({ where: { companyId, role: 'HEAD', status: 'active' }, select: { id: true } });
+  const heads = await tx.user.findMany({ where: { companyId, role: 'ADMIN', status: 'active' }, select: { id: true } });
   return [...new Set([...heads.map((h) => h.id), ...(company?.dutyUserId ? [company.dutyUserId] : [])])];
 }

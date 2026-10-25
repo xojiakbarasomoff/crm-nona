@@ -22,9 +22,9 @@ export function serializeSupplier(s: Supplier, full: boolean) {
 /** Yangi tanlov uchun: yetkazib beruvchi shu kompaniyada va faol bo‘lishi kerak (o‘zgarmagan eski tanlov bundan mustasno). */
 export async function assertSelectableSupplier(tx: Tx, companyId: string, supplierId: string, opts: { kind?: SupplierKind; unchanged?: boolean } = {}): Promise<Supplier> {
   const s = await tx.supplier.findFirst({ where: { id: supplierId, companyId } });
-  if (!s) throw unprocessable('SUPPLIER_NOT_FOUND', 'Turoperator/yetkazib beruvchi topilmadi', { supplierId: 'not_found' });
-  if (s.status === 'archived' && !opts.unchanged) throw unprocessable('SUPPLIER_ARCHIVED', 'Arxivdagi turoperatorni yangi tanlab bo‘lmaydi', { supplierId: 'archived' });
-  if (opts.kind && s.kind !== opts.kind) throw unprocessable('SUPPLIER_KIND_MISMATCH', 'Bu maydon uchun boshqa turdagi yetkazib beruvchi kerak', { supplierId: `expected_${opts.kind}` });
+  if (!s) throw unprocessable('SUPPLIER_NOT_FOUND', 'Туроператор/поставщик не найден', { supplierId: 'not_found' });
+  if (s.status === 'archived' && !opts.unchanged) throw unprocessable('SUPPLIER_ARCHIVED', 'Нельзя выбрать туроператора из архива', { supplierId: 'archived' });
+  if (opts.kind && s.kind !== opts.kind) throw unprocessable('SUPPLIER_KIND_MISMATCH', 'Для этого поля нужен поставщик другого типа', { supplierId: `expected_${opts.kind}` });
   return s;
 }
 
@@ -57,7 +57,7 @@ export class SuppliersService {
         return serializeSupplier(s, true);
       });
     } catch (err) {
-      if (isPgUniqueViolation(err)) throw conflict('SUPPLIER_NAME_EXISTS', 'Bu nomli turoperator/yetkazib beruvchi allaqachon mavjud');
+      if (isPgUniqueViolation(err)) throw conflict('SUPPLIER_NAME_EXISTS', 'Туроператор/поставщик с таким названием уже существует');
       throw err;
     }
   }
@@ -96,11 +96,11 @@ export class SuppliersService {
     const { version, ...fields } = patch;
     try {
       return await this.d.prisma.$transaction(async (tx) => {
-        const before = assertFound(await tx.supplier.findFirst({ where: { id, companyId: actor.companyId } }), 'Turoperator');
+        const before = assertFound(await tx.supplier.findFirst({ where: { id, companyId: actor.companyId } }), 'Туроператор');
         const data: Record<string, unknown> = { version: { increment: 1 } };
         for (const [k, v] of Object.entries(fields)) if (v !== undefined) data[k] = k === 'name' ? (v as string).trim() : v;
         const res = await tx.supplier.updateMany({ where: { id, companyId: actor.companyId, version }, data });
-        if (res.count !== 1) throw conflict('VERSION_CONFLICT', 'Ma’lumot boshqa foydalanuvchi tomonidan o‘zgartirilgan. Sahifani yangilang.');
+        if (res.count !== 1) throw conflict('VERSION_CONFLICT', 'Данные изменены другим пользователем. Обновите страницу.');
         const after = await tx.supplier.findUniqueOrThrow({ where: { id } });
         const action = fields.status && fields.status !== before.status ? (fields.status === 'archived' ? 'archived' : 'restored') : 'updated';
         await audit(tx, actor, {
@@ -113,7 +113,7 @@ export class SuppliersService {
         return serializeSupplier(after, true);
       });
     } catch (err) {
-      if (isPgUniqueViolation(err)) throw conflict('SUPPLIER_NAME_EXISTS', 'Bu nomli turoperator/yetkazib beruvchi allaqachon mavjud');
+      if (isPgUniqueViolation(err)) throw conflict('SUPPLIER_NAME_EXISTS', 'Туроператор/поставщик с таким названием уже существует');
       throw err;
     }
   }

@@ -6,10 +6,16 @@ import {
   cohortConversion,
   companyDateRangeToUtc,
   firstResponseStats,
+  FULFILLMENT_LABELS_RU,
+  formatLocalRu,
   formatMoney,
   marginPercent,
+  PAYMENT_LABELS_RU,
   percent,
+  SERVICE_TYPE_LABELS_RU,
   sha256Hex,
+  SOURCE_LABELS_RU,
+  STAGE_LABELS_RU,
   stableStringify,
   summarizeFinance,
   sumByCurrency,
@@ -113,7 +119,7 @@ export class DashboardService {
    */
   async listLeads(actor: UserActor, f: DashboardFilters, limit = 200) {
     const company = await this.d.prisma.company.findUniqueOrThrow({ where: { id: actor.companyId } });
-    if (f.from > f.to) throw unprocessable('DATE_RANGE_INVALID', 'Boshlanish sanasi tugash sanasidan keyin bo‘lishi mumkin emas', { from: 'after_to' });
+    if (f.from > f.to) throw unprocessable('DATE_RANGE_INVALID', 'Дата начала не может быть позже даты окончания', { from: 'after_to' });
     const { start, end } = companyDateRangeToUtc(f.from, f.to, company.timezone);
     const where: Prisma.LeadWhereInput = { ...this.leadScope(actor, f), createdAt: { gte: start, lt: end } };
     const [total, rows] = await Promise.all([this.d.prisma.lead.count({ where }), this.d.prisma.lead.findMany({ where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: limit, select: { id: true, name: true, stage: true, firstSource: true, ownerId: true, createdAt: true, contactId: true } })]);
@@ -276,16 +282,16 @@ export class DashboardService {
     const aggMap = (m2: Record<string, MoneyAgg>) => Object.fromEntries(Object.entries(m2).map(([c, a]) => [c, aggOut(a, c)]));
     const userNames = new Map((await this.d.prisma.user.findMany({ where: { companyId: actor.companyId }, select: { id: true, fullName: true } })).map((u) => [u.id, u.fullName]));
     const rulesAll = {
-      confirmed: "Tasdiqlangan sotuv: davrda birinchi marta «Sotuv yakunlandi» bo'lgan lidlarning bekor qilinmagan buyurtmalari (qaytarimlari bo'lsa ham).",
-      cancelled: "Bekor qilingan buyurtmalar jami sotuv/foydaga kirmaydi; tarixiy summalari saqlanadi va alohida ko'rsatiladi.",
-      operator: "Turoperator — buyurtmaning tarixiy bog'lanishi: lid operatori keyin o'zgarsa ham eski sotuvlar statistikasi o'zgarmaydi; buyurtma operatorini o'zgartirish alohida, sabab va audit bilan.",
-      currencies: "Valyutalar kurssiz qo'shilmaydi: har bir valyuta alohida hisoblanadi.",
+      confirmed: "Подтверждённая продажа: неотменённые заказы лидов, впервые получивших этап «Продажа завершена» в периоде (даже если по ним были возвраты).",
+      cancelled: "Отменённые заказы не входят в итоговые продажи и прибыль; их суммы сохраняются в истории и показываются отдельно.",
+      operator: "Туроператор — историческая связь заказа: если туроператор лида позже изменится, статистика прошлых продаж не меняется; смена туроператора заказа выполняется отдельно, с причиной и записью в журнале.",
+      currencies: "Валюты не складываются без курса: каждая валюта считается отдельно.",
     };
     const rulesCost = {
-      formula: "Dastlabki foyda = sotuv narxi (selling) − tannarx (net). Qaytarimdan keyingi foyda = (sotuv − mijozga qaytarilgan summa) − (tannarx − yetkazib beruvchidan qaytgan summa). Qo'shimcha xarajatlar (komissiya, soliq, bank to'lovlari, valyuta farqi) hisobga olinmagan: bu buxgalteriya bo'yicha yakuniy «sof foyda» emas.",
-      refunds: "Mijozga qaytarilgan va yetkazib beruvchidan qaytgan summalar alohida qayd etiladi; valyutasi buyurtma narxlari valyutasiga mos bo'lishi shart. Qaytarim dastlabki foydani o'zgartirmaydi — u «qaytarimdan keyingi foyda»da aks etadi.",
-      unknownNet: "Tannarxi kiritilmagan buyurtma 0 deb hisoblanmaydi: foyda «aniqlanmagan», soni alohida ko'rsatiladi va tannarx/foyda jamiga kirmaydi.",
-      expected: "Kutilayotgan foyda: hali yopilmagan lidlarning ochiq buyurtmalari (tannarxi ma'lum bo'lganlari). Tasdiqlangan foyda emas.",
+      formula: "Первоначальная прибыль = цена продажи − себестоимость. Прибыль после возвратов = (продажа − возвращено клиенту) − (себестоимость − возвращено поставщиком). Дополнительные расходы (комиссии, налоги, банковские платежи, курсовая разница) не учтены: это не итоговая «чистая прибыль» по бухгалтерии.",
+      refunds: "Возвраты клиенту и суммы, вернувшиеся от поставщика, записываются отдельно; их валюта должна совпадать с валютой цен заказа. Возврат не меняет первоначальную прибыль — он отражается в «прибыли после возвратов».",
+      unknownNet: "Заказ без указанной себестоимости не считается за 0: прибыль «не определена», их количество показано отдельно, в итог себестоимости и прибыли они не входят.",
+      expected: "Ожидаемая прибыль: открытые заказы ещё не закрытых лидов (с известной себестоимостью). Это не подтверждённая прибыль.",
     };
     const financeOut = {
       costHidden: !cost,
@@ -297,10 +303,10 @@ export class DashboardService {
       expected: cost ? Object.fromEntries(Object.entries(finance.expected).map(([c, e]) => [c, { profit: formatMoney({ amountMinor: e.profit, currency: c }), orders: e.orders, undeterminedOrders: e.undeterminedOrders }])) : {},
       cancelled: Object.fromEntries(Object.entries(finance.cancelled).map(([c, e]) => [c, { sales: formatMoney({ amountMinor: e.sales, currency: c }), orders: e.orders }])),
       byOperator: finance.byOperator
-        .map((r) => ({ operatorId: r.operatorId, name: r.operatorId ? (operatorNames.get(r.operatorId) ?? '—') : 'Ko‘rsatilmagan', orders: r.orders, undeterminedOrders: cost ? r.undeterminedOrders : null, currencies: aggMap(r.currencies) }))
+        .map((r) => ({ operatorId: r.operatorId, name: r.operatorId ? (operatorNames.get(r.operatorId) ?? '—') : 'Не указан', orders: r.orders, undeterminedOrders: cost ? r.undeterminedOrders : null, currencies: aggMap(r.currencies) }))
         .sort((a, b) => b.orders - a.orders),
       byManager: finance.byManager
-        .map((r) => ({ userId: r.managerId, name: r.managerId ? (userNames.get(r.managerId) ?? '—') : 'Taqsimlanmagan', orders: r.orders, undeterminedOrders: cost ? r.undeterminedOrders : null, currencies: aggMap(r.currencies) }))
+        .map((r) => ({ userId: r.managerId, name: r.managerId ? (userNames.get(r.managerId) ?? '—') : 'Не назначен', orders: r.orders, undeterminedOrders: cost ? r.undeterminedOrders : null, currencies: aggMap(r.currencies) }))
         .sort((a, b) => b.orders - a.orders),
     };
     const managers: Record<string, { newLeads: number; won: number; inProgress: number; sales: Record<string, bigint> }> = {};
@@ -354,7 +360,7 @@ export class DashboardService {
       series: Object.entries(series).sort(([a], [b]) => a.localeCompare(b)).map(([bucket, v]) => ({ bucket, ...v })),
       managers: Object.entries(managers).map(([id, v]) => ({
         userId: id === 'unassigned' ? null : id,
-        name: users.find((u) => u.id === id)?.fullName ?? 'Taqsimlanmagan',
+        name: users.find((u) => u.id === id)?.fullName ?? 'Не назначен',
         newLeads: v.newLeads,
         won: v.won,
         inProgress: v.inProgress,
@@ -363,9 +369,9 @@ export class DashboardService {
       })),
       finance: financeOut,
       notes: {
-        managerAttribution: 'Joriy yuklama — hozirgi mas’ul; tarixiy sotuv — yopilish paytidagi mas’ul.',
-        sourceMode: 'Manba — lidning birinchi qayd etilgan manbasi.',
-        currency: 'Valyutalar alohida; kurs manbasisiz umumiy summa hisoblanmaydi. Sotuv summasi foyda emas.',
+        managerAttribution: 'Текущая нагрузка — по нынешнему ответственному; исторические продажи — по ответственному на момент закрытия.',
+        sourceMode: 'Источник — первый зафиксированный источник лида.',
+        currency: 'Валюты отдельно; общая сумма без источника курса не считается. Сумма продаж — это не прибыль.',
       },
       dataQuality: { dataCollectionStartedAt: company.dataCollectionStartedAt.toISOString(), lastSyncAt: lastSync?.toISOString() ?? null, stale },
     };
@@ -395,7 +401,7 @@ export class DashboardService {
       const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
       return /[",\n;]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
     };
-    const header = ['order_no', 'lead', 'lead_stage', 'owner', 'tour_operator', 'fulfillment_state', 'payment_state', 'currency', 'selling_price', ...(cost ? ['net_price', 'profit_initial', 'profit_state', 'customer_refunded', 'supplier_refunded', 'profit_after_refund'] : []), 'created_at'];
+    const header = ['Номер заказа', 'Лид', 'Этап лида', 'Ответственный', 'Туроператор', 'Статус заказа', 'Оплата', 'Валюта', 'Цена продажи', ...(cost ? ['Себестоимость', 'Первоначальная прибыль', 'Состояние прибыли', 'Возвращено клиенту', 'Возвращено поставщиком', 'Прибыль после возвратов'] : []), 'Создан'];
     const lines: string[] = [];
     for (const o of rows) {
       const fin = orderFinance(o, o.services, refundMap.get(o.id)?.refunds ?? {});
@@ -405,15 +411,15 @@ export class DashboardService {
         const cells = [
           o.orderNo,
           o.lead.name,
-          o.lead.stage,
+          STAGE_LABELS_RU[o.lead.stage],
           o.ownerId ? users.get(o.ownerId) : '',
           o.tourOperatorId ? ops.get(o.tourOperatorId) : '',
-          o.fulfillmentState,
-          o.paymentState,
+          FULFILLMENT_LABELS_RU[o.fulfillmentState] ?? o.fulfillmentState,
+          PAYMENT_LABELS_RU[o.paymentState] ?? o.paymentState,
           c?.currency ?? '',
           c ? mon(c.sellingMinor) : '',
-          ...(cost ? [c && c.lines - c.missingNetLines > 0 ? mon(c.netMinor) : '', c ? mon(c.profitMinor) : '', c ? c.profitState : 'undetermined', c ? mon(c.customerRefundedMinor) : '', c ? mon(c.supplierRefundedMinor) : '', c ? mon(c.profitAfterRefundMinor) : ''] : []),
-          o.createdAt.toISOString(),
+          ...(cost ? [c && c.lines - c.missingNetLines > 0 ? mon(c.netMinor) : '', c ? mon(c.profitMinor) : '', c && c.profitState === 'known' ? 'определена' : 'не определена', c ? mon(c.customerRefundedMinor) : '', c ? mon(c.supplierRefundedMinor) : '', c ? mon(c.profitAfterRefundMinor) : ''] : []),
+          formatLocalRu(o.createdAt, company.timezone),
         ];
         lines.push(cells.map(esc).join(','));
       }
@@ -434,8 +440,9 @@ export class DashboardService {
       const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
       return /[",\n;]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
     };
-    const header = ['id', 'name', 'stage', 'owner', 'first_source', 'service_type', 'created_at', 'closed_at', 'amo_lead_id'];
-    const lines = rows.map((r) => [r.id, r.name, r.stage, r.ownerId ? users.get(r.ownerId) : '', r.firstSource, r.serviceType, r.createdAt.toISOString(), r.closedAt?.toISOString(), r.amoLeadId].map(esc).join(','));
+    const zone = company.timezone;
+    const header = ['ID', 'Название', 'Этап', 'Ответственный', 'Источник', 'Тип услуги', 'Создан', 'Закрыт'];
+    const lines = rows.map((r) => [r.id, r.name, STAGE_LABELS_RU[r.stage], r.ownerId ? users.get(r.ownerId) : '', SOURCE_LABELS_RU[r.firstSource] ?? r.firstSource, r.serviceType ? (SERVICE_TYPE_LABELS_RU[r.serviceType] ?? r.serviceType) : '', formatLocalRu(r.createdAt, zone), r.closedAt ? formatLocalRu(r.closedAt, zone) : ''].map(esc).join(','));
     await audit(this.d.prisma, actor, { entityType: 'export', entityId: actor.companyId, action: 'leads_csv', newValue: { filters: f, rows: rows.length } });
     return [header.join(','), ...lines].join('\n');
   }

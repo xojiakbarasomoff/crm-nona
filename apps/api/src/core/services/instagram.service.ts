@@ -44,7 +44,7 @@ export class InstagramService {
   private cfg(): InstagramLoginConfig {
     const m = this.d.config.meta;
     if (!m.instagram.appId || !m.instagram.appSecret || !m.graphVersion) {
-      throw unprocessable('INSTAGRAM_NOT_CONFIGURED', 'Instagram Login sozlanmagan (INSTAGRAM_APP_ID, INSTAGRAM_APP_SECRET, META_GRAPH_VERSION)');
+      throw unprocessable('INSTAGRAM_NOT_CONFIGURED', 'Вход через Instagram не настроен (INSTAGRAM_APP_ID, INSTAGRAM_APP_SECRET, META_GRAPH_VERSION)');
     }
     return { appId: m.instagram.appId, appSecret: m.instagram.appSecret, redirectUri: m.instagram.redirectUri, graphVersion: m.graphVersion };
   }
@@ -122,7 +122,7 @@ export class InstagramService {
       const res = await this.fetchImpl(`https://graph.instagram.com/${m.graphVersion}/${conn.accountId}/conversations?platform=instagram&limit=1&fields=messages.limit(1){id,message,created_time}&access_token=${encodeURIComponent(creds.accessToken)}`, { method: 'GET' }).catch(() => null);
       const body = res ? ((await res.json().catch(() => ({}))) as { data?: Array<{ messages?: { data?: Array<{ id?: string; message?: string; created_time?: string }> } }> }) : {};
       const last = body.data?.[0]?.messages?.data?.[0];
-      graphMatch = last?.id && typeof last.message === 'string' && last.message.includes(marker) ? { mid: last.id, createdTime: last.created_time ?? null, matchedMarker: true } : { matchedMarker: false, note: 'so‘nggi suhbatning oxirgi xabari marker bilan mos kelmadi' };
+      graphMatch = last?.id && typeof last.message === 'string' && last.message.includes(marker) ? { mid: last.id, createdTime: last.created_time ?? null, matchedMarker: true } : { matchedMarker: false, note: 'последнее сообщение последней беседы не совпало с маркером' };
     }
     return { inbox: rows, graphMatch };
   }
@@ -163,10 +163,10 @@ export class InstagramService {
     const now = this.d.clock.now();
     const row = await this.d.prisma.oAuthState.findUnique({ where: { stateHash: hashState(p.state) } });
     if (!row || row.provider !== 'META_DIRECT' || row.usedAt || row.expiresAt <= now || row.sessionId !== actor.sessionId || row.companyId !== actor.companyId) {
-      throw unprocessable('OAUTH_STATE_INVALID', 'OAuth holati yaroqsiz yoki muddati o‘tgan');
+      throw unprocessable('OAUTH_STATE_INVALID', 'Состояние авторизации недействительно или устарело');
     }
     const used = await this.d.prisma.oAuthState.updateMany({ where: { id: row.id, usedAt: null }, data: { usedAt: now } });
-    if (used.count !== 1) throw unprocessable('OAUTH_STATE_INVALID', 'OAuth holati allaqachon ishlatilgan');
+    if (used.count !== 1) throw unprocessable('OAUTH_STATE_INVALID', 'Состояние авторизации уже использовано');
 
     // Instagram appends "#_" to the code in the redirect; it is not part of the code.
     const code = p.code.replace(/#_$/, '');
@@ -174,7 +174,7 @@ export class InstagramService {
     const long = await exchangeForLongLivedToken(cfg, short.accessToken, now, this.fetchImpl);
     const profile = await fetchInstagramProfile(cfg, long.accessToken, this.fetchImpl);
     if (profile.accountType && !MESSAGING_ACCOUNT_TYPES.has(profile.accountType)) {
-      throw unprocessable('INSTAGRAM_NOT_PROFESSIONAL', 'Akkaunt Instagram professional (Business/Creator) emas: Direct API faqat professional akkauntlar uchun');
+      throw unprocessable('INSTAGRAM_NOT_PROFESSIONAL', 'Аккаунт Instagram не профессиональный (Business/Creator): Direct API доступен только профессиональным аккаунтам');
     }
     if (!short.permissions.includes('instagram_business_manage_messages') && short.permissions.length > 0) {
       throw unprocessable('INSTAGRAM_PERMISSION_MISSING', 'instagram_business_manage_messages ruxsati berilmadi');
@@ -234,7 +234,7 @@ export class InstagramService {
     return { refreshed, failed };
   }
 
-  /** Meta "Deauthorize callback": the account owner removed the app — pause, keep history (like amoCRM disconnect). */
+  /** Meta "Deauthorize callback": the account owner removed the app — pause, keep history. */
   async handleDeauthorize(igUserId: string) {
     const conns = await this.d.prisma.integrationConnection.findMany({ where: { provider: 'META_DIRECT', accountId: igUserId, disconnectedAt: null } });
     for (const conn of conns) {
@@ -265,13 +265,24 @@ export class InstagramService {
           userId: a.id,
           kind: 'ig_data_deletion_request',
           dedupeKey: `ig_data_deletion:${code}`,
-          title: 'Meta: ma’lumotni o‘chirish so‘rovi',
-          body: `Tasdiqlash kodi: ${code}. Instagram bilan bog‘liq mijoz yozishmalarini «Mijoz kartasi → Shaxsiy ma’lumotlarni o‘chirish» orqali ko‘rib chiqing. Ulanish uzildi: ${conns.length}.`,
+          title: 'Meta: запрос на удаление данных',
+          body: `Код подтверждения: ${code}. Рассмотрите переписки клиентов в Instagram через «Карточка клиента → Удалить персональные данные». Подключений отключено: ${conns.length}.`,
           link: '/integrations',
         });
       }
       await tx.auditLog.create({ data: { companyId: company.id, actorType: 'integration', entityType: 'integration', entityId: conns[0]?.id ?? company.id, action: 'meta_data_deletion_requested', correlationId: code, newValue: { provider: 'META_DIRECT', matchedConnections: conns.length } } });
     });
     return { disconnected: conns.length, notified: admins.length };
+  }
+
+  /** Администратор отключает соединение: токены удаляются, приём событий прекращается; история и клиенты сохраняются. */
+  async disconnect(actor: UserActor, connectionId: string) {
+    requireCap(actor, 'integrations.manage');
+    await this.d.prisma.$transaction(async (tx) => {
+      const conn = await tx.integrationConnection.findFirst({ where: { id: connectionId, companyId: actor.companyId } });
+      if (!conn) throw unprocessable('NOT_FOUND', 'Подключение не найдено');
+      await tx.integrationConnection.update({ where: { id: conn.id }, data: { health: 'disconnected', healthReason: 'disconnected_by_admin', disconnectedAt: this.d.clock.now(), credentialsEnc: null, version: { increment: 1 } } });
+      await audit(tx, actor, { entityType: 'integration', entityId: conn.id, action: 'disconnected', oldValue: { health: conn.health } });
+    });
   }
 }

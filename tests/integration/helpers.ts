@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
@@ -40,10 +40,6 @@ export function testConfig(overrides: Record<string, string> = {}) {
     REDIS_URL: process.env.TEST_REDIS_URL!,
     LOG_LEVEL: 'silent',
     COOKIE_SECURE: 'false',
-    AMO_CLIENT_ID: 'test-client',
-    AMO_CLIENT_SECRET: 'test-secret',
-    AMO_REDIRECT_URI: 'https://crm.example.test/oauth',
-    AMO_ALLOWED_DOMAINS: 'demo-turizm.amocrm.ru',
     ...overrides,
   });
 }
@@ -144,22 +140,7 @@ export async function sendDirect(app: INestApplication, core: Core, p: { sender:
   return { res, mid };
 }
 
-export async function sendChatReply(app: INestApplication, core: Core, p: { conversationId: string; receiver: string; text: string; authorAmoUserId: string; amoMessageId?: string }) {
-  const conn = await core.deps.prisma.integrationConnection.findFirstOrThrow({ where: { provider: 'AMOCRM_CHATS' } });
-  const raw = Buffer.from(JSON.stringify({ account_id: 'demo_scope', time: 1, message: { receiver: { client_id: p.receiver }, sender: { id: p.authorAmoUserId }, conversation: { client_id: p.conversationId }, timestamp: Math.floor(Date.now() / 1000), message: { id: p.amoMessageId ?? `amo_${randomUUID()}`, type: 'text', text: p.text } } }));
-  const sig = createHmac('sha1', core.deps.config.amoChats.secret).update(raw).digest('hex');
-  return request(app.getHttpServer()).post(`/webhooks/amocrm/chat/${conn.routeToken}`).set('Content-Type', 'application/json').set("X-Signature", sig).send(raw.toString());
-}
-
-export async function amoCrmSignal(app: INestApplication, core: Core, amoLeadId: string, version = Date.now()) {
-  const conn = await core.deps.prisma.integrationConnection.findFirstOrThrow({ where: { provider: 'AMOCRM_REST' } });
-  return request(app.getHttpServer())
-    .post(`/webhooks/amocrm/crm/${conn.routeToken}`)
-    .set('Content-Type', 'application/x-www-form-urlencoded')
-    .send(`leads[status][0][id]=${amoLeadId}&leads[status][0][updated_at]=${version}&account[id]=${conn.accountId}`);
-}
-
-/** Creates a lead through the Lead Ads path and returns it after amoCRM linking. */
+/** Creates a lead through the Lead Ads path and returns it after processing the inbox. */
 export async function newLead(app: INestApplication, core: Core, name = `Mijoz ${randomUUID().slice(0, 6)}`, phone?: string) {
   const { leadgenId, res: whRes } = await sendLeadAds(app, core, { fullName: name, phone: phone ?? `+99890${Math.floor(1_000_000 + Math.random() * 8_999_999)}`, platform: 'ig' });
   // Navbatchi menejer `webhook_inbox.received_at` lahzasi bo'yicha tanlanadi (u DB `now()` bilan yoziladi, ya'ni soat
@@ -185,4 +166,11 @@ export const companyId = DEMO_COMPANY_ID;
  */
 export async function alwaysOnDuty(core: Core) {
   await core.deps.prisma.managerPoolMember.updateMany({ data: { schedule: null as never, available: true } });
+}
+
+/** Tasdiqlangan sotuv: lid «Sotuv yakunlandi» bosqichiga o‘tadi (o‘tish qoidalari lead-ownership.test.ts da alohida tekshiriladi). */
+export async function markWon(core: Core, leadId: string, at: Date = new Date(Date.now() + 1000)) {
+  const lead = await core.deps.prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+  await core.deps.prisma.lead.update({ where: { id: leadId }, data: { stage: 'WON', closedAt: at, firstWonAt: lead.firstWonAt ?? at, version: { increment: 1 } } });
+  await core.deps.prisma.leadEvent.create({ data: { companyId: lead.companyId, leadId, kind: 'stage_change', oldStage: lead.stage, newStage: 'WON', origin: 'local', effectiveAt: at, observedAt: at } });
 }

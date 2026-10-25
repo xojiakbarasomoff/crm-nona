@@ -1,3 +1,5 @@
+> **Tarixiy hujjat (2026-10-26):** bu matn amoCRM bilan ishlaydigan loyiha davrida yozilgan. amoCRM integratsiyasi olib tashlangan va CRM mustaqil ishlaydi (rollar: Administrator, Menejer, Foydalanuvchi). amoCRM, «Rahbar/HEAD» va «Dublikatlar» haqidagi bandlar endi amal qilmaydi. Joriy holat: `README.md`, `docs/integrations.md`, `docs/runbook.md`.
+
 # Feasibility (B0) — G01–G09
 
 Oxirgi yangilanish: 2026-10-24 · TZ: §3

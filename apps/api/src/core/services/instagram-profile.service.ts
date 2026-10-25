@@ -6,10 +6,12 @@ import type { CoreDeps, UserActor } from '../context';
 import { requireCap } from '../scope';
 
 /** Lid nomi shundan boshqa bo'lsa (menejer o'zgartirgan yoki kiritilgan) — avtomatik yangilanmaydi. */
-export const IG_PLACEHOLDER_NAME = 'Instagram foydalanuvchisi';
+export const IG_PLACEHOLDER_NAME = 'Пользователь Instagram';
+/** Прежние автоматические названия (до перехода на русский) тоже считаются автоматическими. */
+const LEGACY_PLACEHOLDER_NAMES = new Set(['Instagram foydalanuvchisi']);
 /** Avvalgi avtomatik sarlavha: «Instagram Direct — 123456» (faqat shu shakl avtomatik hisoblanadi). */
 const LEGACY_AUTO_NAME = /^Instagram Direct — \d{1,12}$/;
-export const isAutoInstagramLeadName = (name: string) => name === IG_PLACEHOLDER_NAME || LEGACY_AUTO_NAME.test(name);
+export const isAutoInstagramLeadName = (name: string) => name === IG_PLACEHOLDER_NAME || LEGACY_PLACEHOLDER_NAMES.has(name) || LEGACY_AUTO_NAME.test(name);
 
 /** Qayta urinish oraliqlari (daqiqa): nazoratli backoff; MAX_ATTEMPTS dan keyin to'xtaydi (qo'lda sinxronlash mumkin). */
 const BACKOFF_MIN = [1, 5, 30, 120, 720, 1440];

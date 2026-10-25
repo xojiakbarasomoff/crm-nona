@@ -5,17 +5,16 @@ import { buildAdapters } from './adapters';
 import type { AppConfig } from './config';
 import { systemClock, type Clock, type CoreDeps } from './context';
 import { createLogger, type Logger } from './logger';
+import { AccountsService } from './services/accounts.service';
 import { AdminService } from './services/admin.service';
 import { AttachmentsService } from './services/attachments.service';
 import { SlaService } from './services/sla.service';
 import { PrivacyService } from './services/privacy.service';
-import { AmoSyncService } from './services/amo-sync.service';
 import { LeadAdsBackfillService } from './services/lead-ads-backfill.service';
 import { AuthService } from './services/auth.service';
 import { DashboardService } from './services/dashboard.service';
 import { IntakeService } from './services/intake.service';
 import { LeadsService } from './services/leads.service';
-import { OAuthService } from './services/oauth.service';
 import { InstagramService } from './services/instagram.service';
 import { InstagramProfileService } from './services/instagram-profile.service';
 import { DemoCleanupService } from './services/demo-cleanup.service';
@@ -37,7 +36,6 @@ export interface Core {
   reminders: RemindersService;
   intake: IntakeService;
   processing: ProcessingService;
-  oauth: OAuthService;
   instagram: InstagramService;
   instagramProfiles: InstagramProfileService;
   demoCleanup: DemoCleanupService;
@@ -45,10 +43,10 @@ export interface Core {
   dashboard: DashboardService;
   webhooks: WebhooksService;
   admin: AdminService;
+  accounts: AccountsService;
   attachments: AttachmentsService;
   sla: SlaService;
   privacy: PrivacyService;
-  amoSync: AmoSyncService;
   leadAdsBackfill: LeadAdsBackfillService;
   close(): Promise<void>;
 }
@@ -66,10 +64,8 @@ export function createCore(config: AppConfig, o: CoreOverrides = {}): Core {
   const redis = o.redis ?? new Redis(config.redisUrl, { maxRetriesPerRequest: 2 });
   redis.on('error', () => undefined);
   const logger = o.logger ?? createLogger(config.logLevel);
-  let oauth: OAuthService | null = null;
-  const adapters = buildAdapters(config, redis, (id) => oauth!.tokenProvider(id));
+  const adapters = buildAdapters(config, redis);
   const deps: CoreDeps = { prisma, redis, config, adapters, clock: o.clock ?? systemClock, logger, encryptionKey: loadEncryptionKey(config.encryptionKey), ...(o.fetchImpl ? { fetchImpl: o.fetchImpl } : {}) };
-  oauth = new OAuthService(deps, o.fetchImpl);
   return {
     deps,
     auth: new AuthService(deps),
@@ -80,7 +76,6 @@ export function createCore(config: AppConfig, o: CoreOverrides = {}): Core {
     reminders: new RemindersService(deps),
     intake: new IntakeService(deps),
     processing: new ProcessingService(deps),
-    oauth,
     instagram: new InstagramService(deps, o.fetchImpl),
     instagramProfiles: new InstagramProfileService(deps),
     demoCleanup: new DemoCleanupService(deps),
@@ -88,10 +83,10 @@ export function createCore(config: AppConfig, o: CoreOverrides = {}): Core {
     dashboard: new DashboardService(deps),
     webhooks: new WebhooksService(deps),
     admin: new AdminService(deps),
+    accounts: new AccountsService(deps),
     attachments: new AttachmentsService(deps),
     sla: new SlaService(deps),
     privacy: new PrivacyService(deps),
-    amoSync: new AmoSyncService(deps),
     leadAdsBackfill: new LeadAdsBackfillService(deps),
     async close() {
       if (!o.prisma) await prisma.$disconnect();

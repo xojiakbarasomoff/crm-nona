@@ -5,7 +5,6 @@ import { audit } from '../audit';
 import type { CoreDeps, UserActor } from '../context';
 import { publishEvent } from '../events';
 import { conflict, forbidden, isPgUniqueViolation, unprocessable } from '../errors';
-import { enqueueOutbox } from '../queue';
 import { assertFound, canCost, canEditRecord, leadWhere, orderWhere, requireCost } from '../scope';
 import { assertSelectableSupplier, serializeSupplier } from './suppliers.service';
 
@@ -49,7 +48,6 @@ export async function createOrderRow(
       tourOperatorId: p.tourOperatorId ?? null,
     },
   });
-  await enqueueOutbox(tx, { companyId: p.companyId, operationKey: `order.summary:${order.id}:1`, target: 'amocrm', action: 'order.summary', payload: { orderId: order.id, leadId: p.leadId } });
   return order;
 }
 
@@ -105,7 +103,7 @@ export function orderFinanceLines(o: Pick<Order, 'id' | 'agreedAmountMinor' | 'n
 export const orderFinance = (o: Pick<Order, 'id' | 'agreedAmountMinor' | 'netPriceMinor' | 'currency'>, services: ServiceRow[], refunds: RefundsByCurrency = {}) => computeOrderFinance(orderFinanceLines(o, services), refunds);
 
 export const FINANCE_FORMULA =
-  "Dastlabki foyda = sotuv narxi (selling price) − tannarx (net price). Qaytarimdan keyingi foyda = (sotuv narxi − mijozga qaytarilgan summa) − (tannarx − yetkazib beruvchidan qaytgan summa). Qo'shimcha xarajatlar (komissiya, soliq, bank to'lovlari, valyuta farqi) hisobga olinmagan: bu buxgalteriya bo'yicha yakuniy «sof foyda» emas.";
+  "Первоначальная прибыль = цена продажи − себестоимость. Прибыль после возвратов = (цена продажи − возвращено клиенту) − (себестоимость − возвращено поставщиком). Дополнительные расходы (комиссии, налоги, банковские платежи, курсовая разница) не учтены: это не итоговая «чистая прибыль» по бухгалтерии.";
 
 type Db = { payment: Tx['payment']; supplierRefund: Tx['supplierRefund'] };
 
@@ -179,11 +177,11 @@ export class OrdersService {
   // ---------- Offers ----------
 
   async createOffer(actor: UserActor, leadId: string, input: { content: string; amount: string; currency: string; validUntil: Date | null; options?: unknown[]; includedServices?: unknown[]; note?: string | null }) {
-    if (!isSupportedCurrency(input.currency)) throw unprocessable('INVALID_CURRENCY', 'Valyuta qo‘llab-quvvatlanmaydi', { currency: 'unsupported' });
+    if (!isSupportedCurrency(input.currency)) throw unprocessable('INVALID_CURRENCY', 'Валюта не поддерживается', { currency: 'unsupported' });
     const money = parseMoney(input.amount, input.currency);
-    if (money.amountMinor < 0n) throw unprocessable('INVALID_AMOUNT', 'Summa manfiy bo‘lmasin', { amount: 'negative' });
+    if (money.amountMinor < 0n) throw unprocessable('INVALID_AMOUNT', 'Сумма не может быть отрицательной', { amount: 'negative' });
     return this.d.prisma.$transaction(async (tx) => {
-      const lead = assertFound(await tx.lead.findFirst({ where: leadWhere(actor, { id: leadId }) }), 'Lid');
+      const lead = assertFound(await tx.lead.findFirst({ where: leadWhere(actor, { id: leadId }) }), 'Лид');
       if (!canEditRecord(actor, lead.ownerId)) throw forbidden();
       await tx.$executeRaw`SELECT 1 FROM leads WHERE id = ${leadId}::uuid FOR UPDATE`;
       const last = await tx.offer.findFirst({ where: { companyId: actor.companyId, leadId }, orderBy: { version: 'desc' } });
@@ -213,10 +211,10 @@ export class OrdersService {
   /** Marks a version as sent; sent versions are immutable (a change creates a new version). */
   async markOfferSent(actor: UserActor, offerId: string, channel: string) {
     return this.d.prisma.$transaction(async (tx) => {
-      const offer = assertFound(await tx.offer.findFirst({ where: { id: offerId, companyId: actor.companyId } }), 'Taklif');
-      const lead = assertFound(await tx.lead.findFirst({ where: leadWhere(actor, { id: offer.leadId }) }), 'Taklif');
+      const offer = assertFound(await tx.offer.findFirst({ where: { id: offerId, companyId: actor.companyId } }), 'Предложение');
+      const lead = assertFound(await tx.lead.findFirst({ where: leadWhere(actor, { id: offer.leadId }) }), 'Предложение');
       if (!canEditRecord(actor, lead.ownerId)) throw forbidden();
-      if (offer.sentAt) throw conflict('OFFER_ALREADY_SENT', 'Bu versiya allaqachon yuborilgan; o‘zgartirish uchun yangi versiya yarating');
+      if (offer.sentAt) throw conflict('OFFER_ALREADY_SENT', 'Эта версия уже отправлена; для изменений создайте новую версию');
       const updated = await tx.offer.update({ where: { id: offerId }, data: { sentAt: this.d.clock.now(), sentChannel: channel } });
       await audit(tx, actor, { entityType: 'offer', entityId: offerId, action: 'sent', newValue: { channel } });
       return updated;
@@ -225,10 +223,10 @@ export class OrdersService {
 
   async acceptOffer(actor: UserActor, offerId: string) {
     return this.d.prisma.$transaction(async (tx) => {
-      const offer = assertFound(await tx.offer.findFirst({ where: { id: offerId, companyId: actor.companyId } }), 'Taklif');
-      const lead = assertFound(await tx.lead.findFirst({ where: leadWhere(actor, { id: offer.leadId }) }), 'Taklif');
+      const offer = assertFound(await tx.offer.findFirst({ where: { id: offerId, companyId: actor.companyId } }), 'Предложение');
+      const lead = assertFound(await tx.lead.findFirst({ where: leadWhere(actor, { id: offer.leadId }) }), 'Предложение');
       if (!canEditRecord(actor, lead.ownerId)) throw forbidden();
-      if (!offer.sentAt) throw unprocessable('OFFER_NOT_SENT', 'Avval taklif mijozga yuborilgan bo‘lishi kerak');
+      if (!offer.sentAt) throw unprocessable('OFFER_NOT_SENT', 'Сначала предложение должно быть отправлено клиенту');
       const updated = await tx.offer.update({ where: { id: offerId }, data: { acceptedAt: this.d.clock.now() } });
       await audit(tx, actor, { entityType: 'offer', entityId: offerId, action: 'accepted' });
       return updated;
@@ -239,21 +237,21 @@ export class OrdersService {
 
   async createOrder(actor: UserActor, input: { leadId: string; offerVersionId?: string | null; agreedAmount?: string | null; currency?: string | null; note?: string | null }) {
     return this.d.prisma.$transaction(async (tx) => {
-      const lead = assertFound(await tx.lead.findFirst({ where: leadWhere(actor, { id: input.leadId }) }), 'Lid');
+      const lead = assertFound(await tx.lead.findFirst({ where: leadWhere(actor, { id: input.leadId }) }), 'Лид');
       if (!canEditRecord(actor, lead.ownerId)) throw forbidden();
       const existing = await tx.order.findFirst({ where: { companyId: actor.companyId, leadId: lead.id, fulfillmentState: { not: 'cancelled' } } });
-      if (existing) throw conflict('ORDER_EXISTS', 'Bu lid uchun faol buyurtma mavjud', { orderId: existing.id, orderNo: existing.orderNo });
+      if (existing) throw conflict('ORDER_EXISTS', 'Для этого лида уже есть активный заказ', { orderId: existing.id, orderNo: existing.orderNo });
       let amountMinor: bigint | null = null;
       let currency: string | null = null;
       let offerVersionId: string | null = null;
       if (input.offerVersionId) {
-        const offer = assertFound(await tx.offer.findFirst({ where: { id: input.offerVersionId, companyId: actor.companyId, leadId: lead.id } }), 'Taklif');
+        const offer = assertFound(await tx.offer.findFirst({ where: { id: input.offerVersionId, companyId: actor.companyId, leadId: lead.id } }), 'Предложение');
         amountMinor = offer.amountMinor;
         currency = offer.currency;
         offerVersionId = offer.id;
       }
       if (input.agreedAmount && input.currency) {
-        if (!isSupportedCurrency(input.currency)) throw unprocessable('INVALID_CURRENCY', 'Valyuta qo‘llab-quvvatlanmaydi', { currency: 'unsupported' });
+        if (!isSupportedCurrency(input.currency)) throw unprocessable('INVALID_CURRENCY', 'Валюта не поддерживается', { currency: 'unsupported' });
         const m = parseMoney(input.agreedAmount, input.currency);
         amountMinor = m.amountMinor;
         currency = m.currency;
@@ -263,7 +261,7 @@ export class OrdersService {
         await audit(tx, actor, { entityType: 'order', entityId: order.id, action: 'created', newValue: { orderNo: order.orderNo, leadId: lead.id } });
         return order;
       } catch (err) {
-        if (isPgUniqueViolation(err)) throw conflict('ORDER_EXISTS', 'Bu lid uchun faol buyurtma mavjud');
+        if (isPgUniqueViolation(err)) throw conflict('ORDER_EXISTS', 'Для этого лида уже есть активный заказ');
         throw err;
       }
     });
@@ -285,7 +283,7 @@ export class OrdersService {
     const canSeeFull = actor.role !== 'MANAGER' || order.ownerId === actor.id;
     const cost = canCost(actor);
     const [lead, contact, reminders, auditRows, supplierRefunds, refundMap] = await Promise.all([
-      this.d.prisma.lead.findFirst({ where: { id: order.leadId, companyId: actor.companyId }, select: { id: true, name: true, stage: true, version: true, amoLeadId: true, serviceType: true, requirements: true, tourOperatorId: true, ownerId: true, firstWonAt: true } }),
+      this.d.prisma.lead.findFirst({ where: { id: order.leadId, companyId: actor.companyId }, select: { id: true, name: true, stage: true, version: true, serviceType: true, requirements: true, tourOperatorId: true, ownerId: true, firstWonAt: true } }),
       this.d.prisma.contact.findFirst({ where: { id: order.contactId, companyId: actor.companyId }, select: { id: true, fullName: true, primaryPhone: true, primaryEmail: true } }),
       this.d.prisma.reminderOccurrence.findMany({ where: { companyId: actor.companyId, orderId: id }, orderBy: { dueAt: 'asc' } }),
       this.d.prisma.auditLog.findMany({ where: { companyId: actor.companyId, entityId: { in: [id, ...order.segments.map((s) => s.id)] } }, orderBy: { createdAt: 'desc' }, take: 100 }),
@@ -338,9 +336,9 @@ export class OrdersService {
     patch: { agreedAmount?: string; netPrice?: string | null; tourOperatorId?: string | null; tourOperatorReason?: string | null; currency?: string; saleEvidence?: string | null; note?: string | null; ticketingState?: TicketingState; fulfillmentState?: FulfillmentState; paymentState?: PaymentState },
   ) {
     const result = await this.d.prisma.$transaction(async (tx) => {
-      const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id }) }), 'Buyurtma');
+      const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id }) }), 'Заказ');
       if (!canEditRecord(actor, order.ownerId)) throw forbidden();
-      if (order.fulfillmentState === 'cancelled') throw unprocessable('ORDER_CANCELLED', 'Bekor qilingan buyurtmani tahrirlab bo‘lmaydi');
+      if (order.fulfillmentState === 'cancelled') throw unprocessable('ORDER_CANCELLED', 'Нельзя редактировать отменённый заказ');
       const data: Prisma.OrderUncheckedUpdateManyInput = { version: { increment: 1 } };
       if (patch.netPrice !== undefined) requireCost(actor);
       const pricing = patch.agreedAmount !== undefined || patch.currency !== undefined || patch.netPrice !== undefined;
@@ -350,28 +348,28 @@ export class OrdersService {
         const lead = await tx.lead.findFirst({ where: { id: order.leadId, companyId: actor.companyId }, select: { firstWonAt: true } });
         const confirmedLike = order.fulfillmentState !== 'draft' || !!order.confirmedAt || !!lead?.firstWonAt;
         const reason = patch.tourOperatorReason?.trim() || null;
-        if (confirmedLike && (!reason || reason.length < 3)) throw unprocessable('REASON_REQUIRED', 'Tasdiqlangan buyurtma turoperatorini o‘zgartirish uchun sabab kerak', { tourOperatorReason: 'required' });
+        if (confirmedLike && (!reason || reason.length < 3)) throw unprocessable('REASON_REQUIRED', 'Для смены туроператора подтверждённого заказа нужна причина', { tourOperatorReason: 'required' });
         if (patch.tourOperatorId) await assertSelectableSupplier(tx, actor.companyId, patch.tourOperatorId, { kind: 'tour_operator' });
         data.tourOperatorId = patch.tourOperatorId;
         operatorChange = { from: order.tourOperatorId, to: patch.tourOperatorId, reason };
       }
       if (pricing) {
         const currency = patch.currency ?? order.currency;
-        if (!currency || !isSupportedCurrency(currency)) throw unprocessable('INVALID_CURRENCY', 'Valyuta ko‘rsatilmagan', { currency: 'required' });
+        if (!currency || !isSupportedCurrency(currency)) throw unprocessable('INVALID_CURRENCY', 'Валюта не указана', { currency: 'required' });
         const hasAmounts = order.agreedAmountMinor !== null || order.netPriceMinor !== null;
         if (order.currency && currency !== order.currency && hasAmounts && (patch.agreedAmount === undefined || patch.netPrice === undefined)) {
-          throw unprocessable('CURRENCY_CHANGE_REQUIRES_AMOUNTS', 'Valyutani o‘zgartirishda sotuv narxi va tannarx qayta kiritilishi kerak (kurs bo‘yicha avtomatik o‘zgartirilmaydi)', { currency: 'amounts_required' });
+          throw unprocessable('CURRENCY_CHANGE_REQUIRES_AMOUNTS', 'При смене валюты цену продажи и себестоимость нужно ввести заново (пересчёт по курсу не выполняется)', { currency: 'amounts_required' });
         }
         if (patch.agreedAmount !== undefined) {
           const m = parseMoney(patch.agreedAmount, currency);
-          if (m.amountMinor < 0n) throw unprocessable('INVALID_AMOUNT', 'Sotuv narxi manfiy bo‘lmasin', { agreedAmount: 'negative' });
+          if (m.amountMinor < 0n) throw unprocessable('INVALID_AMOUNT', 'Цена продажи не может быть отрицательной', { agreedAmount: 'negative' });
           data.agreedAmountMinor = m.amountMinor;
         }
         if (patch.netPrice !== undefined) {
           if (patch.netPrice === null) data.netPriceMinor = null;
           else {
             const m = parseMoney(patch.netPrice, currency);
-            if (m.amountMinor < 0n) throw unprocessable('INVALID_AMOUNT', 'Tannarx manfiy bo‘lmasin', { netPrice: 'negative' });
+            if (m.amountMinor < 0n) throw unprocessable('INVALID_AMOUNT', 'Себестоимость не может быть отрицательной', { netPrice: 'negative' });
             data.netPriceMinor = m.amountMinor;
           }
         }
@@ -387,7 +385,7 @@ export class OrdersService {
         if (patch.fulfillmentState === 'cancelled') data.cancelledAt = this.d.clock.now();
       }
       const res = await tx.order.updateMany({ where: { id, version }, data });
-      if (res.count !== 1) throw conflict('VERSION_CONFLICT', 'Buyurtma boshqa foydalanuvchi tomonidan o‘zgartirilgan. Sahifani yangilang.');
+      if (res.count !== 1) throw conflict('VERSION_CONFLICT', 'Заказ изменён другим пользователем. Обновите страницу.');
       if (operatorChange) {
         await audit(tx, actor, { entityType: 'order', entityId: id, action: 'tour_operator_changed', oldValue: { tourOperatorId: operatorChange.from }, newValue: { tourOperatorId: operatorChange.to, reason: operatorChange.reason } });
       }
@@ -399,7 +397,6 @@ export class OrdersService {
         newValue: patch,
       });
       const updated = await tx.order.findUniqueOrThrow({ where: { id } });
-      await enqueueOutbox(tx, { companyId: actor.companyId, operationKey: `order.summary:${id}:${updated.version}`, target: 'amocrm', action: 'order.summary', payload: { orderId: id, leadId: order.leadId } });
       return { before: order, after: updated };
     });
     const { RemindersService } = await import('./reminders.service');
@@ -422,16 +419,16 @@ export class OrdersService {
     orderId: string,
     input: { kind: 'payment' | 'refund'; amount: string; currency: string; receivedAt: Date; method: string; evidence?: string | null; reference?: string | null; businessKey: string },
   ) {
-    if (!isSupportedCurrency(input.currency)) throw unprocessable('INVALID_CURRENCY', 'Valyuta qo‘llab-quvvatlanmaydi', { currency: 'unsupported' });
+    if (!isSupportedCurrency(input.currency)) throw unprocessable('INVALID_CURRENCY', 'Валюта не поддерживается', { currency: 'unsupported' });
     const money = parseMoney(input.amount, input.currency);
-    if (money.amountMinor <= 0n) throw unprocessable('INVALID_AMOUNT', 'Summa musbat bo‘lishi kerak', { amount: 'positive' });
+    if (money.amountMinor <= 0n) throw unprocessable('INVALID_AMOUNT', 'Сумма должна быть положительной', { amount: 'positive' });
     return this.d.prisma.$transaction(async (tx) => {
-      const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: orderId }) }), 'Buyurtma');
+      const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: orderId }) }), 'Заказ');
       if (!canEditRecord(actor, order.ownerId)) throw forbidden();
       const dup = await tx.payment.findUnique({ where: { companyId_businessKey: { companyId: actor.companyId, businessKey: input.businessKey } } });
       if (dup) {
         if (dup.orderId !== orderId || dup.amountMinor !== money.amountMinor || dup.currency !== money.currency || dup.kind !== input.kind) {
-          throw conflict('IDEMPOTENCY_KEY_REUSED', 'Bu kalit boshqa to‘lov uchun ishlatilgan');
+          throw conflict('IDEMPOTENCY_KEY_REUSED', 'Этот ключ уже использован для другого платежа');
         }
         return { payment: dup, order, duplicate: true, paymentStateNote: null as string | null };
       }
@@ -439,7 +436,7 @@ export class OrdersService {
         // Mijozga qaytarim: valyuta buyurtma narxlariga mos, qabul qilingan to'lovdan oshmasin (kurs yo'q).
         const svc = await tx.orderService.findMany({ where: { companyId: actor.companyId, orderId, removedAt: null } });
         const fin = orderFinance(order, svc);
-        if (!fin.hasPrice) throw unprocessable('PRICE_REQUIRED', 'Qaytarimni yozishdan oldin buyurtma narxini kiriting', { amount: 'price_required' });
+        if (!fin.hasPrice) throw unprocessable('PRICE_REQUIRED', 'Перед записью возврата укажите цену заказа', { amount: 'price_required' });
         const sums = (await loadRefunds(tx, actor.companyId, [orderId])).get(orderId);
         const check = checkCustomerRefund(fin, { currency: money.currency, amountMinor: money.amountMinor, receivedMinor: sums?.received[money.currency] ?? 0n, refundedMinor: sums?.refunds[money.currency]?.customerMinor ?? 0n });
         if (!check.ok) throw unprocessable(check.code, check.message, { currency: check.code === 'REFUND_CURRENCY_MISMATCH' ? 'mismatch' : 'invalid', amount: check.code === 'REFUND_EXCEEDS_RECEIVED' ? 'exceeds_received' : 'ok' });
@@ -480,19 +477,19 @@ export class OrdersService {
     input: { amount: string; currency: string; receivedAt: Date; supplierId?: string | null; serviceId?: string | null; reference?: string | null; note?: string | null; businessKey: string },
   ) {
     requireCost(actor);
-    if (!isSupportedCurrency(input.currency)) throw unprocessable('INVALID_CURRENCY', 'Valyuta qo‘llab-quvvatlanmaydi', { currency: 'unsupported' });
+    if (!isSupportedCurrency(input.currency)) throw unprocessable('INVALID_CURRENCY', 'Валюта не поддерживается', { currency: 'unsupported' });
     const money = parseMoney(input.amount, input.currency);
-    if (money.amountMinor <= 0n) throw unprocessable('INVALID_AMOUNT', 'Summa musbat bo‘lishi kerak', { amount: 'positive' });
+    if (money.amountMinor <= 0n) throw unprocessable('INVALID_AMOUNT', 'Сумма должна быть положительной', { amount: 'positive' });
     return this.d.prisma.$transaction(async (tx) => {
-      const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: orderId }) }), 'Buyurtma');
+      const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: orderId }) }), 'Заказ');
       if (!canEditRecord(actor, order.ownerId)) throw forbidden();
       const dup = await tx.supplierRefund.findUnique({ where: { companyId_businessKey: { companyId: actor.companyId, businessKey: input.businessKey } } });
       if (dup) {
-        if (dup.orderId !== orderId || dup.amountMinor !== money.amountMinor || dup.currency !== money.currency) throw conflict('IDEMPOTENCY_KEY_REUSED', 'Bu kalit boshqa qaytarim uchun ishlatilgan');
+        if (dup.orderId !== orderId || dup.amountMinor !== money.amountMinor || dup.currency !== money.currency) throw conflict('IDEMPOTENCY_KEY_REUSED', 'Этот ключ уже использован для другого возврата');
         return { refund: dup, duplicate: true };
       }
-      if (input.supplierId) assertFound(await tx.supplier.findFirst({ where: { id: input.supplierId, companyId: actor.companyId } }), 'Yetkazib beruvchi');
-      if (input.serviceId) assertFound(await tx.orderService.findFirst({ where: { id: input.serviceId, companyId: actor.companyId, orderId } }), 'Xizmat');
+      if (input.supplierId) assertFound(await tx.supplier.findFirst({ where: { id: input.supplierId, companyId: actor.companyId } }), 'Поставщик');
+      if (input.serviceId) assertFound(await tx.orderService.findFirst({ where: { id: input.serviceId, companyId: actor.companyId, orderId } }), 'Услуга');
       const svc = await tx.orderService.findMany({ where: { companyId: actor.companyId, orderId, removedAt: null } });
       const fin = orderFinance(order, svc);
       const sums = (await loadRefunds(tx, actor.companyId, [orderId])).get(orderId);
@@ -510,7 +507,7 @@ export class OrdersService {
 
   async addPassenger(actor: UserActor, orderId: string, input: { fullName: string; type: 'adult' | 'child' | 'infant'; birthDate?: Date | null }) {
     return this.d.prisma.$transaction(async (tx) => {
-      const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: orderId }) }), 'Buyurtma');
+      const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: orderId }) }), 'Заказ');
       if (!canEditRecord(actor, order.ownerId)) throw forbidden();
       const p = await tx.passenger.create({ data: { companyId: actor.companyId, orderId, fullName: input.fullName, type: input.type, birthDate: input.birthDate ?? null } });
       await audit(tx, actor, { entityType: 'order', entityId: orderId, action: 'passenger_added', newValue: { passengerId: p.id, type: input.type } });
@@ -519,18 +516,13 @@ export class OrdersService {
   }
 
   private moneyPair(amount: string | null | undefined, net: string | null | undefined, currency: string | null | undefined) {
-    if ((amount || net) && !currency) throw unprocessable('INVALID_CURRENCY', 'Narx kiritilganda valyuta majburiy', { currency: 'required' });
-    if (currency && !isSupportedCurrency(currency)) throw unprocessable('INVALID_CURRENCY', 'Valyuta qo‘llab-quvvatlanmaydi', { currency: 'unsupported' });
+    if ((amount || net) && !currency) throw unprocessable('INVALID_CURRENCY', 'При указании цены валюта обязательна', { currency: 'required' });
+    if (currency && !isSupportedCurrency(currency)) throw unprocessable('INVALID_CURRENCY', 'Валюта не поддерживается', { currency: 'unsupported' });
     const sell = amount ? parseMoney(amount, currency!) : null;
     const cost = net ? parseMoney(net, currency!) : null;
-    if (sell && sell.amountMinor < 0n) throw unprocessable('INVALID_AMOUNT', 'Sotuv narxi manfiy bo‘lmasin', { amount: 'negative' });
-    if (cost && cost.amountMinor < 0n) throw unprocessable('INVALID_AMOUNT', 'Tannarx manfiy bo‘lmasin', { netAmount: 'negative' });
+    if (sell && sell.amountMinor < 0n) throw unprocessable('INVALID_AMOUNT', 'Цена продажи не может быть отрицательной', { amount: 'negative' });
+    if (cost && cost.amountMinor < 0n) throw unprocessable('INVALID_AMOUNT', 'Себестоимость не может быть отрицательной', { netAmount: 'negative' });
     return { sell: sell?.amountMinor ?? null, cost: cost?.amountMinor ?? null };
-  }
-
-  /** Xizmat qatori o'zgarsa, amoCRM'dagi sotuv jami (order.summary) qayta yuboriladi; tannarx/foyda yuborilmaydi. */
-  private async queueSummary(tx: Tx, actor: UserActor, order: Pick<Order, 'id' | 'leadId'>, token: string) {
-    await enqueueOutbox(tx, { companyId: actor.companyId, operationKey: `order.summary:${order.id}:svc:${token}:${this.d.clock.now().getTime()}`, target: 'amocrm', action: 'order.summary', payload: { orderId: order.id, leadId: order.leadId } });
   }
 
   async addService(
@@ -541,11 +533,11 @@ export class OrdersService {
     if (input.netAmount) requireCost(actor);
     const { sell, cost } = this.moneyPair(input.amount, input.netAmount, input.currency);
     const det = validateServiceDetails(input.serviceType, input.details);
-    if (!det.ok) throw unprocessable('VALIDATION_FAILED', 'Kiritilgan ma’lumot noto‘g‘ri', det.errors);
+    if (!det.ok) throw unprocessable('VALIDATION_FAILED', 'Введены неверные данные', det.errors);
     return this.d.prisma.$transaction(async (tx) => {
-      const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: orderId }) }), 'Buyurtma');
+      const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: orderId }) }), 'Заказ');
       if (!canEditRecord(actor, order.ownerId)) throw forbidden();
-      if (order.fulfillmentState === 'cancelled') throw unprocessable('ORDER_CANCELLED', 'Bekor qilingan buyurtmani tahrirlab bo‘lmaydi');
+      if (order.fulfillmentState === 'cancelled') throw unprocessable('ORDER_CANCELLED', 'Нельзя редактировать отменённый заказ');
       if (input.supplierId) await assertSelectableSupplier(tx, actor.companyId, input.supplierId);
       const s = await tx.orderService.create({
         data: {
@@ -567,7 +559,6 @@ export class OrdersService {
         action: 'service_added',
         newValue: { serviceId: s.id, serviceType: s.serviceType, amount: input.amount ?? null, netAmount: input.netAmount ?? null, currency: s.currency, supplierId: s.supplierId, includedInPackage: s.includedInPackage },
       });
-      await this.queueSummary(tx, actor, order, s.id);
       return serializeService(s, canCost(actor));
     });
   }
@@ -579,20 +570,20 @@ export class OrdersService {
   ) {
     if (patch.netAmount !== undefined) requireCost(actor);
     return this.d.prisma.$transaction(async (tx) => {
-      const before = assertFound(await tx.orderService.findFirst({ where: { id: serviceId, companyId: actor.companyId, removedAt: null } }), 'Xizmat');
-      const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: before.orderId }) }), 'Xizmat');
+      const before = assertFound(await tx.orderService.findFirst({ where: { id: serviceId, companyId: actor.companyId, removedAt: null } }), 'Услуга');
+      const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: before.orderId }) }), 'Услуга');
       if (!canEditRecord(actor, order.ownerId)) throw forbidden();
-      if (order.fulfillmentState === 'cancelled') throw unprocessable('ORDER_CANCELLED', 'Bekor qilingan buyurtmani tahrirlab bo‘lmaydi');
+      if (order.fulfillmentState === 'cancelled') throw unprocessable('ORDER_CANCELLED', 'Нельзя редактировать отменённый заказ');
       const currency = patch.currency !== undefined ? patch.currency : before.currency;
       const hasAmounts = before.amountMinor !== null || before.netMinor !== null;
       if (patch.currency !== undefined && before.currency && patch.currency !== before.currency && hasAmounts && (patch.amount === undefined || patch.netAmount === undefined)) {
-        throw unprocessable('CURRENCY_CHANGE_REQUIRES_AMOUNTS', 'Valyutani o‘zgartirishda sotuv narxi va tannarx qayta kiritilishi kerak', { currency: 'amounts_required' });
+        throw unprocessable('CURRENCY_CHANGE_REQUIRES_AMOUNTS', 'При смене валюты цену продажи и себестоимость нужно ввести заново', { currency: 'amounts_required' });
       }
       const curText = (v: bigint | null) => (v !== null && before.currency ? fmt(v, before.currency) : null);
       const { sell, cost } = this.moneyPair(patch.amount !== undefined ? patch.amount : curText(before.amountMinor), patch.netAmount !== undefined ? patch.netAmount : curText(before.netMinor), currency);
       const type = patch.serviceType ?? before.serviceType;
       const det = validateServiceDetails(type, patch.details ?? (before.details as Record<string, unknown>));
-      if (!det.ok) throw unprocessable('VALIDATION_FAILED', 'Kiritilgan ma’lumot noto‘g‘ri', det.errors);
+      if (!det.ok) throw unprocessable('VALIDATION_FAILED', 'Введены неверные данные', det.errors);
       if (patch.supplierId) await assertSelectableSupplier(tx, actor.companyId, patch.supplierId, { unchanged: patch.supplierId === before.supplierId });
       const after = await tx.orderService.update({
         where: { id: serviceId },
@@ -617,7 +608,6 @@ export class OrdersService {
         includedInPackage: r.includedInPackage,
       });
       await audit(tx, actor, { entityType: 'order', entityId: before.orderId, action: priceChanged ? 'service_price_updated' : 'service_updated', oldValue: snap(before), newValue: snap(after) });
-      if (priceChanged) await this.queueSummary(tx, actor, order, serviceId);
       return serializeService(after, canCost(actor));
     });
   }
@@ -625,10 +615,10 @@ export class OrdersService {
   /** Soft-delete: qator tarixda (auditda) qoladi va hisobga kirmaydi. */
   async removeService(actor: UserActor, serviceId: string) {
     return this.d.prisma.$transaction(async (tx) => {
-      const before = assertFound(await tx.orderService.findFirst({ where: { id: serviceId, companyId: actor.companyId, removedAt: null } }), 'Xizmat');
-      const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: before.orderId }) }), 'Xizmat');
+      const before = assertFound(await tx.orderService.findFirst({ where: { id: serviceId, companyId: actor.companyId, removedAt: null } }), 'Услуга');
+      const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: before.orderId }) }), 'Услуга');
       if (!canEditRecord(actor, order.ownerId)) throw forbidden();
-      if (order.fulfillmentState === 'cancelled') throw unprocessable('ORDER_CANCELLED', 'Bekor qilingan buyurtmani tahrirlab bo‘lmaydi');
+      if (order.fulfillmentState === 'cancelled') throw unprocessable('ORDER_CANCELLED', 'Нельзя редактировать отменённый заказ');
       await tx.orderService.update({ where: { id: serviceId }, data: { removedAt: this.d.clock.now() } });
       await audit(tx, actor, {
         entityType: 'order',
@@ -636,17 +626,16 @@ export class OrdersService {
         action: 'service_removed',
         oldValue: { serviceId, serviceType: before.serviceType, amount: before.amountMinor !== null && before.currency ? fmt(before.amountMinor, before.currency) : null, netAmount: before.netMinor !== null && before.currency ? fmt(before.netMinor, before.currency) : null, currency: before.currency },
       });
-      await this.queueSummary(tx, actor, order, serviceId);
     });
   }
 
   async addTicket(actor: UserActor, orderId: string, input: { passengerId: string; ticketNumber: string; segmentIds: string[] }) {
     return this.d.prisma.$transaction(async (tx) => {
-      const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: orderId }) }), 'Buyurtma');
+      const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: orderId }) }), 'Заказ');
       if (!canEditRecord(actor, order.ownerId)) throw forbidden();
-      assertFound(await tx.passenger.findFirst({ where: { id: input.passengerId, companyId: actor.companyId, orderId } }), 'Yo‘lovchi');
+      assertFound(await tx.passenger.findFirst({ where: { id: input.passengerId, companyId: actor.companyId, orderId } }), 'Пассажир');
       const segs = await tx.flightSegment.findMany({ where: { id: { in: input.segmentIds }, companyId: actor.companyId, orderId } });
-      if (segs.length !== input.segmentIds.length) throw unprocessable('SEGMENT_INVALID', 'Segment buyurtmaga tegishli emas');
+      if (segs.length !== input.segmentIds.length) throw unprocessable('SEGMENT_INVALID', 'Сегмент не относится к этому заказу');
       const t = await tx.ticket.create({ data: { companyId: actor.companyId, passengerId: input.passengerId, ticketNumber: input.ticketNumber } });
       await tx.ticketSegment.createMany({ data: segs.map((s) => ({ companyId: actor.companyId, ticketId: t.id, segmentId: s.id })) });
       await audit(tx, actor, { entityType: 'order', entityId: orderId, action: 'ticket_added', newValue: { ticketId: t.id, segments: input.segmentIds } });
@@ -659,9 +648,9 @@ export function computePaymentState(order: Pick<Order, 'agreedAmountMinor' | 'cu
   const paid = sumByCurrency(payments.filter((p) => p.kind === 'payment').map((p) => ({ amountMinor: p.amountMinor, currency: p.currency })));
   const refunded = sumByCurrency(payments.filter((p) => p.kind === 'refund').map((p) => ({ amountMinor: p.amountMinor, currency: p.currency })));
   const currencies = new Set([...Object.keys(paid), ...Object.keys(refunded)]);
-  if (!order.currency || order.agreedAmountMinor === null) return { state: null, note: 'Kelishilgan summa yo‘q: to‘lov holati qo‘lda belgilanadi' };
+  if (!order.currency || order.agreedAmountMinor === null) return { state: null, note: 'Согласованной суммы нет: статус оплаты выставляется вручную' };
   if ([...currencies].some((c) => c !== order.currency)) {
-    return { state: null, note: 'Buyurtma valyutasidan farqli to‘lov bor: kurs tasdiqlanmaguncha holat avtomatik hisoblanmaydi' };
+    return { state: null, note: 'Есть платёж не в валюте заказа: пока курс не подтверждён, статус автоматически не рассчитывается' };
   }
   const p = paid[order.currency] ?? 0n;
   const r = refunded[order.currency] ?? 0n;

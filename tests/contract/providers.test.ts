@@ -3,18 +3,13 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   assertAdaptersAllowed,
-  assertAllowedDomain,
   classifyStatus,
   MockAdapterInProductionError,
   normalizeLead,
-  parseAmoCrmWebhook,
-  parseChatsWebhook,
   parseMetaWebhook,
   redactBody,
-  signChatsRequest,
   signMetaBody,
   verifyChallenge,
-  verifyChatsWebhook,
   verifyMetaSignature,
 } from '@crm/integrations';
 
@@ -66,51 +61,11 @@ describe('Meta webhook parsing', () => {
   });
 });
 
-describe('amoCRM CRM webhook (form-urlencoded, [S11])', () => {
-  it('parses nested keys into per-entity signals with versioned keys', () => {
-    const signals = parseAmoCrmWebhook(fx('amocrm/crm-webhook-status.txt').toString().trim());
-    expect(signals).toHaveLength(2);
-    expect(signals[0]).toMatchObject({ entity: 'leads', action: 'status', id: '50000001', accountId: '30000001', key: 'leads:status:50000001:1761300200' });
-    expect(signals[1]?.hint.responsible_user_id).toBe('9000002');
-  });
-});
-
-describe('amoCRM Chats API signature (own scheme, [S03])', () => {
-  it('signs requests and verifies webhooks with HMAC-SHA1, not the Meta scheme', () => {
-    const h = signChatsRequest('s', 'POST', '/v2/origin/custom/abc', '{}', 'Fri, 24 Oct 2026 10:00:00 GMT');
-    expect(h['Content-MD5']).toBe('99914b932bd37a50b983c5e7c90ae93b');
-    expect(h['X-Signature']).toMatch(/^[0-9a-f]{40}$/);
-    const body = Buffer.from('{"a":1}');
-    const sig = require('node:crypto').createHmac('sha1', 's').update(body).digest('hex');
-    expect(verifyChatsWebhook(body, sig, 's')).toBe(true);
-    expect(verifyChatsWebhook(body, signMetaBody(body, 's'), 's')).toBe(false);
-  });
-  it('parses manager reply webhook', () => {
-    const r = parseChatsWebhook({
-      account_id: 'scope1',
-      time: 1761300300,
-      message: {
-        receiver: { client_id: '990000000000001' },
-        sender: { id: 'amo-user-1' },
-        conversation: { client_id: 'conv-1' },
-        timestamp: 1761300300,
-        message: { id: 'amo-msg-1', type: 'text', text: 'Ha, bor' },
-      },
-    });
-    expect(r).toMatchObject({ amoMessageId: 'amo-msg-1', conversationId: 'conv-1', receiverId: '990000000000001', text: 'Ha, bor' });
-  });
-});
-
 describe('adapter guards', () => {
   it('production refuses mock adapters', () => {
-    expect(() => assertAdaptersAllowed('production', [{ name: 'amocrm-demo', kind: 'mock' }])).toThrow(MockAdapterInProductionError);
+    expect(() => assertAdaptersAllowed('production', [{ name: 'meta-direct-demo', kind: 'mock' }])).toThrow(MockAdapterInProductionError);
     expect(() => assertAdaptersAllowed('staging', [{ name: 'x', kind: 'mock' }])).toThrow();
     expect(() => assertAdaptersAllowed('demo', [{ name: 'x', kind: 'mock' }])).not.toThrow();
-  });
-  it('amo domain allowlist rejects arbitrary URLs', () => {
-    expect(assertAllowedDomain('https://acme.amocrm.ru/', ['acme.amocrm.ru'])).toBe('acme.amocrm.ru');
-    expect(() => assertAllowedDomain('evil.example.com', ['acme.amocrm.ru'])).toThrow();
-    expect(() => assertAllowedDomain('other.amocrm.ru', ['acme.amocrm.ru'])).toThrow();
   });
   it('classifies statuses and redacts tokens', () => {
     expect(classifyStatus(429, '')).toBe('rate_limited');

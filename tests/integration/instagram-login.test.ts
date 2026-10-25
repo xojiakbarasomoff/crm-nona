@@ -4,7 +4,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Core } from '../../apps/api/src/core';
 import { GraphMetaDirectClient, signMetaBody } from '@crm/integrations';
-import { alwaysOnDuty, drain, login, makeApp, makeCore, sendChatReply, type Session } from './helpers';
+import { alwaysOnDuty, drain, login, makeApp, makeCore, type Session } from './helpers';
 
 /**
  * Instagram API with Instagram Login (Direct). Meta serverlari chaqirilmaydi: barcha HTTP chaqiruvlar sinov
@@ -197,14 +197,14 @@ describe('Instagram Login: kiruvchi Direct → kontakt/lid → mas’ul → javo
     expect(await p().conversation.count({ where: { connectionId: conn.id, scopedPeerId: sender } })).toBe(1);
   });
 
-  it('javob: amoCRM chat javobi → live Instagram mijozi orqali yuboriladi (demo adapter emas); xabar «accepted», «delivered» emas', async () => {
+  it('javob: navbatdagi javob → live Instagram mijozi orqali yuboriladi (demo adapter emas); xabar «accepted», «delivered» emas', async () => {
     const conn = await p().integrationConnection.findFirstOrThrow({ where: { provider: 'META_DIRECT', accountId: IG_ID } });
     const conv = await p().conversation.findFirstOrThrow({ where: { connectionId: conn.id, scopedPeerId: sender } });
     const lead = await p().lead.findUniqueOrThrow({ where: { id: conv.leadId! } });
-    const owner = await p().user.findUniqueOrThrow({ where: { id: lead.ownerId! } });
     calls.length = 0;
-    const r = await sendChatReply(app, core, { conversationId: conv.id, receiver: sender, text: 'Assalomu alaykum! Narxlarni yuboramiz.', authorAmoUserId: owner.amoUserId! });
-    expect(r.status).toBe(200);
+    // Javob yuborish uchun hozir CRM ichida ishlab chiqaruvchi yo‘q: `meta.send` ishlovchisi bevosita tekshiriladi.
+    const queued = await p().message.create({ data: { companyId: conv.companyId, conversationId: conv.id, connectionId: conv.connectionId, direction: 'outbound', type: 'text', content: 'Assalomu alaykum! Narxlarni yuboramiz.', state: 'queued', actorType: 'human', actorUserId: lead.ownerId } });
+    await p().outboxOperation.create({ data: { companyId: conv.companyId, operationKey: `direct.send:${queued.id}`, target: 'meta', action: 'meta.send', payload: { messageId: queued.id }, correlationId: queued.id } });
     await drain(core);
     const send = calls.find((c) => c.url.endsWith('/me/messages'))!;
     expect(send.url).toBe('https://graph.instagram.com/v23.0/me/messages');
@@ -215,7 +215,8 @@ describe('Instagram Login: kiruvchi Direct → kontakt/lid → mas’ul → javo
     // Ikkala yo'nalish ham haqiqiy sinovdan o'tdi: endi (va faqat endi) tayyor
     const ready = await p().integrationConnection.findUniqueOrThrow({ where: { id: conn.id } });
     expect(ready).toMatchObject({ health: 'ok', healthReason: null });
-    expect((await admin.get('/api/v1/integrations/instagram/status')).body.connections[0].state).toBe('ready');
+    const st = (await admin.get('/api/v1/integrations/instagram/status')).body.connections as Array<{ accountId: string; state: string }>;
+    expect(st.find((c) => c.accountId === IG_ID)?.state, JSON.stringify(st)).toBe('ready');
   });
 
   it('token yangilash: 14 kun ichida tugaydigan uzun token yangilanadi; muvaffaqiyatsiz bo‘lsa ulanish ko‘rinadigan sabab bilan degraded', async () => {
@@ -286,7 +287,7 @@ describe('Instagram Login: kiruvchi Direct → kontakt/lid → mas’ul → javo
       const a0 = await contactOf(sidA);
       const b0 = await contactOf(sidB);
       expect(a0.leads).toHaveLength(1);
-      expect(a0.leads[0]!.name).toBe('Instagram foydalanuvchisi');
+      expect(a0.leads[0]!.name).toBe('Пользователь Instagram');
       expect(await p().message.count({ where: { conversationId: a0.conv.id } })).toBe(1);
       expect(a0.contact).toMatchObject({ instagramUsername: null, instagramProfileAttempts: 1 });
       expect(a0.contact.instagramProfileNextAttemptAt).not.toBeNull();
@@ -324,8 +325,8 @@ describe('Instagram Login: kiruvchi Direct → kontakt/lid → mas’ul → javo
     const realConvs = await p().conversation.findMany({ where: { connectionId: liveConn.id } });
     expect(realConvs.length).toBeGreaterThan(0);
     // Qo'lda yaratilgan (kelib chiqishi noaniq) kontakt va lid
-    const company = await p().company.findFirstOrThrow();
-    const manual = await p().contact.create({ data: { companyId: company.id, fullName: 'Qo‘lda kiritilgan mijoz', syncState: 'pending_create' } });
+    const company = await p().company.findFirstOrThrow({ orderBy: { createdAt: 'asc' } });
+    const manual = await p().contact.create({ data: { companyId: company.id, fullName: 'Qo‘lda kiritilgan mijoz', syncState: 'local_only' } });
     // Sun'iy (Lead Ads demo adapteridan kelgan) kontakt
     const synthetic = await p().contact.create({ data: { companyId: company.id, fullName: 'Sun‘iy Lead Ads mijozi', syncState: 'pending_create' } });
     await p().inquiry.create({ data: { companyId: company.id, providerEventKey: `meta_leads:demo_plan_${synthetic.id}`, contactId: synthetic.id, channel: 'meta_lead_ads', placement: 'facebook', receivedAt: new Date(), correlationId: 'plan-test', processingState: 'linked' } });

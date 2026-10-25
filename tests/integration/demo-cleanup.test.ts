@@ -35,7 +35,7 @@ async function withEnv(fn: () => Promise<void>) {
   await alwaysOnDuty(core);
   app = await makeApp(core);
   admin = await login(app, 'admin@demo.local');
-  head = await login(app, 'rahbar@demo.local');
+  head = await login(app, 'admin2@demo.local');
   mgr = await login(app, 'menejer.a@demo.local');
   try {
     await fn();
@@ -48,16 +48,16 @@ async function withEnv(fn: () => Promise<void>) {
 }
 
 async function makeReal(label: string) {
-  const company = await p().company.findFirstOrThrow();
+  const company = await p().company.findFirstOrThrow({ orderBy: { createdAt: 'asc' } });
   let conn = await p().integrationConnection.findFirst({ where: { provider: 'META_DIRECT', mode: 'live' } });
   conn ??= await p().integrationConnection.create({ data: { companyId: company.id, provider: 'META_DIRECT', mode: 'live', accountId: 'REAL_ACC_1', routeToken: `rt-${Date.now()}`, health: 'degraded', healthReason: 'awaiting_live_verification', settings: {} } });
-  const contact = await p().contact.create({ data: { companyId: company.id, fullName: null, instagramUsername: `real_${label}`, syncState: 'pending_create' } });
+  const contact = await p().contact.create({ data: { companyId: company.id, fullName: null, instagramUsername: `real_${label}`, syncState: 'local_only' } });
   await p().contactIdentifier.create({ data: { companyId: company.id, contactId: contact.id, type: 'instagram_scoped', value: `IGS_${label}`, scope: conn.accountId, verified: true } });
   const lead = await p().$transaction((tx) => core.leads.createLead(tx, { companyId: company.id, contactId: contact.id, name: `@real_${label}`, channel: 'instagram_direct', placement: 'instagram', inquiryId: null, serviceType: null, at: new Date(), actor: { type: 'system', companyId: company.id, name: 'test' } as never }));
   const conv = await p().conversation.create({ data: { companyId: company.id, connectionId: conn.id, businessAccountId: conn.accountId, scopedPeerId: `IGS_${label}`, contactId: contact.id, leadId: lead.id } });
   await p().message.create({ data: { companyId: company.id, conversationId: conv.id, connectionId: conn.id, providerMessageId: `mid_${label}`, direction: 'inbound', type: 'text', content: 'haqiqiy xabar', attachments: [], state: 'received', actorType: 'customer' } });
   await p().crmTask.create({ data: { companyId: company.id, automationKey: `real_task_${label}`, entityType: 'lead', entityId: lead.id, kind: 'follow_up', text: 'haqiqiy lid vazifasi', dueAt: new Date(), state: 'pending' } });
-  const u = await p().user.findFirstOrThrow({ where: { role: 'HEAD' } });
+  const u = await p().user.findFirstOrThrow({ where: { email: 'admin2@demo.local' } });
   await p().notification.create({ data: { companyId: company.id, userId: u.id, kind: 'lead_assigned', dedupeKey: `real_n_${label}`, title: 'Haqiqiy lid', link: `/leads/${lead.id}` } });
   await p().outboxOperation.create({ data: { companyId: company.id, operationKey: `real_op_${label}`, target: 'amocrm', action: 'lead.create', payload: { leadId: lead.id }, state: 'done', correlationId: `c_${label}` } });
   await p().webhookInbox.create({ data: { companyId: company.id, provider: 'meta', connectionKey: conn.accountId, externalEventId: `ig_msg:${label}`, eventType: 'ig_message', payloadEnc: 'x', state: 'done', correlationId: `c_${label}` } });
@@ -81,6 +81,8 @@ describe('demo tozalash: eksport → tiklash tekshiruvi → o‘chirish', () => 
     // Sun'iy: 3 ta Lead Ads lidi (+ buyurtma va to'lov)
     const demoLeads = [await newLead(app, core), await newLead(app, core), await newLead(app, core)];
     const order = (await head.post('/api/v1/orders', { leadId: demoLeads[0]!.id, agreedAmount: '500.00', currency: 'USD' })).body;
+    // Eski (amoCRM davridan qolgan) navbat yozuvi sun'iy lidga bog'langan bo'lishi mumkin: eksport va tiklash uni ham qamrab olishi kerak.
+    await p().outboxOperation.create({ data: { companyId: demoLeads[0]!.companyId, operationKey: `legacy_demo_${demoLeads[0]!.id}`, target: 'amocrm', action: 'lead.create', payload: { leadId: demoLeads[0]!.id }, state: 'done', correlationId: `legacy_${demoLeads[0]!.id}` } });
     await drain(core);
     // Haqiqiy va noaniq
     const real = await makeReal('a');

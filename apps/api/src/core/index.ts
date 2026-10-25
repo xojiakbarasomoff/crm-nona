@@ -8,6 +8,7 @@ export * from './queue';
 export * from './audit';
 export * from './totp';
 export { RemindersService } from './services/reminders.service';
+export type { AccountSpec } from './services/accounts.service';
 export { ProcessingService } from './services/processing.service';
 export { LeadsService } from './services/leads.service';
 export { computePaymentState } from './services/orders.service';

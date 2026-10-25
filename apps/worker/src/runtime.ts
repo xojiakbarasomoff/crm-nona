@@ -50,7 +50,6 @@ export class WorkerRuntime {
     this.every('relay', config.outboxIntervalMs, () => this.relay(outboxQ, inboxQ));
     this.every('scheduler', config.schedulerIntervalMs, () => this.schedulerTick());
     this.every('heartbeat', 15_000, () => this.heartbeat());
-    this.every('reconcile', config.reconcileIntervalMs, () => this.reconcileAmo());
     this.every('housekeeping', 60_000, () => this.housekeeping());
     this.every('instagram-token', 6 * 3600_000, () => this.refreshInstagramTokens());
     this.every('instagram-profile', 60_000, () => this.retryInstagramProfiles());
@@ -86,15 +85,6 @@ export class WorkerRuntime {
   private async beat(name: string, info: Record<string, unknown>) {
     const now = new Date();
     await this.core.deps.prisma.workerHeartbeat.upsert({ where: { name }, create: { name, lastBeatAt: now, info: info as object }, update: { lastBeatAt: now, info: info as object } });
-  }
-
-  /** Incremental amoCRM reconciliation (5 min, overlap) + daily control once per 24 h. */
-  async reconcileAmo() {
-    const conns = await this.core.deps.prisma.integrationConnection.findMany({ where: { provider: 'AMOCRM_REST', disconnectedAt: null, health: 'ok' } });
-    for (const conn of conns) {
-      await this.core.amoSync.reconcile(conn);
-      await this.core.amoSync.dailyAuditIfDue(conn);
-    }
   }
 
   /** Instagram long-lived tokens (~60 days): refresh those expiring within 14 days. */

@@ -2,24 +2,19 @@ import { randomUUID } from 'node:crypto';
 import type { Channel, Lead, Prisma, Stage, Tx } from '@crm/database';
 import {
   addWorkingMinutes,
-  automationKey,
   can,
   checkTransition,
-  detectAnomaly,
   isClosed,
   resumeFromFollowUp,
-  shouldApplyRemote,
   stateHash,
-  STAGE_LABELS_UZ,
+  STAGE_LABELS_RU,
   type LeadFacts,
   type WeeklySchedule,
 } from '@crm/domain';
-import type { AmoLeadSnapshot } from '@crm/integrations';
 import { audit } from '../audit';
 import type { Actor, CoreDeps, UserActor } from '../context';
 import { headRecipients, notify, publishEvent } from '../events';
 import { conflict, forbidden, unprocessable } from '../errors';
-import { enqueueOutbox } from '../queue';
 import { assertFound, canEditRecord, leadWhere, requireCap } from '../scope';
 import { assignNewLead } from './assignment.service';
 import { assertSelectableSupplier, serializeSupplier } from './suppliers.service';
@@ -38,14 +33,6 @@ export interface LeadRequirements {
   budgetCurrency?: string | null;
   notes?: string | null;
   paymentDueAt?: string | null;
-}
-
-export interface PendingChange {
-  operationKey: string;
-  stage?: Stage;
-  ownerId?: string;
-  requestedBy: string | null;
-  requestedAt: string;
 }
 
 const req = (l: Pick<Lead, 'requirements'>) => (l.requirements ?? {}) as LeadRequirements;
@@ -94,7 +81,7 @@ export class LeadsService {
   constructor(private readonly d: CoreDeps) {}
 
   /**
-   * Creates a NEW lead with SLA deadline and the amoCRM create operation. Assignment runs at the
+   * Creates a NEW lead with an SLA deadline. Assignment runs at the
    * very end (immediately, or deferred by the caller to just before commit) so that the manager
    * pool row lock is held for as few statements as possible (AC10 under load).
    */
@@ -116,11 +103,10 @@ export class LeadsService {
         firstPlacement: p.placement,
         firstInquiryId: p.inquiryId,
         firstResponseDueAt,
-        syncState: 'pending_create',
+        syncState: 'local_only',
         note: p.note ?? null,
       },
     });
-    await enqueueOutbox(tx, { companyId: p.companyId, operationKey: `lead.create:${lead.id}`, target: 'amocrm', action: 'lead.create', payload: { leadId: lead.id } });
     if (p.deferAssignment) return lead;
     return this.assignLead(tx, lead, p);
   }
@@ -141,7 +127,7 @@ export class LeadsService {
     });
     await audit(tx, p.actor, { entityType: 'lead', entityId: lead.id, action: 'assigned', newValue: { ownerId: decision.userId, reason: decision.reason, algorithm: decision.algorithm, poolId: decision.poolId } });
     if (decision.userId) {
-      await notify(tx, { companyId: p.companyId, userId: decision.userId, kind: 'lead_assigned', dedupeKey: `lead_assigned:${lead.id}:${decision.userId}`, title: `Yangi lid: ${p.name}`, link: `/leads/${lead.id}` });
+      await notify(tx, { companyId: p.companyId, userId: decision.userId, kind: 'lead_assigned', dedupeKey: `lead_assigned:${lead.id}:${decision.userId}`, title: `Новый лид: ${p.name}`, link: `/leads/${lead.id}` });
     }
     if (decision.alertHead) {
       for (const uid of await headRecipients(tx, p.companyId)) {
@@ -150,11 +136,21 @@ export class LeadsService {
           userId: uid,
           kind: decision.reason === 'duty_fallback' ? 'lead_duty_fallback' : 'lead_awaiting_assignment',
           dedupeKey: `lead_unassigned:${lead.id}:${uid}`,
-          title: decision.reason === 'duty_fallback' ? `Lid navbatchiga biriktirildi: ${p.name}` : `Taqsimlash kutilmoqda: ${p.name}`,
+          title: decision.reason === 'duty_fallback' ? `Лид передан дежурному: ${p.name}` : `Ожидает распределения: ${p.name}`,
           link: `/leads/${lead.id}`,
         });
       }
     }
+    // Задача «первый контакт» создаётся сразу при назначении (идемпотентно по ключу).
+    await this.createCrmTask(tx, {
+      companyId: p.companyId,
+      key: `${lead.id}:first_contact:created`,
+      entityId: lead.id,
+      kind: 'first_contact',
+      text: `Первый контакт: ${p.name}`,
+      responsibleUserId: updated.ownerId,
+      dueAt: updated.firstResponseDueAt ?? new Date(p.at.getTime() + 15 * 60_000),
+    });
     return updated;
   }
 
@@ -194,7 +190,7 @@ export class LeadsService {
     // List view: only the columns the table needs (less mapping work per row).
     const rows = await this.d.prisma.lead.findMany({
       where,
-      select: { id: true, name: true, stage: true, firstSource: true, syncState: true, createdAt: true, ownerId: true, anomaly: true, slaBreachedAt: true, firstHumanActionAt: true, amoLeadId: true, contactId: true, version: true },
+      select: { id: true, name: true, stage: true, firstSource: true, createdAt: true, ownerId: true, anomaly: true, slaBreachedAt: true, firstHumanActionAt: true, contactId: true, version: true },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: q.limit + 1,
       ...(q.cursor ? { cursor: { id: q.cursor }, skip: 1 } : {}),
@@ -208,22 +204,18 @@ export class LeadsService {
   }
 
   async get(actor: UserActor, id: string) {
-    const lead = assertFound(await this.d.prisma.lead.findFirst({ where: leadWhere(actor, { id }) }), 'Lid');
-    const [events, offers, orders, contact, pendingOps] = await Promise.all([
+    const lead = assertFound(await this.d.prisma.lead.findFirst({ where: leadWhere(actor, { id }) }), 'Лид');
+    const [events, offers, orders, contact] = await Promise.all([
       this.d.prisma.leadEvent.findMany({ where: { companyId: actor.companyId, leadId: id }, orderBy: { effectiveAt: 'asc' } }),
       this.d.prisma.offer.findMany({ where: { companyId: actor.companyId, leadId: id }, orderBy: { version: 'desc' } }),
       this.d.prisma.order.findMany({ where: { companyId: actor.companyId, leadId: id }, select: { id: true, orderNo: true, fulfillmentState: true, tourOperatorId: true } }),
       this.d.prisma.contact.findFirst({ where: { companyId: actor.companyId, id: lead.contactId }, select: { id: true, fullName: true, firstName: true, lastName: true, primaryPhone: true, telegramUsername: true, instagramUsername: true, instagramName: true } }),
-      this.d.prisma.outboxOperation.findMany({
-        where: { companyId: actor.companyId, state: { in: ['pending', 'processing', 'failed', 'unknown', 'paused'] }, payload: { path: ['leadId'], equals: id } },
-        select: { id: true, action: true, state: true, lastError: true },
-      }),
     ]);
     // Faol buyurtma bo'lsa, turoperator — buyurtmaniki (tarixiy bog'lanish); aks holda lidniki.
     const activeOrder = orders.find((o) => o.fulfillmentState !== 'cancelled') ?? null;
     const operatorId = activeOrder ? activeOrder.tourOperatorId : lead.tourOperatorId;
     const op = operatorId ? await this.d.prisma.supplier.findFirst({ where: { id: operatorId, companyId: actor.companyId } }) : null;
-    return { lead, events, offers, orders, contact, pendingOperations: pendingOps, tourOperator: op ? serializeSupplier(op, can(actor.role, 'reference.view_full')) : null, operatorOwnedByOrder: activeOrder ? { id: activeOrder.id, orderNo: activeOrder.orderNo } : null };
+    return { lead, events, offers, orders, contact, tourOperator: op ? serializeSupplier(op, can(actor.role, 'reference.view_full')) : null, operatorOwnedByOrder: activeOrder ? { id: activeOrder.id, orderNo: activeOrder.orderNo } : null };
   }
 
   /** Local tourism fields are owned by PostgreSQL and change immediately (optimistic lock). */
@@ -234,7 +226,7 @@ export class LeadsService {
     patch: { requirements?: LeadRequirements; serviceType?: string | null; contactOutcome?: string | null; offerPrepDueAt?: Date | null; lostReasonCode?: string | null; lostNote?: string | null; nextContactAt?: Date | null; followUpNote?: string | null; tourOperatorId?: string | null },
   ) {
     return this.d.prisma.$transaction(async (tx) => {
-      const lead = assertFound(await tx.lead.findFirst({ where: leadWhere(actor, { id }) }), 'Lid');
+      const lead = assertFound(await tx.lead.findFirst({ where: leadWhere(actor, { id }) }), 'Лид');
       if (!canEditRecord(actor, lead.ownerId)) throw forbidden();
       const data: Prisma.LeadUpdateInput = { version: { increment: 1 } };
       if (patch.requirements) data.requirements = { ...req(lead), ...patch.requirements } as Prisma.InputJsonValue;
@@ -248,7 +240,7 @@ export class LeadsService {
       if (patch.tourOperatorId !== undefined && patch.tourOperatorId !== lead.tourOperatorId) {
         // Faol buyurtma bor bo'lsa, turoperator buyurtmaning tarixiy bog'lanishi: uni buyurtma kartasida (sabab va audit bilan) o'zgartiring.
         const active = await tx.order.findFirst({ where: { companyId: actor.companyId, leadId: id, fulfillmentState: { not: 'cancelled' } }, select: { id: true, orderNo: true } });
-        if (active) throw unprocessable('ORDER_OWNS_OPERATOR', `Buyurtma ${active.orderNo} mavjud: turoperatorni buyurtma kartasida o‘zgartiring (audit bilan). Eski sotuvlar statistikasi o‘zgarmaydi.`, { tourOperatorId: 'order_exists' }, { orderId: active.id });
+        if (active) throw unprocessable('ORDER_OWNS_OPERATOR', `Есть заказ ${active.orderNo}: туроператора меняйте в карточке заказа (с записью в журнале). Статистика прошлых продаж не изменится.`, { tourOperatorId: 'order_exists' }, { orderId: active.id });
       }
       if (patch.tourOperatorId !== undefined) {
         // Turoperator — yetkazib beruvchi; reklama manbasi (firstSource) bilan aralashmaydi.
@@ -257,240 +249,124 @@ export class LeadsService {
       }
       if (patch.contactOutcome && !lead.firstHumanActionAt) data.firstHumanActionAt = this.d.clock.now();
       const res = await tx.lead.updateMany({ where: { id, version }, data: data as Prisma.LeadUpdateManyMutationInput });
-      if (res.count !== 1) throw conflict('VERSION_CONFLICT', 'Lid boshqa foydalanuvchi tomonidan o‘zgartirilgan. Sahifani yangilang.');
+      if (res.count !== 1) throw conflict('VERSION_CONFLICT', 'Лид был изменён другим пользователем. Обновите страницу.');
       await audit(tx, actor, { entityType: 'lead', entityId: id, action: 'details_updated', oldValue: pick(lead, Object.keys(patch)), newValue: patch });
       return tx.lead.findUniqueOrThrow({ where: { id } });
     });
   }
 
-  /**
-   * Stage change requested in the web app. amoCRM owns the stage: the request is validated, stored
-   * as a pending change and sent through the outbox. The projection changes only after amoCRM
-   * confirms (TZ §5.1). UI shows «Sinxronlanmoqda» meanwhile.
-   */
+  /** Смена этапа применяется сразу: правила переходов проверяются, событие и аудит пишутся в той же транзакции. */
   async requestStageChange(actor: UserActor, id: string, version: number, target: Stage, extra: { reason?: string | null } = {}) {
-    return this.d.prisma.$transaction(async (tx) => {
-      const lead = assertFound(await tx.lead.findFirst({ where: leadWhere(actor, { id }) }), 'Lid');
+    const result = await this.d.prisma.$transaction(async (tx) => {
+      const lead = assertFound(await tx.lead.findFirst({ where: leadWhere(actor, { id }) }), 'Лид');
       if (!canEditRecord(actor, lead.ownerId)) throw forbidden();
-      if (lead.version !== version) throw conflict('VERSION_CONFLICT', 'Lid boshqa foydalanuvchi tomonidan o‘zgartirilgan. Sahifani yangilang.');
-      if (lead.pendingChange) throw conflict('SYNC_IN_PROGRESS', 'Oldingi o‘zgarish hali amoCRM bilan sinxronlanmoqda');
+      if (lead.version !== version) throw conflict('VERSION_CONFLICT', 'Лид был изменён другим пользователем. Обновите страницу.');
       const facts = await buildLeadFacts(tx, lead);
       const check = checkTransition(lead.stage, target, facts, lead.returnStage);
       if (!check.ok) {
         if (check.code === 'MISSING_FIELDS') {
-          throw unprocessable('MISSING_FIELDS', `«${STAGE_LABELS_UZ[target]}» bosqichiga o‘tish uchun majburiy maydonlar to‘ldirilmagan`, Object.fromEntries((check.missing ?? []).map((m) => [m, 'required'])));
+          throw unprocessable('MISSING_FIELDS', `Для перехода на этап «${STAGE_LABELS_RU[target]}» не заполнены обязательные поля`, Object.fromEntries((check.missing ?? []).map((m) => [m, 'required'])));
         }
-        if (check.code === 'CLOSED_REQUIRES_REOPEN') throw unprocessable('CLOSED_REQUIRES_REOPEN', 'Yopilgan lidni faqat rahbar sabab bilan qayta ochadi');
-        throw unprocessable(check.code, 'Bosqich o‘zgarishi mumkin emas');
+        if (check.code === 'CLOSED_REQUIRES_REOPEN') throw unprocessable('CLOSED_REQUIRES_REOPEN', 'Закрытый лид может заново открыть только администратор, указав причину');
+        throw unprocessable(check.code, 'Переход на этот этап невозможен');
       }
-      const operationKey = `lead.stage:${id}:${lead.version}:${target}`;
-      const pending: PendingChange = { operationKey, stage: target, requestedBy: actor.id, requestedAt: this.d.clock.now().toISOString() };
-      await tx.lead.update({
-        where: { id },
-        data: {
-          pendingChange: pending as unknown as Prisma.InputJsonValue,
-          syncState: lead.amoLeadId ? 'pending' : lead.syncState,
-          returnStage: check.returnStage ?? (lead.stage === 'FOLLOW_UP' ? null : lead.returnStage),
-          ...(lead.firstHumanActionAt ? {} : { firstHumanActionAt: this.d.clock.now() }),
-          version: { increment: 1 },
-        },
+      const now = this.d.clock.now();
+      await this.moveStage(tx, actor, lead, target, now, {
+        reason: extra.reason ?? null,
+        returnStage: check.returnStage ?? (lead.stage === 'FOLLOW_UP' ? null : lead.returnStage),
+        firstAction: !lead.firstHumanActionAt,
       });
-      await enqueueOutbox(tx, { companyId: actor.companyId, operationKey, target: 'amocrm', action: 'lead.stage', payload: { leadId: id, stage: target, reason: extra.reason ?? null, requestedBy: actor.id } });
-      await audit(tx, actor, { entityType: 'lead', entityId: id, action: 'stage_change_requested', oldValue: { stage: lead.stage }, newValue: { stage: target } });
-      return tx.lead.findUniqueOrThrow({ where: { id } });
+      return { lead: await tx.lead.findUniqueOrThrow({ where: { id } }), ownerId: lead.ownerId };
     });
+    await publishEvent(this.d.redis, { companyId: actor.companyId, entityType: 'lead', entityId: id, ownerId: result.ownerId, kind: 'updated' });
+    return result.lead;
+  }
+
+  /** Общая часть смены этапа: сам лид, событие, аудит и побочные эффекты (отмена задач, заказ, повторный контакт). */
+  private async moveStage(
+    tx: Tx,
+    actor: Actor,
+    lead: Lead,
+    target: Stage,
+    now: Date,
+    o: { reason: string | null; returnStage: Stage | null; firstAction: boolean; reopen?: boolean },
+  ) {
+    const data: Prisma.LeadUncheckedUpdateInput = {
+      stage: target,
+      returnStage: o.returnStage,
+      stateHash: leadStateHash({ stage: target, ownerId: lead.ownerId }),
+      version: { increment: 1 },
+      ...(o.firstAction ? { firstHumanActionAt: now } : {}),
+    };
+    if (isClosed(target)) data.closedAt = now;
+    if (target === 'WON' && !lead.firstWonAt) data.firstWonAt = now;
+    if (!isClosed(target) && isClosed(lead.stage)) data.closedAt = null;
+    await tx.lead.update({ where: { id: lead.id }, data });
+    await tx.leadEvent.create({
+      data: {
+        companyId: lead.companyId,
+        leadId: lead.id,
+        kind: o.reopen || (isClosed(lead.stage) && !isClosed(target)) ? 'reopened' : 'stage_change',
+        oldStage: lead.stage,
+        newStage: target,
+        reason: o.reason,
+        origin: 'local',
+        actorId: actor.type === 'user' ? actor.id : null,
+        effectiveAt: now,
+        observedAt: now,
+      },
+    });
+    await audit(tx, actor, { entityType: 'lead', entityId: lead.id, action: o.reopen ? 'reopened' : 'stage_changed', oldValue: { stage: lead.stage }, newValue: { stage: target, reason: o.reason } });
+    if (target === 'LOST') await this.cancelOpenSalesTasks(tx, lead.companyId, lead.id);
+    if (target === 'WON') await this.ensureOrderForWon(tx, lead.companyId, lead, now);
+    if (target === 'FOLLOW_UP') {
+      await this.createCrmTask(tx, {
+        companyId: lead.companyId,
+        key: `${lead.id}:follow_up:${lead.version}`,
+        entityId: lead.id,
+        kind: 'follow_up',
+        text: `Повторный контакт: ${lead.followUpNote ?? ''}`.trim(),
+        responsibleUserId: lead.ownerId,
+        dueAt: lead.nextContactAt ?? new Date(now.getTime() + 24 * 3600_000),
+      });
+    }
   }
 
   async requestReassign(actor: UserActor, id: string, toUserId: string, reason: string) {
     requireCap(actor, 'leads.reassign');
-    return this.d.prisma.$transaction(async (tx) => {
-      const lead = assertFound(await tx.lead.findFirst({ where: leadWhere(actor, { id }) }), 'Lid');
+    const lead = await this.d.prisma.$transaction(async (tx) => {
+      const current = assertFound(await tx.lead.findFirst({ where: leadWhere(actor, { id }) }), 'Лид');
       const target = await tx.user.findFirst({ where: { id: toUserId, companyId: actor.companyId, status: 'active' } });
-      if (!target) throw unprocessable('ASSIGNEE_INVALID', 'Tanlangan xodim faol emas', { toUserId: 'invalid' });
-      if (lead.ownerId === toUserId) return lead;
-      const operationKey = `lead.reassign:${id}:${lead.version}:${toUserId}`;
-      const pending: PendingChange = { operationKey, ownerId: toUserId, requestedBy: actor.id, requestedAt: this.d.clock.now().toISOString() };
-      await tx.lead.update({ where: { id }, data: { pendingChange: pending as unknown as Prisma.InputJsonValue, syncState: lead.amoLeadId ? 'pending' : lead.syncState, version: { increment: 1 } } });
-      await enqueueOutbox(tx, { companyId: actor.companyId, operationKey, target: 'amocrm', action: 'lead.reassign', payload: { leadId: id, toUserId, reason } });
-      await audit(tx, actor, { entityType: 'lead', entityId: id, action: 'reassign_requested', oldValue: { ownerId: lead.ownerId }, newValue: { ownerId: toUserId, reason } });
+      if (!target) throw unprocessable('ASSIGNEE_INVALID', 'Выбранный сотрудник неактивен', { toUserId: 'invalid' });
+      if (current.ownerId === toUserId) return current;
+      await reassignLeadLocal(tx, actor, current, toUserId, reason, this.d.clock.now());
       return tx.lead.findUniqueOrThrow({ where: { id } });
     });
+    await publishEvent(this.d.redis, { companyId: actor.companyId, entityType: 'lead', entityId: id, ownerId: lead.ownerId, kind: 'updated' });
+    return lead;
   }
 
   async requestReopen(actor: UserActor, id: string, reason: string, toStage: Stage = 'CONTACTED') {
     requireCap(actor, 'leads.reopen');
-    if (!reason?.trim()) throw unprocessable('REASON_REQUIRED', 'Qayta ochish sababi majburiy', { reason: 'required' });
-    return this.d.prisma.$transaction(async (tx) => {
-      const lead = assertFound(await tx.lead.findFirst({ where: leadWhere(actor, { id }) }), 'Lid');
-      if (!isClosed(lead.stage)) throw unprocessable('NOT_CLOSED', 'Lid yopilmagan');
-      if (isClosed(toStage)) throw unprocessable('INVALID_TARGET', 'Qayta ochishda ochiq bosqich tanlanadi');
-      const operationKey = `lead.reopen:${id}:${lead.version}`;
-      const pending: PendingChange = { operationKey, stage: toStage, requestedBy: actor.id, requestedAt: this.d.clock.now().toISOString() };
-      await tx.lead.update({ where: { id }, data: { pendingChange: pending as unknown as Prisma.InputJsonValue, syncState: 'pending', version: { increment: 1 } } });
-      await enqueueOutbox(tx, { companyId: actor.companyId, operationKey, target: 'amocrm', action: 'lead.stage', payload: { leadId: id, stage: toStage, reason, reopen: true, requestedBy: actor.id } });
-      await audit(tx, actor, { entityType: 'lead', entityId: id, action: 'reopen_requested', oldValue: { stage: lead.stage }, newValue: { stage: toStage, reason } });
+    if (!reason?.trim()) throw unprocessable('REASON_REQUIRED', 'Укажите причину повторного открытия', { reason: 'required' });
+    const lead = await this.d.prisma.$transaction(async (tx) => {
+      const current = assertFound(await tx.lead.findFirst({ where: leadWhere(actor, { id }) }), 'Лид');
+      if (!isClosed(current.stage)) throw unprocessable('NOT_CLOSED', 'Лид не закрыт');
+      if (isClosed(toStage)) throw unprocessable('INVALID_TARGET', 'При повторном открытии выберите открытый этап');
+      await this.moveStage(tx, actor, current, toStage, this.d.clock.now(), { reason, returnStage: current.returnStage, firstAction: false, reopen: true });
       return tx.lead.findUniqueOrThrow({ where: { id } });
     });
-  }
-
-  // ---------------- Remote (amoCRM) projection ----------------
-
-  /**
-   * Applies an amoCRM lead snapshot. Older snapshots never roll back newer state (AC30). Status or
-   * owner changes are recorded with previous values; missing required data becomes an anomaly with
-   * a correction task, never a silent revert (AC14). Owner changes cascade to orders, segments and
-   * active reminders without rewriting historical authorship (AC13).
-   */
-  async applyRemoteSnapshot(tx: Tx, companyId: string, snap: AmoLeadSnapshot, ctx: { origin: 'amocrm' | 'local_confirmed' | 'reconcile'; operationKey?: string | null }) {
-    const lead = await tx.lead.findFirst({ where: { companyId, amoLeadId: snap.id } });
-    if (!lead) return { applied: false, reason: 'unknown_lead' as const };
-    await tx.$executeRaw`SELECT 1 FROM leads WHERE id = ${lead.id}::uuid FOR UPDATE`;
-    const fresh = await tx.lead.findUniqueOrThrow({ where: { id: lead.id } });
-
-    if (snap.deleted) {
-      if (!fresh.deletedAt) {
-        await tx.lead.update({ where: { id: fresh.id }, data: { deletedAt: this.d.clock.now(), syncState: 'synced' } });
-        await audit(tx, { type: 'integration', id: null, companyId, name: 'amocrm' }, { entityType: 'lead', entityId: fresh.id, action: 'tombstoned' });
-        const activeOrder = await tx.order.findFirst({ where: { companyId, leadId: fresh.id, fulfillmentState: { notIn: ['cancelled', 'completed'] } } });
-        if (activeOrder) {
-          for (const uid of await headRecipients(tx, companyId)) {
-            await notify(tx, { companyId, userId: uid, kind: 'deleted_lead_with_order', dedupeKey: `deleted_lead:${fresh.id}:${uid}`, title: `amoCRM’da o‘chirilgan lidda faol buyurtma bor: ${activeOrder.orderNo}`, link: `/orders/${activeOrder.id}` });
-          }
-        }
-      }
-      return { applied: true, reason: 'tombstoned' as const };
-    }
-
-    const stage = await this.stageForStatus(tx, companyId, snap.pipelineId, snap.statusId);
-    const owner = snap.responsibleUserId ? await tx.user.findFirst({ where: { companyId, amoUserId: snap.responsibleUserId }, select: { id: true } }) : null;
-    const next = { stage: stage ?? fresh.stage, ownerId: owner?.id ?? fresh.ownerId };
-    const hash = leadStateHash(next);
-    if (!shouldApplyRemote({ sourceUpdatedAt: fresh.sourceUpdatedAt, stateHash: fresh.stateHash }, { sourceUpdatedAt: snap.updatedAt, stateHash: hash })) {
-      return { applied: false, reason: 'stale' as const };
-    }
-
-    const now = this.d.clock.now();
-    const pending = fresh.pendingChange as PendingChange | null;
-    const pendingResolved = !!pending && (pending.stage === undefined || pending.stage === next.stage) && (pending.ownerId === undefined || pending.ownerId === next.ownerId);
-    const data: Prisma.LeadUncheckedUpdateInput = {
-      sourceUpdatedAt: snap.updatedAt,
-      stateHash: hash,
-      syncState: pending && !pendingResolved ? 'pending' : 'synced',
-      ...(pendingResolved ? { pendingChange: null as unknown as Prisma.InputJsonValue } : {}),
-    };
-    const actor = { type: 'integration' as const, id: null, companyId, name: 'amocrm' };
-    const transitionId = `${snap.id}:${snap.updatedAt.getTime()}`;
-
-    if (stage && stage !== fresh.stage) {
-      data.stage = stage;
-      if (isClosed(stage)) data.closedAt = snap.closedAt ?? snap.updatedAt;
-      if (stage === 'WON' && !fresh.firstWonAt) data.firstWonAt = snap.closedAt ?? snap.updatedAt;
-      if (!isClosed(stage) && isClosed(fresh.stage)) data.closedAt = null;
-      if (fresh.stage === 'FOLLOW_UP' && stage !== 'FOLLOW_UP') data.returnStage = null;
-      await tx.leadEvent.create({
-        data: {
-          companyId,
-          leadId: fresh.id,
-          kind: isClosed(fresh.stage) && !isClosed(stage) ? 'reopened' : 'stage_change',
-          oldStage: fresh.stage,
-          newStage: stage,
-          origin: ctx.origin === 'local_confirmed' ? 'local' : 'amocrm',
-          operationId: ctx.operationKey ?? null,
-          actorId: pending?.requestedBy ?? null,
-          effectiveAt: snap.updatedAt,
-          observedAt: now,
-        },
-      });
-      await audit(tx, actor, { entityType: 'lead', entityId: fresh.id, action: 'stage_changed', oldValue: { stage: fresh.stage }, newValue: { stage, origin: ctx.origin } });
-
-      if (stage === 'LOST') await this.cancelOpenSalesTasks(tx, companyId, fresh.id);
-      if (stage === 'WON') await this.ensureOrderForWon(tx, companyId, fresh, now);
-      if (ctx.origin !== 'local_confirmed') {
-        const facts = await buildLeadFacts(tx, { ...fresh, stage });
-        const missing = detectAnomaly(stage, facts);
-        if (missing.length) {
-          data.anomaly = { stage, missing, detectedAt: now.toISOString() } as Prisma.InputJsonValue;
-          await this.createCrmTask(tx, {
-            companyId,
-            key: automationKey(fresh.id, 'anomaly_fix', transitionId),
-            entityId: fresh.id,
-            kind: 'anomaly_fix',
-            text: `amoCRM’da «${STAGE_LABELS_UZ[stage]}» bosqichi uchun ma’lumot yetishmaydi: ${missing.join(', ')}. Tuzating.`,
-            responsibleUserId: next.ownerId,
-            dueAt: new Date(now.getTime() + 3600_000),
-          });
-          await audit(tx, actor, { entityType: 'lead', entityId: fresh.id, action: 'anomaly_detected', newValue: { stage, missing } });
-        } else {
-          data.anomaly = null as unknown as Prisma.InputJsonValue;
-        }
-      }
-      if (stage === 'FOLLOW_UP') {
-        await this.createCrmTask(tx, {
-          companyId,
-          key: automationKey(fresh.id, 'follow_up', transitionId),
-          entityId: fresh.id,
-          kind: 'follow_up',
-          text: `Qayta aloqa: ${fresh.followUpNote ?? ''}`.trim(),
-          responsibleUserId: next.ownerId,
-          dueAt: fresh.nextContactAt ?? new Date(now.getTime() + 24 * 3600_000),
-        });
-      }
-    }
-
-    if (owner && owner.id !== fresh.ownerId) {
-      data.ownerId = owner.id;
-      await tx.leadEvent.create({
-        data: { companyId, leadId: fresh.id, kind: 'owner_change', oldOwnerId: fresh.ownerId, newOwnerId: owner.id, origin: ctx.origin === 'local_confirmed' ? 'local' : 'amocrm', operationId: ctx.operationKey ?? null, actorId: pending?.requestedBy ?? null, effectiveAt: snap.updatedAt, observedAt: now },
-      });
-      await this.cascadeOwner(tx, companyId, fresh.id, fresh.ownerId, owner.id);
-      await audit(tx, actor, { entityType: 'lead', entityId: fresh.id, action: 'owner_changed', oldValue: { ownerId: fresh.ownerId }, newValue: { ownerId: owner.id, origin: ctx.origin } });
-    } else if (snap.responsibleUserId && !owner) {
-      await audit(tx, actor, { entityType: 'lead', entityId: fresh.id, action: 'owner_unmapped', newValue: { amoUserId: snap.responsibleUserId } });
-    }
-
-    await tx.lead.update({ where: { id: fresh.id }, data: { ...data, version: { increment: 1 } } });
-    await publishEvent(this.d.redis, { companyId, entityType: 'lead', entityId: fresh.id, ownerId: next.ownerId, kind: 'updated' });
-    return { applied: true, reason: 'applied' as const };
-  }
-
-  async stageForStatus(tx: Tx, companyId: string, pipelineId: string, statusId: string): Promise<Stage | null> {
-    const m = await tx.integrationMapping.findUnique({ where: { companyId_entityType_externalId: { companyId, entityType: 'pipeline_status', externalId: `${pipelineId}:${statusId}` } } });
-    return (m?.localId as Stage | undefined) ?? null;
-  }
-
-  async statusForStage(tx: Tx, companyId: string, stage: Stage): Promise<{ pipelineId: string; statusId: string } | null> {
-    const m = await tx.integrationMapping.findFirst({ where: { companyId, entityType: 'pipeline_status', localId: stage } });
-    if (!m) return null;
-    const [pipelineId, statusId] = m.externalId.split(':');
-    return { pipelineId: pipelineId!, statusId: statusId! };
+    await publishEvent(this.d.redis, { companyId: actor.companyId, entityType: 'lead', entityId: id, ownerId: lead.ownerId, kind: 'updated' });
+    return lead;
   }
 
   /** Owner change cascades to local order, segments, active reminders and open CRM tasks. */
   async cascadeOwner(tx: Tx, companyId: string, leadId: string, fromUserId: string | null, toUserId: string) {
-    const orders = await tx.order.findMany({ where: { companyId, leadId, fulfillmentState: { notIn: ['completed', 'cancelled'] } }, select: { id: true } });
-    const orderIds = orders.map((o) => o.id);
-    await tx.order.updateMany({ where: { id: { in: orderIds } }, data: { ownerId: toUserId } });
-    await tx.flightSegment.updateMany({ where: { companyId, orderId: { in: orderIds }, active: true }, data: { ownerId: toUserId } });
-    const occ = await tx.reminderOccurrence.findMany({
-      where: { companyId, orderId: { in: orderIds }, state: { in: ['scheduled', 'dispatching', 'due', 'snoozed'] }, ...(fromUserId ? { assigneeId: fromUserId } : {}) },
-      select: { id: true },
-    });
-    await tx.reminderOccurrence.updateMany({ where: { id: { in: occ.map((o) => o.id) } }, data: { assigneeId: toUserId } });
-    const tasks = await tx.crmTask.findMany({ where: { companyId, entityId: leadId, state: { in: ['pending', 'open'] } } });
-    for (const t of tasks) {
-      await tx.crmTask.update({ where: { id: t.id }, data: { responsibleUserId: toUserId } });
-      if (t.amoTaskId) {
-        await enqueueOutbox(tx, { companyId, operationKey: `task.reassign:${t.id}:${toUserId}`, target: 'amocrm', action: 'task.reassign', payload: { crmTaskId: t.id, toUserId } });
-      }
-    }
+    return cascadeLeadOwner(tx, companyId, leadId, fromUserId, toUserId);
   }
 
   async cancelOpenSalesTasks(tx: Tx, companyId: string, leadId: string) {
-    const tasks = await tx.crmTask.findMany({ where: { companyId, entityId: leadId, state: { in: ['pending', 'open'] }, kind: { in: ['first_contact', 'follow_up', 'offer_prep'] } } });
-    for (const t of tasks) {
-      await tx.crmTask.update({ where: { id: t.id }, data: { state: 'cancelled' } });
-      if (t.amoTaskId) await enqueueOutbox(tx, { companyId, operationKey: `task.complete:${t.id}`, target: 'amocrm', action: 'task.complete', payload: { crmTaskId: t.id, result: 'Lid bekor qilindi' } });
-    }
+    await tx.crmTask.updateMany({ where: { companyId, entityId: leadId, state: { in: ['pending', 'open'] }, kind: { in: ['first_contact', 'follow_up', 'offer_prep'] } }, data: { state: 'cancelled' } });
   }
 
   /** WON without a local order → idempotent draft order (TZ §12.3, AC15). */
@@ -507,14 +383,35 @@ export class LeadsService {
       skipDuplicates: true,
     });
     if (res.count === 0) return null;
-    const task = await tx.crmTask.findUniqueOrThrow({ where: { companyId_automationKey: { companyId: t.companyId, automationKey: t.key } } });
-    await enqueueOutbox(tx, { companyId: t.companyId, operationKey: `task.create:${task.id}`, target: 'amocrm', action: 'task.create', payload: { crmTaskId: task.id } });
-    return task;
+    return tx.crmTask.findUniqueOrThrow({ where: { companyId_automationKey: { companyId: t.companyId, automationKey: t.key } } });
   }
 
   newCorrelationId() {
     return randomUUID();
   }
+}
+
+/** Владелец лида меняется сразу: событие, аудит, каскад на заказы/сегменты/напоминания/задачи и уведомление нового ответственного. */
+export async function reassignLeadLocal(tx: Tx, actor: Actor, lead: Lead, toUserId: string, reason: string, now: Date) {
+  await tx.lead.update({ where: { id: lead.id }, data: { ownerId: toUserId, assignmentReason: 'manual', stateHash: leadStateHash({ stage: lead.stage, ownerId: toUserId }), version: { increment: 1 } } });
+  await tx.leadEvent.create({
+    data: { companyId: lead.companyId, leadId: lead.id, kind: 'owner_change', oldOwnerId: lead.ownerId, newOwnerId: toUserId, reason, origin: 'local', actorId: actor.type === 'user' ? actor.id : null, effectiveAt: now, observedAt: now },
+  });
+  await cascadeLeadOwner(tx, lead.companyId, lead.id, lead.ownerId, toUserId);
+  await audit(tx, actor, { entityType: 'lead', entityId: lead.id, action: 'owner_changed', oldValue: { ownerId: lead.ownerId }, newValue: { ownerId: toUserId, reason } });
+  await notify(tx, { companyId: lead.companyId, userId: toUserId, kind: 'lead_assigned', dedupeKey: `lead_assigned:${lead.id}:${toUserId}:${lead.version}`, title: `Вам назначен лид: ${lead.name}`, link: `/leads/${lead.id}` });
+}
+
+export async function cascadeLeadOwner(tx: Tx, companyId: string, leadId: string, fromUserId: string | null, toUserId: string) {
+  const orders = await tx.order.findMany({ where: { companyId, leadId, fulfillmentState: { notIn: ['completed', 'cancelled'] } }, select: { id: true } });
+  const orderIds = orders.map((o) => o.id);
+  await tx.order.updateMany({ where: { id: { in: orderIds } }, data: { ownerId: toUserId } });
+  await tx.flightSegment.updateMany({ where: { companyId, orderId: { in: orderIds }, active: true }, data: { ownerId: toUserId } });
+  await tx.reminderOccurrence.updateMany({
+    where: { companyId, orderId: { in: orderIds }, state: { in: ['scheduled', 'dispatching', 'due', 'snoozed'] }, ...(fromUserId ? { assigneeId: fromUserId } : {}) },
+    data: { assigneeId: toUserId },
+  });
+  await tx.crmTask.updateMany({ where: { companyId, entityId: leadId, state: { in: ['pending', 'open'] } }, data: { responsibleUserId: toUserId } });
 }
 
 function pick(obj: Record<string, unknown>, keys: string[]) {

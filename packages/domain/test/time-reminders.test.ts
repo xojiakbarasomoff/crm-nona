@@ -4,7 +4,7 @@ import {
   checkOccurrenceValidity,
   companyDateRangeToUtc,
   DEFAULT_MILESTONE_RULES,
-  formatAirportTimeUz,
+  formatAirportTimeRu,
   localToUtc,
   nthOccurrence,
   planMilestones,
@@ -18,8 +18,8 @@ describe('timezone (AC17)', () => {
     const r = localToUtc('2026-10-25T10:30', 'Asia/Dubai');
     expect(r.kind).toBe('ok');
     if (r.kind === 'ok') expect(r.utc.toISOString()).toBe('2026-10-25T06:30:00.000Z');
-    expect(formatAirportTimeUz(new Date('2026-10-25T06:30:00Z'), 'Asia/Dubai')).toBe(
-      '25 oktabr 10:30 — aeroport vaqti, Asia/Dubai (Toshkent: 25 oktabr 11:30)',
+    expect(formatAirportTimeRu(new Date('2026-10-25T06:30:00Z'), 'Asia/Dubai')).toBe(
+      '10:30 · 25.10.2026 — время аэропорта, Asia/Dubai (Ташкент: 11:30 · 25.10.2026)',
     );
   });
 

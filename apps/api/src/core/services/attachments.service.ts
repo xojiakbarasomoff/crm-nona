@@ -25,29 +25,29 @@ export class AttachmentsService {
   /** Resolves the owner within the actor's scope; foreign owners are 404. */
   private async owner(actor: UserActor, ownerType: string, ownerId: string): Promise<{ ownerUserId: string | null }> {
     if (ownerType === 'order') {
-      const o = assertFound(await this.d.prisma.order.findFirst({ where: orderWhere(actor, { id: ownerId }) }), 'Buyurtma');
+      const o = assertFound(await this.d.prisma.order.findFirst({ where: orderWhere(actor, { id: ownerId }) }), 'Заказ');
       return { ownerUserId: o.ownerId };
     }
     if (ownerType === 'lead') {
-      const l = assertFound(await this.d.prisma.lead.findFirst({ where: leadWhere(actor, { id: ownerId }) }), 'Lid');
+      const l = assertFound(await this.d.prisma.lead.findFirst({ where: leadWhere(actor, { id: ownerId }) }), 'Лид');
       return { ownerUserId: l.ownerId };
     }
     if (ownerType === 'offer') {
-      const offer = assertFound(await this.d.prisma.offer.findFirst({ where: { id: ownerId, companyId: actor.companyId } }), 'Taklif');
-      const l = assertFound(await this.d.prisma.lead.findFirst({ where: leadWhere(actor, { id: offer.leadId }) }), 'Taklif');
+      const offer = assertFound(await this.d.prisma.offer.findFirst({ where: { id: ownerId, companyId: actor.companyId } }), 'Предложение');
+      const l = assertFound(await this.d.prisma.lead.findFirst({ where: leadWhere(actor, { id: offer.leadId }) }), 'Предложение');
       return { ownerUserId: l.ownerId };
     }
     if (ownerType === 'passenger') {
-      const pax = assertFound(await this.d.prisma.passenger.findFirst({ where: { id: ownerId, companyId: actor.companyId } }), 'Yo‘lovchi');
-      const o = assertFound(await this.d.prisma.order.findFirst({ where: orderWhere(actor, { id: pax.orderId }) }), 'Yo‘lovchi');
+      const pax = assertFound(await this.d.prisma.passenger.findFirst({ where: { id: ownerId, companyId: actor.companyId } }), 'Пассажир');
+      const o = assertFound(await this.d.prisma.order.findFirst({ where: orderWhere(actor, { id: pax.orderId }) }), 'Пассажир');
       return { ownerUserId: o.ownerId };
     }
     if (ownerType === 'contact') {
       // Menejer mijozni faqat o'z lidi orqali ko'radi (AdminService.getContact bilan bir xil qoida).
-      const c = assertFound(await this.d.prisma.contact.findFirst({ where: { id: ownerId, companyId: actor.companyId, deletedAt: null } }), 'Mijoz');
+      const c = assertFound(await this.d.prisma.contact.findFirst({ where: { id: ownerId, companyId: actor.companyId, deletedAt: null } }), 'Клиент');
       if (can(actor.role, 'records.view_all')) return { ownerUserId: c.ownerId };
       const mine = await this.d.prisma.lead.findFirst({ where: { companyId: actor.companyId, contactId: ownerId, ownerId: actor.id, deletedAt: null }, select: { id: true } });
-      assertFound(mine, 'Mijoz');
+      assertFound(mine, 'Клиент');
       return { ownerUserId: actor.id };
     }
     throw notFound();
@@ -57,17 +57,17 @@ export class AttachmentsService {
     const category: DocumentCategory = p.category ?? 'other';
     const { ownerUserId } = await this.owner(actor, p.ownerType, p.ownerId);
     if (!canEditRecord(actor, ownerUserId)) throw forbidden();
-    if (!p.data.length) throw unprocessable('EMPTY_FILE', 'Fayl bo‘sh');
+    if (!p.data.length) throw unprocessable('EMPTY_FILE', 'Файл пустой');
     if (p.data.length > this.d.config.maxUploadBytes) {
       throw new AppError(413, 'FILE_TOO_LARGE', `Fayl hajmi ${Math.round(this.d.config.maxUploadBytes / 1024 / 1024)} MB dan oshmasin`);
     }
     const sniffed = sniffMime(p.data);
-    if (!sniffed) throw unprocessable('UNSUPPORTED_FILE_TYPE', 'Fayl turi ruxsat etilmagan (PDF, PNG, JPEG, WEBP, DOCX, XLSX)');
+    if (!sniffed) throw unprocessable('UNSUPPORTED_FILE_TYPE', 'Тип файла не разрешён (PDF, PNG, JPEG, WEBP, DOCX, XLSX)');
     if (p.declaredMime.split(';')[0]!.trim().toLowerCase() !== sniffed) {
-      throw unprocessable('MIME_MISMATCH', 'Fayl mazmuni e’lon qilingan turga mos emas', { contentType: `sniffed:${sniffed}` });
+      throw unprocessable('MIME_MISMATCH', 'Содержимое файла не соответствует заявленному типу', { contentType: `sniffed:${sniffed}` });
     }
     if (category === 'passport' && !PASSPORT_MIMES.has(sniffed)) {
-      throw unprocessable('UNSUPPORTED_FILE_TYPE', 'Pasport nusxasi faqat PDF yoki rasm (PNG, JPEG, WEBP) bo‘lishi mumkin', { category: 'passport_requires_image_or_pdf' });
+      throw unprocessable('UNSUPPORTED_FILE_TYPE', 'Копия паспорта может быть только PDF или изображением (PNG, JPEG, WEBP)', { category: 'passport_requires_image_or_pdf' });
     }
     const objectKey = newObjectKey();
     await this.d.adapters.storage.put(objectKey, p.data);
@@ -107,10 +107,10 @@ export class AttachmentsService {
 
   /** Buyurtma kartasi: buyurtma, uning yo'lovchilari va mijoz hujjatlari — bitta ro'yxatda, egasi bilan. */
   private async listForOrder(actor: UserActor, orderId: string) {
-    const order = assertFound(await this.d.prisma.order.findFirst({ where: orderWhere(actor, { id: orderId }) }), 'Buyurtma');
+    const order = assertFound(await this.d.prisma.order.findFirst({ where: orderWhere(actor, { id: orderId }) }), 'Заказ');
     const pax = await this.d.prisma.passenger.findMany({ where: { companyId: actor.companyId, orderId }, select: { id: true, fullName: true } });
     const contact = await this.d.prisma.contact.findFirst({ where: { id: order.contactId, companyId: actor.companyId }, select: { id: true, fullName: true } });
-    const labels = new Map<string, string>([[`order:${orderId}`, `Buyurtma ${order.orderNo}`], ...pax.map((x) => [`passenger:${x.id}`, `Yo'lovchi: ${x.fullName}`] as [string, string]), ...(contact ? [[`contact:${contact.id}`, `Mijoz: ${contact.fullName ?? '—'}`] as [string, string]] : [])]);
+    const labels = new Map<string, string>([[`order:${orderId}`, `Заказ ${order.orderNo}`], ...pax.map((x) => [`passenger:${x.id}`, `Пассажир: ${x.fullName}`] as [string, string]), ...(contact ? [[`contact:${contact.id}`, `Клиент: ${contact.fullName ?? '—'}`] as [string, string]] : [])]);
     const rows = await this.d.prisma.attachment.findMany({
       where: {
         companyId: actor.companyId,
@@ -126,16 +126,16 @@ export class AttachmentsService {
   async setCategory(actor: UserActor, id: string, category: DocumentCategory) {
     const { a, owner } = await this.loadVisible(actor, id);
     if (!canEditRecord(actor, owner.ownerUserId)) throw forbidden();
-    if (category === 'passport' && !PASSPORT_MIMES.has(a.mime)) throw unprocessable('UNSUPPORTED_FILE_TYPE', 'Pasport nusxasi faqat PDF yoki rasm bo‘lishi mumkin', { category: 'passport_requires_image_or_pdf' });
+    if (category === 'passport' && !PASSPORT_MIMES.has(a.mime)) throw unprocessable('UNSUPPORTED_FILE_TYPE', 'Копия паспорта может быть только PDF или изображением', { category: 'passport_requires_image_or_pdf' });
     const row = await this.d.prisma.attachment.update({ where: { id }, data: { category } });
     await audit(this.d.prisma, actor, { entityType: a.ownerType, entityId: a.ownerId, action: 'attachment_recategorized', oldValue: { attachmentId: id, category: a.category }, newValue: { category } });
     return serializeAttachment(row);
   }
 
   private async loadVisible(actor: UserActor, id: string) {
-    const a = assertFound(await this.d.prisma.attachment.findFirst({ where: { id, companyId: actor.companyId, deletedAt: null } }), 'Fayl');
+    const a = assertFound(await this.d.prisma.attachment.findFirst({ where: { id, companyId: actor.companyId, deletedAt: null } }), 'Файл');
     const owner = await this.owner(actor, a.ownerType, a.ownerId).catch(() => null);
-    if (!owner) throw notFound('Fayl');
+    if (!owner) throw notFound('Файл');
     return { a, owner };
   }
 
@@ -143,7 +143,7 @@ export class AttachmentsService {
   async downloadLink(actor: UserActor, id: string) {
     const { a } = await this.loadVisible(actor, id);
     if (a.scanState !== 'clean') {
-      throw new AppError(409, a.scanState === 'infected' ? 'FILE_INFECTED' : 'FILE_NOT_SCANNED', a.scanState === 'infected' ? 'Fayl zararli deb topildi va bloklangan' : 'Fayl hali virus tekshiruvidan o‘tmagan');
+      throw new AppError(409, a.scanState === 'infected' ? 'FILE_INFECTED' : 'FILE_NOT_SCANNED', a.scanState === 'infected' ? 'Файл признан опасным и заблокирован' : 'Файл ещё не прошёл проверку на вирусы');
     }
     const exp = Math.floor(this.d.clock.now().getTime() / 1000) + this.d.config.downloadUrlTtlSeconds;
     const sig = signDownload(this.d.config.sessionSecret, a.id, actor.id, exp);
@@ -152,9 +152,9 @@ export class AttachmentsService {
 
   /** Signature + live session + fresh RBAC check; a URL leaked to another user does not work. */
   async content(actor: UserActor, id: string, exp: number, sig: string) {
-    if (!verifyDownload(this.d.config.sessionSecret, id, actor.id, exp, sig, Math.floor(this.d.clock.now().getTime() / 1000))) throw notFound('Fayl');
+    if (!verifyDownload(this.d.config.sessionSecret, id, actor.id, exp, sig, Math.floor(this.d.clock.now().getTime() / 1000))) throw notFound('Файл');
     const { a } = await this.loadVisible(actor, id);
-    if (a.scanState !== 'clean') throw notFound('Fayl');
+    if (a.scanState !== 'clean') throw notFound('Файл');
     const data = await this.d.adapters.storage.get(a.objectKey);
     await audit(this.d.prisma, actor, { entityType: a.ownerType, entityId: a.ownerId, action: 'attachment_downloaded', newValue: { attachmentId: a.id, category: a.category } });
     return { data, mime: a.mime, fileName: a.fileName };
@@ -190,7 +190,7 @@ export class AttachmentsService {
         await this.d.prisma.$transaction(async (tx) => {
           await audit(tx, systemActor(a.companyId, 'scanner'), { entityType: a.ownerType, entityId: a.ownerId, action: 'attachment_quarantined', newValue: { attachmentId: a.id, detail: result.detail } });
           for (const uid of new Set([a.uploadedById, ...(await headRecipients(tx, a.companyId))])) {
-            await notify(tx, { companyId: a.companyId, userId: uid, kind: 'attachment_infected', dedupeKey: `att_infected:${a.id}:${uid}`, title: `Zararli fayl bloklandi: ${a.fileName}` });
+            await notify(tx, { companyId: a.companyId, userId: uid, kind: 'attachment_infected', dedupeKey: `att_infected:${a.id}:${uid}`, title: `Опасный файл заблокирован: ${a.fileName}` });
           }
         });
       }

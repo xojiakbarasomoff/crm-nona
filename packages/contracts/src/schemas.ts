@@ -2,17 +2,19 @@ import { extendZodWithOpenApi } from '@asteasolutions/zod-to-openapi';
 import { z } from 'zod';
 
 extendZodWithOpenApi(z);
+// Сообщения проверки ввода (zod) — на русском языке.
+z.config(z.locales.ru());
 
 /**
  * Request DTOs for the backend API (TZ §18). Inputs are allowlisted: unknown keys are rejected.
- * These are our API shapes, not amoCRM or Meta endpoints.
+ * These are our API shapes, not Meta endpoints.
  */
 
 const id = z.string().uuid();
-const decimal = z.string().regex(/^\d+(\.\d+)?$/, 'decimal string, e.g. "1250.00"');
+const decimal = z.string().regex(/^\d+(\.\d+)?$/, 'Введите число в формате «1250.00»');
 const currency = z.string().regex(/^[A-Z]{3}$/);
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
-const localDateTime = z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/, 'local wall-clock time, e.g. 2026-10-25T10:30');
+const localDateTime = z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/, 'Введите местное время, например 2026-10-25T10:30');
 const isoDateTime = z.string().datetime({ offset: true });
 
 export const STAGE = z.enum(['NEW', 'CONTACTED', 'QUALIFIED', 'PREPARING_OFFER', 'OFFER_SENT', 'AWAITING_PAYMENT', 'WON', 'LOST', 'FOLLOW_UP']);
@@ -30,12 +32,12 @@ export const ErrorSchema = z
   })
   .openapi('Error');
 
-/** `email` is the login identifier: an email, or (APP_MODE=demo + DEMO_SIMPLE_LOGIN only) a short demo name. */
+/** `email` — идентификатор входа: логин (например, nozima) или email. */
 export const LoginSchema = z.object({ email: z.string().trim().min(1).max(200), password: z.string().min(1).max(200), totp: z.string().regex(/^\d{6}$/).optional() }).strict().openapi('LoginRequest');
 export const ActivateSchema = z.object({ token: z.string().min(20), password: z.string().min(12).max(200) }).strict();
 export const MfaConfirmSchema = z.object({ code: z.string().regex(/^\d{6}$/) }).strict();
-export const InviteUserSchema = z.object({ email: z.string().email(), fullName: z.string().min(1).max(200), role: z.enum(['ADMIN', 'HEAD', 'MANAGER']), amoUserId: z.string().max(40).nullable() }).strict();
-export const ChangeRoleSchema = z.object({ role: z.enum(['ADMIN', 'HEAD', 'MANAGER']) }).strict();
+export const InviteUserSchema = z.object({ email: z.string().email(), fullName: z.string().min(1).max(200), role: z.enum(['ADMIN', 'MANAGER', 'USER']) }).strict();
+export const ChangeRoleSchema = z.object({ role: z.enum(['ADMIN', 'MANAGER', 'USER']) }).strict();
 export const BlockUserSchema = z.object({ successorId: id.nullable() }).strict();
 
 export const PaginationQuery = z.object({ cursor: id.optional(), limit: z.coerce.number().int().min(1).max(200).default(50) });
@@ -150,7 +152,7 @@ const mealPlan = z.enum(['RO', 'BB', 'HB', 'FB', 'AI', 'UAI', 'other']);
 export const HotelDetailsSchema = z
   .object({ hotelName: z.string().min(1).max(200), address: z.string().max(500).nullable().optional(), checkIn: date, checkOut: date, roomType: z.string().max(100).nullable().optional(), mealPlan: mealPlan.nullable().optional() })
   .strict()
-  .refine((d) => d.checkOut > d.checkIn, { path: ['checkOut'], message: 'Chiqish sanasi kirish sanasidan keyin bo‘lishi kerak' });
+  .refine((d) => d.checkOut > d.checkIn, { path: ['checkOut'], message: 'Дата выезда должна быть позже даты заезда' });
 export const TransferDetailsSchema = z
   .object({ route: z.string().min(1).max(300), pickupAt: localDateTime, timezone: z.string().min(3).max(60).nullable().optional(), vehicle: z.string().max(100).nullable().optional() })
   .strict();
@@ -183,7 +185,7 @@ export const ServiceSchema = z
   .object(ServiceFields)
   .strict()
   .superRefine((v, ctx) => {
-    if ((v.amount || v.netAmount) && !v.currency) ctx.addIssue({ code: 'custom', path: ['currency'], message: 'Narx kiritilganda valyuta majburiy' });
+    if ((v.amount || v.netAmount) && !v.currency) ctx.addIssue({ code: 'custom', path: ['currency'], message: 'При указании цены валюта обязательна' });
     const d = validateServiceDetails(v.serviceType, v.details);
     if (!d.ok) for (const [k, m] of Object.entries(d.errors)) ctx.addIssue({ code: 'custom', path: k.split('.'), message: m });
   })
@@ -277,14 +279,10 @@ export const DashboardQuery = z
     bucket: z.enum(['day', 'week', 'month']).default('day'),
   })
   .strict()
-  .refine((q) => q.from <= q.to, { message: 'Boshlanish sanasi tugash sanasidan keyin bo‘lishi mumkin emas', path: ['from'] });
+  .refine((q) => q.from <= q.to, { message: 'Дата начала не может быть позже даты окончания', path: ['from'] });
 
 export const SupplierImportSchema = z.object({ names: z.array(z.string().trim().min(1).max(200)).min(1).max(200) }).strict();
 
-export const DuplicateResolveSchema = z.object({ action: z.enum(['dismiss', 'mark_shared', 'merge', 'flag']), primaryContactId: id.optional(), note: z.string().max(1000).optional() }).strict();
-export const AmoOAuthStartSchema = z.object({ domain: z.string().min(3).max(100) }).strict();
-export const AmoOAuthCallbackQuery = z.object({ code: z.string().min(1), state: z.string().min(1), referer: z.string().min(3) }).passthrough();
 
 export const DemoLeadAdsSchema = z.object({ fullName: z.string().min(1).max(100), phone: z.string().max(30).optional(), email: z.string().email().optional(), destination: z.string().max(100).optional(), platform: z.enum(['ig', 'fb']).nullable().optional(), adId: z.string().max(40).nullable().optional() }).strict();
 export const DemoDirectSchema = z.object({ scopedSenderId: z.string().min(3).max(40), text: z.string().min(1).max(1000), referralAdId: z.string().max(40).nullable().optional() }).strict();
-export const DemoAmoChatReplySchema = z.object({ conversationId: id, text: z.string().min(1).max(1000), authorAmoUserId: z.string().max(40) }).strict();

@@ -14,7 +14,7 @@ export interface RetentionPolicy {
   confirmedAt?: string;
 }
 
-export const ERASED_NAME = 'O‘chirilgan mijoz';
+export const ERASED_NAME = 'Удалённый клиент';
 const hashId = (v: string) => createHash('sha256').update(v).digest('hex');
 
 /**
@@ -76,13 +76,13 @@ export class PrivacyService {
   /** Erase or anonymize a person's data (admin only). */
   async eraseContact(actor: UserActor, contactId: string, reason: string) {
     if (actor.role !== 'ADMIN') throw forbidden();
-    if (!reason?.trim()) throw unprocessable('REASON_REQUIRED', 'Sabab majburiy', { reason: 'required' });
+    if (!reason?.trim()) throw unprocessable('REASON_REQUIRED', 'Укажите причину', { reason: 'required' });
     const files = await this.d.prisma.$transaction(async (tx) => {
-      const contact = assertFound(await tx.contact.findFirst({ where: { id: contactId, companyId: actor.companyId } }), 'Mijoz');
+      assertFound(await tx.contact.findFirst({ where: { id: contactId, companyId: actor.companyId } }), 'Клиент');
       const identifiers = await tx.contactIdentifier.findMany({ where: { companyId: actor.companyId, contactId } });
       await tx.piiTombstone.upsert({
         where: { companyId_contactId: { companyId: actor.companyId, contactId } },
-        create: { companyId: actor.companyId, contactId, amoContactId: contact.amoContactId, identifierHashes: identifiers.map((i) => hashId(`${i.type}|${i.scope}|${i.value}`)), reason, erasedById: actor.id },
+        create: { companyId: actor.companyId, contactId, identifierHashes: identifiers.map((i) => hashId(`${i.type}|${i.scope}|${i.value}`)), reason, erasedById: actor.id },
         update: {},
       });
       const r = await this.anonymize(tx, actor.companyId, contactId);
@@ -94,7 +94,7 @@ export class PrivacyService {
           key: `pii_erase:${contactId}`,
           entityId: leads[0].id,
           kind: 'pii_provider_review',
-          text: 'Shaxsiy ma’lumot o‘chirildi: amoCRM kontakti, chat tarixi va Instagram yozishmasini kompaniya siyosati bo‘yicha qo‘lda o‘chiring/anonimlang.',
+          text: 'Персональные данные удалены. Проверьте переписку в Instagram и при необходимости удалите или обезличьте её вручную по политике компании.',
           responsibleUserId: actor.id,
           dueAt: new Date(this.d.clock.now().getTime() + 3 * 86400_000),
         });
@@ -125,10 +125,10 @@ export class PrivacyService {
       await tx.conversation.update({ where: { id: c.id }, data: { scopedPeerId: `erased:${hashId(c.scopedPeerId)}`, peerUsername: null } });
     }
     const messages = await tx.message.updateMany({ where: { conversationId: { in: conversations.map((c) => c.id) } }, data: { content: null, attachments: [], contentPurgedAt: now } });
-    await tx.passenger.updateMany({ where: { companyId, orderId: { in: orderIds } }, data: { fullName: 'O‘chirilgan yo‘lovchi', birthDate: null } });
+    await tx.passenger.updateMany({ where: { companyId, orderId: { in: orderIds } }, data: { fullName: 'Удалённый пассажир', birthDate: null } });
     await tx.offer.updateMany({ where: { companyId, leadId: { in: leadIds } }, data: { note: null } });
     const files = await tx.attachment.findMany({ where: { companyId, deletedAt: null, OR: [{ ownerType: 'lead', ownerId: { in: leadIds } }, { ownerType: 'order', ownerId: { in: orderIds } }] } });
-    await tx.attachment.updateMany({ where: { id: { in: files.map((f) => f.id) } }, data: { deletedAt: now, fileName: 'o‘chirilgan' } });
+    await tx.attachment.updateMany({ where: { id: { in: files.map((f) => f.id) } }, data: { deletedAt: now, fileName: 'удалён' } });
     return { counts: { leads: leadIds.length, orders: orderIds.length, conversations: conversations.length, messages: messages.count, files: files.length }, files: files.map((f) => f.objectKey) };
   }
 

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { fmtDate, localToDmyHm, parseDmy, parseDmyHm, type ApiError, type Loadable } from '../lib/api';
 
-export function Loading({ label = 'Yuklanmoqda…' }: { label?: string }) {
+export function Loading({ label = 'Загрузка…' }: { label?: string }) {
   return (
     <div className="state" role="status" aria-live="polite">
       {label}
@@ -11,19 +11,19 @@ export function Loading({ label = 'Yuklanmoqda…' }: { label?: string }) {
   );
 }
 
-export function Empty({ children = 'Ma’lumot yo‘q' }: { children?: ReactNode }) {
+export function Empty({ children = 'Нет данных' }: { children?: ReactNode }) {
   return <div className="state empty">{children}</div>;
 }
 
 export function ErrorBox({ error, onRetry }: { error: ApiError; onRetry?: () => void }) {
-  if (error.status === 403) return <div className="state denied" role="alert">Ruxsat yo‘q: bu bo‘limni ko‘rish huquqingiz yo‘q.</div>;
-  if (error.status === 404) return <div className="state denied" role="alert">Topilmadi yoki sizga ochiq emas.</div>;
+  if (error.status === 403) return <div className="state denied" role="alert">Нет доступа: у вас нет прав на просмотр этого раздела.</div>;
+  if (error.status === 404) return <div className="state denied" role="alert">Не найдено или недоступно для вас.</div>;
   return (
     <div className="state error" role="alert">
-      <strong>Xato:</strong> {error.message}
+      <strong>Ошибка:</strong> {error.message}
       {onRetry && (
         <button type="button" className="btn small" onClick={onRetry}>
-          Qayta urinish
+          Повторить
         </button>
       )}
     </div>
@@ -47,7 +47,7 @@ export function Async<T>({ state, children, isEmpty }: { state: Loadable<T>; chi
 export function StaleNotice({ error, loadedAt }: { error: ApiError; loadedAt: Date | null }) {
   return (
     <div className="state stale" role="status">
-      Ma’lumotlar eskirgan: so‘nggi yangilanish {loadedAt ? loadedAt.toLocaleTimeString('uz-Latn-UZ') : '—'} ({error.message})
+      Данные могут быть устаревшими: последнее обновление {loadedAt ? loadedAt.toLocaleTimeString('ru-RU') : '—'} ({error.message})
     </div>
   );
 }
@@ -56,23 +56,23 @@ export function Badge({ tone = 'neutral', children }: { tone?: 'neutral' | 'ok' 
   return <span className={`badge ${tone}`}>{children}</span>;
 }
 
-/** Mijozning Instagram username'i va profiliga havola (username faqat harf/raqam/nuqta/pastki chiziq; boshqa belgi bo'lsa havola berilmaydi). */
+/** Ссылка на профиль клиента в Instagram (username — только буквы, цифры, точка и подчёркивание; иначе ссылка не показывается). */
 export function InstagramLink({ username, withHandle = true }: { username: string | null | undefined; withHandle?: boolean }) {
   if (!username || !/^[A-Za-z0-9._]{1,30}$/.test(username)) return null;
   return (
-    <a className="ig-link" href={`https://www.instagram.com/${encodeURIComponent(username)}/`} target="_blank" rel="noopener noreferrer" title="Instagram profilini ochish">
+    <a className="ig-link" href={`https://www.instagram.com/${encodeURIComponent(username)}/`} target="_blank" rel="noopener noreferrer" title="Открыть профиль в Instagram">
       {withHandle ? `@${username}` : 'Instagram'} ↗
     </a>
   );
 }
 
-/** Sana kiritish: «DD.MM.YYYY» (brauzer/AQSH formatiga bog'liq emas). */
+/** Ввод даты: «ДД.ММ.ГГГГ» (не зависит от формата браузера). */
 export function DateInput({ value, onChange, label }: { value: string; onChange: (v: string) => void; label: string }) {
   const mask = (raw: string) => {
     const d = raw.replace(/\D/g, '').slice(0, 8);
     return [d.slice(0, 2), d.slice(2, 4), d.slice(4, 8)].filter(Boolean).join('.') + (d.length === 2 || d.length === 4 ? '.' : '');
   };
-  return <input value={value} onChange={(e) => onChange(mask(e.target.value))} inputMode="numeric" placeholder="DD.MM.YYYY" maxLength={10} aria-label={label} autoComplete="off" />;
+  return <input value={value} onChange={(e) => onChange(mask(e.target.value))} inputMode="numeric" placeholder="ДД.ММ.ГГГГ" maxLength={10} aria-label={label} autoComplete="off" />;
 }
 
 const maskDigits = (raw: string, groups: number[], seps: string[]) => {
@@ -87,7 +87,7 @@ const maskDigits = (raw: string, groups: number[], seps: string[]) => {
   return out;
 };
 
-/** Lid/buyurtma kartalari: sana «DD.MM.YYYY» ko'rinishida kiritiladi, qiymat «YYYY-MM-DD» (ISO) bo'lib qoladi. */
+/** Карточки лида/заказа: дата вводится как «ДД.ММ.ГГГГ», значение хранится как «ГГГГ-ММ-ДД» (ISO). */
 export function IsoDateField({ value, onValue, required, disabled }: { value: string; onValue: (v: string) => void; required?: boolean; disabled?: boolean }) {
   const [text, setText] = useState(value ? fmtDate(value) : '');
   const ref = useRef<HTMLInputElement>(null);
@@ -95,13 +95,13 @@ export function IsoDateField({ value, onValue, required, disabled }: { value: st
     if ((parseDmy(text) ?? '') !== value) setText(value ? fmtDate(value) : '');
   }, [value]);
   const invalid = text !== '' && parseDmy(text) === null;
-  useEffect(() => ref.current?.setCustomValidity(invalid ? 'Sanani DD.MM.YYYY ko‘rinishida kiriting' : ''), [invalid]);
+  useEffect(() => ref.current?.setCustomValidity(invalid ? 'Введите дату в формате ДД.ММ.ГГГГ' : ''), [invalid]);
   return (
     <input
       ref={ref}
       value={text}
       inputMode="numeric"
-      placeholder="DD.MM.YYYY"
+      placeholder="ДД.ММ.ГГГГ"
       maxLength={10}
       required={required}
       disabled={disabled}
@@ -116,7 +116,7 @@ export function IsoDateField({ value, onValue, required, disabled }: { value: st
   );
 }
 
-/** Sana-vaqt: «DD.MM.YYYY HH:mm»; qiymat «YYYY-MM-DDTHH:mm». */
+/** Дата и время: «ДД.ММ.ГГГГ ЧЧ:мм»; значение «ГГГГ-ММ-ДДTЧЧ:мм». */
 export function LocalDateTimeField({ value, onValue, required, disabled }: { value: string; onValue: (v: string) => void; required?: boolean; disabled?: boolean }) {
   const [text, setText] = useState(localToDmyHm(value));
   const ref = useRef<HTMLInputElement>(null);
@@ -124,13 +124,13 @@ export function LocalDateTimeField({ value, onValue, required, disabled }: { val
     if ((parseDmyHm(text) ?? '') !== value) setText(localToDmyHm(value));
   }, [value]);
   const invalid = text !== '' && parseDmyHm(text) === null;
-  useEffect(() => ref.current?.setCustomValidity(invalid ? 'Sana-vaqtni DD.MM.YYYY HH:mm ko‘rinishida kiriting' : ''), [invalid]);
+  useEffect(() => ref.current?.setCustomValidity(invalid ? 'Введите дату и время в формате ДД.ММ.ГГГГ ЧЧ:мм' : ''), [invalid]);
   return (
     <input
       ref={ref}
       value={text}
       inputMode="numeric"
-      placeholder="DD.MM.YYYY HH:mm"
+      placeholder="ДД.ММ.ГГГГ ЧЧ:мм"
       maxLength={16}
       required={required}
       disabled={disabled}
@@ -146,8 +146,8 @@ export function LocalDateTimeField({ value, onValue, required, disabled }: { val
   );
 }
 
-/** Qisqa yordam: uzun tushuntirish yordam belgisi ichida. */
-export function Help({ children, label = 'Yordam' }: { children: ReactNode; label?: string }) {
+/** Краткая справка: длинное пояснение спрятано за значком. */
+export function Help({ children, label = 'Справка' }: { children: ReactNode; label?: string }) {
   return (
     <details className="help">
       <summary aria-label={label} title={label}>
@@ -173,6 +173,25 @@ export function Field({ label, error, children, hint }: { label: string; error?:
   );
 }
 
+/** Подписи полей для сообщений проверки (ключ «_» — ошибка формы целиком). */
+const FIELD_LABELS: Record<string, string> = {
+  firstName: 'Имя',
+  lastName: 'Фамилия',
+  phone: 'Телефон',
+  telegram: 'Telegram',
+  instagram: 'Instagram',
+  email: 'Логин',
+  password: 'Пароль',
+  note: 'Заметка',
+  reason: 'Причина',
+  from: 'Дата начала',
+  to: 'Дата окончания',
+  currency: 'Валюта',
+  amount: 'Сумма',
+  version: 'Версия',
+};
+const fieldLabel = (k: string) => (k === '_' ? '' : FIELD_LABELS[k] ? `${FIELD_LABELS[k]}: ` : '');
+
 export function FormError({ error }: { error: ApiError | null }) {
   if (!error) return null;
   const fields = Object.entries(error.fieldErrors);
@@ -183,7 +202,8 @@ export function FormError({ error }: { error: ApiError | null }) {
         <ul>
           {fields.map(([k, v]) => (
             <li key={k}>
-              <code>{k}</code>: {v}
+              {fieldLabel(k)}
+              {v}
             </li>
           ))}
         </ul>
@@ -202,12 +222,4 @@ export function Section({ title, actions, children }: { title: string; actions?:
       {children}
     </section>
   );
-}
-
-export function SyncBadge({ state }: { state: string }) {
-  if (state === 'synced') return <Badge tone="ok">amoCRM bilan sinxron</Badge>;
-  if (state === 'pending' || state === 'pending_create') return <Badge tone="info">Sinxronlanmoqda</Badge>;
-  if (state === 'unknown') return <Badge tone="bad">Natija noma’lum — operator tekshiradi</Badge>;
-  if (state === 'conflict') return <Badge tone="warn">Ziddiyat</Badge>;
-  return <Badge tone="warn">{state}</Badge>;
 }

@@ -1,3 +1,5 @@
+> **Tarixiy hujjat (2026-10-26):** bu matn amoCRM bilan ishlaydigan loyiha davrida yozilgan. amoCRM integratsiyasi olib tashlangan va CRM mustaqil ishlaydi (rollar: Administrator, Menejer, Foydalanuvchi). amoCRM, «Rahbar/HEAD» va «Dublikatlar» haqidagi bandlar endi amal qilmaydi. Joriy holat: `README.md`, `docs/integrations.md`, `docs/runbook.md`.
+
 # amoCRM asosida turizm CRM tizimi uchun texnik topshiriq
 
 Versiya 1.0 • 24 oktabr 2026

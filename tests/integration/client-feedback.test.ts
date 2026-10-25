@@ -18,7 +18,7 @@ beforeAll(async () => {
   await alwaysOnDuty(core);
   app = await makeApp(core);
   admin = await login(app, 'admin@demo.local');
-  head = await login(app, 'rahbar@demo.local');
+  head = await login(app, 'admin2@demo.local');
   mgrA = await login(app, 'menejer.a@demo.local');
   mgrB = await login(app, 'menejer.b@demo.local');
 });
@@ -36,8 +36,8 @@ describe('qidiruv', () => {
     const ph = `+99891${tag.slice(-7)}`;
     const a = (await head.post('/api/v1/leads', { firstName: `Aziza${tag}`, lastName: `Karimova${tag}`, phone: ph, telegram: `tg_${tag}_a`, name: `Dubay safari ${tag}` })).body;
     // Instagram mijozi (username faqat kontaktda)
-    const company = await p().company.findFirstOrThrow();
-    const igContact = await p().contact.create({ data: { companyId: company.id, instagramUsername: `ig_${tag}_b`, syncState: 'pending_create' } });
+    const company = await p().company.findFirstOrThrow({ orderBy: { createdAt: 'asc' } });
+    const igContact = await p().contact.create({ data: { companyId: company.id, instagramUsername: `ig_${tag}_b`, syncState: 'local_only' } });
     const igLead = await p().$transaction((tx) => core.leads.createLead(tx, { companyId: company.id, contactId: igContact.id, name: 'Instagram foydalanuvchisi', channel: 'instagram_direct', placement: 'instagram', inquiryId: null, serviceType: null, at: new Date(), actor: { type: 'system', companyId: company.id, name: 'test' } as never }));
     // Qidiruvdan keyin yaratilgan ko'plab yangi lid: eski mos lid birinchi sahifadan tashqarida qoladi
     for (let i = 0; i < 4; i++) await head.post('/api/v1/leads', { firstName: `Boshqa${i}${tag}` });
@@ -101,7 +101,7 @@ describe('dashboard: sana oralig‘i va lidlar jadvali', () => {
     for (const path of ['/api/v1/dashboard/leads', '/api/v1/dashboard']) {
       const r = await head.get(`${path}?from=2031-03-11&to=2031-03-10`);
       expect(r.status).toBe(422);
-      expect(JSON.stringify(r.body)).toContain('Boshlanish sanasi tugash sanasidan keyin');
+      expect(JSON.stringify(r.body)).toContain('Дата начала не может быть позже даты окончания');
     }
   });
 
@@ -157,7 +157,7 @@ describe('turoperatorlar importi', () => {
 
 describe('holat banneri ma’lumoti', () => {
   it('/me: jonli Instagram Direct kiruvchi sinovi o‘tgan/o‘tmaganini maxfiy ma’lumotsiz qaytaradi', async () => {
-    const company = await p().company.findFirstOrThrow();
+    const company = await p().company.findFirstOrThrow({ orderBy: { createdAt: 'asc' } });
     const me0 = (await head.get('/api/v1/me')).body;
     expect(me0.liveStatus.instagramDirectInboundVerified).toBe(false);
     await p().integrationConnection.create({ data: { companyId: company.id, provider: 'META_DIRECT', mode: 'live', accountId: `ACC_${u()}`, routeToken: `rt-${u()}`, health: 'degraded', healthReason: 'awaiting_live_verification', settings: { verifiedInboundAt: new Date().toISOString() } } });

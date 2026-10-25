@@ -15,23 +15,30 @@ Migratsiya alohida release qadami: `npx prisma migrate deploy --schema packages/
 `/integrations` (admin, rahbar) yoki `GET /api/v1/integrations/health`:
 - connection holati, oxirgi webhook/sync, oxirgi xato;
 - inbox/outbox holatlar bo‘yicha soni va eng eski kutayotgan yoshi (backlog);
-- `metrics`: `webhook_count`, `signature_failures`, `inbox_retries`, `inbox_dead`, `outbox_retries`, `outbox_dead`, `provider_429`, `token_refresh_failures`, `sync_conflicts`;
+- `metrics`: `webhook_count`, `signature_failures`, `inbox_retries`, `inbox_dead`, `outbox_retries`, `outbox_dead`, `provider_429`, `token_refresh_failures`;
 - kechikkan eslatmalar, heartbeat yoshi.
 
 Signal qoidalari (qo‘lda kuzatiladi; tashqi alerting yo‘q — KNOWN_LIMITATIONS): heartbeat > 90 s; outbox eng eski > 5 daq; `token_refresh_failures` o‘sishi; ketma-ket 429; `overdueReminders` > 0 (T-3h eskalatsiyasi rahbarga ilova bildirishnomasi sifatida avtomatik ketadi).
 
 ## 3. Replay va operator ishi
 
-- `unknown` operatsiya (masalan, lid yaratish yoki Direct yuborish timeout): avval amoCRM/Instagram’da natijani tekshiring. «Xavfsiz replay» bir xil biznes kaliti bilan qayta navbatga qo‘yadi; handler avval `operation_id` bo‘yicha reconcile qiladi, topilmasa yaratadi. Direct xabar uchun replay — menejer qarori bilan qayta yuborish.
-- `dead`: `lastError` ni o‘qing (validation/mapping xatosi). Sababni tuzatib (masalan, `npm run amo-config -- --apply`), replay qiling.
+- `unknown` operatsiya (masalan, lid yaratish yoki Direct yuborish timeout): avval Instagram’da natijani tekshiring. «Xavfsiz replay» bir xil biznes kaliti bilan qayta navbatga qo‘yadi; handler avval `operation_id` bo‘yicha reconcile qiladi, topilmasa yaratadi. Direct xabar uchun replay — menejer qarori bilan qayta yuborish.
+- `dead`: `lastError` ni o‘qing (validation/mapping xatosi). Sababni tuzatib, replay qiling.
 - `paused`: connection uzilgan yoki 403/billing. Qayta ulangach paused operatsiyalar avtomatik `pending` ga qaytadi.
 - Inbox `dead` hodisa: `POST /api/v1/integrations/inbox/{id}/replay`.
 
-## 4. amoCRM tokenni qayta ulash
+## 4. Instagram tokenini qayta ulash
 
-1. `/integrations` → domenni kiriting (allowlist’da bo‘lishi shart) → «amoCRM’ni ulash / qayta ulash».
-2. OAuth tugagach connection `ok`, paused operatsiyalar qayta ishlaydi.
-3. Refresh xatosi bo‘lsa connection `paused/token_refresh_failed` — qayta ulash talab etiladi. Tokenlar DB’da AES-256-GCM bilan shifrlangan (`ENCRYPTION_KEY`).
+1. `/integrations` → «Instagram akkauntini ulash / qayta ulash» (akkaunt egasi Instagram oynasida ruxsat beradi).
+2. Ulanish tugagach connection `ok` / `degraded` holatida; sinov kiruvchi xabar kelgach «kiruvchi tasdiqlangan» ko‘rinadi.
+3. Refresh xatosi bo‘lsa connection `degraded/token_refresh_failed` — qayta ulash talab etiladi. Tokenlar DB’da AES-256-GCM bilan shifrlangan (`ENCRYPTION_KEY`).
+
+### Ish akkauntlari (Administrator / Menejer / Foydalanuvchi)
+
+- Akkauntlar CLI orqali yaratiladi; parollar repoda, seed’da va ommaviy konfiguratsiyada saqlanmaydi: JSON stdin orqali beriladi, bazaga faqat argon2 hash yoziladi.
+  `echo '{"accounts":[{"login":"...","fullName":"...","role":"ADMIN","password":"..."}]}' | npm run accounts:provision -- --phase=create`
+- Kirish tekshirilgach: `npm run accounts:provision -- --phase=close-legacy` — eski `@demo.local` akkauntlar bloklanadi, sessiyalari bekor qilinadi, faol yozuvlar (lid, buyurtma, vazifa, kontakt, eslatma) birinchi haqiqiy administratorga o‘tadi. Tarixiy yozuvlar va audit o‘chirilmaydi; o‘zgargan satrlarning oldingi qiymatlari `_backup_cutover_20261026` jadvalida saqlanadi. Migratsiya `20261026000000` rollarni `ADMIN/MANAGER/USER` ga keltiradi; oldingi rollar `_backup_users_role_20261026` jadvalida.
+- amoCRM integratsiyasi olib tashlangan: eski amoCRM outbox yozuvlari o‘chirilmaydi, ishlovchi ularni «amocrm_removed» natijasi bilan yopadi.
 
 `ENCRYPTION_KEY` almashtirilsa barcha shifrlangan credential/MFA/inbox payload o‘qilmaydi — rotatsiya uchun qayta shifrlash skripti hali yo‘q (KNOWN_LIMITATIONS).
 

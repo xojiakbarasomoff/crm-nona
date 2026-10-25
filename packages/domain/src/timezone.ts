@@ -69,19 +69,16 @@ export function utcToLocal(utc: Date, zone: string): { local: string; offsetMinu
   return { local: dt.toFormat("yyyy-MM-dd'T'HH:mm"), offsetMinutes: dt.offset };
 }
 
-const UZ_MONTHS = ['yanvar', 'fevral', 'mart', 'aprel', 'may', 'iyun', 'iyul', 'avgust', 'sentabr', 'oktabr', 'noyabr', 'dekabr'];
-
-/** "25 oktabr 10:30" in the given zone. */
-export function formatLocalUz(utc: Date, zone: string): string {
-  const dt = DateTime.fromJSDate(utc, { zone });
-  return `${dt.day} ${UZ_MONTHS[dt.month - 1]} ${dt.toFormat('HH:mm')}`;
+/** "10:30 · 25.10.2026" в заданном часовом поясе. */
+export function formatLocalRu(utc: Date, zone: string): string {
+  return DateTime.fromJSDate(utc, { zone }).toFormat('HH:mm · dd.MM.yyyy');
 }
 
-/** "25 oktabr 10:30 — aeroport vaqti, Asia/Dubai (Toshkent: 25 oktabr 11:30)" */
-export function formatAirportTimeUz(utc: Date, airportZone: string, companyZone = COMPANY_DEFAULT_TIMEZONE): string {
-  const airport = `${formatLocalUz(utc, airportZone)} — aeroport vaqti, ${airportZone}`;
+/** "10:30 · 25.10.2026 — время аэропорта, Asia/Dubai (Ташкент: 11:30 · 25.10.2026)" */
+export function formatAirportTimeRu(utc: Date, airportZone: string, companyZone = COMPANY_DEFAULT_TIMEZONE): string {
+  const airport = `${formatLocalRu(utc, airportZone)} — время аэропорта, ${airportZone}`;
   if (airportZone === companyZone) return airport;
-  return `${airport} (Toshkent: ${formatLocalUz(utc, companyZone)})`;
+  return `${airport} (Ташкент: ${formatLocalRu(utc, companyZone)})`;
 }
 
 /**

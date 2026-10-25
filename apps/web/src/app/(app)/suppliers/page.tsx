@@ -21,8 +21,8 @@ interface Supplier {
 const EMPTY = { name: '', kind: 'tour_operator', contactPerson: '', phone: '', email: '', note: '' };
 
 /**
- * Turoperatorlar va xizmat yetkazib beruvchilar ma'lumotnomasi.
- * Bu reklama manbasi emas: «Instagram Ads» — mijoz qayerdan kelgan; turoperator — xizmatni kim yetkazib beradi.
+ * Справочник туроператоров и поставщиков услуг.
+ * Это не рекламный источник: «Instagram Ads» — откуда пришёл клиент; туроператор — кто поставляет услугу.
  */
 export default function SuppliersPage() {
   const me = useMe();
@@ -57,23 +57,23 @@ export default function SuppliersPage() {
 
   return (
     <>
-      <h1>Turoperatorlar va yetkazib beruvchilar</h1>
+      <h1>Туроператоры и поставщики</h1>
       <p className="muted">
-        Xizmat <b>yetkazib beruvchilari</b> ro‘yxati. Reklama manbasi emas. O‘zgarishlar eski buyurtma narxlariga ta’sir qilmaydi.
+        Список <b>поставщиков услуг</b>. Это не рекламный источник. Изменения не влияют на цены прошлых заказов.
       </p>
 
-      <Section title="Filtr">
+      <Section title="Фильтры">
         <div className="row">
-          <Field label="Holat">
+          <Field label="Статус">
             <select value={status} onChange={(e) => setStatus(e.target.value as typeof status)}>
-              <option value="active">Faol</option>
-              <option value="archived">Arxiv</option>
-              <option value="all">Barchasi</option>
+              <option value="active">Активные</option>
+              <option value="archived">Архив</option>
+              <option value="all">Все</option>
             </select>
           </Field>
-          <Field label="Turi">
+          <Field label="Тип">
             <select value={kind} onChange={(e) => setKind(e.target.value)}>
-              <option value="">Barchasi</option>
+              <option value="">Все</option>
               {Object.entries(SUPPLIER_KIND_LABELS).map(([k, v]) => (
                 <option key={k} value={k}>
                   {v}
@@ -81,7 +81,7 @@ export default function SuppliersPage() {
               ))}
             </select>
           </Field>
-          <Field label="Nom bo‘yicha qidiruv">
+          <Field label="Поиск по названию">
             <input value={q} onChange={(e) => setQ(e.target.value)} />
           </Field>
         </div>
@@ -94,12 +94,12 @@ export default function SuppliersPage() {
             <table>
               <thead>
                 <tr>
-                  <th>Nomi</th>
-                  <th>Turi</th>
-                  {manage && <th>Mas’ul shaxs</th>}
-                  {manage && <th>Aloqa</th>}
-                  {manage && <th>Izoh</th>}
-                  <th>Holat</th>
+                  <th>Название</th>
+                  <th>Тип</th>
+                  {manage && <th>Контактное лицо</th>}
+                  {manage && <th>Контакты</th>}
+                  {manage && <th>Заметка</th>}
+                  <th>Статус</th>
                   {manage && <th />}
                 </tr>
               </thead>
@@ -118,18 +118,18 @@ export default function SuppliersPage() {
                       </td>
                     )}
                     {manage && <td className="muted">{s.note ?? ''}</td>}
-                    <td>{s.status === 'active' ? <Badge tone="ok">Faol</Badge> : <Badge>Arxiv</Badge>}</td>
+                    <td>{s.status === 'active' ? <Badge tone="ok">Активен</Badge> : <Badge>Архив</Badge>}</td>
                     {manage && (
                       <td>
                         <button type="button" className="btn small secondary" onClick={() => startEdit(s)}>
-                          Tahrirlash
+                          Редактировать
                         </button>
                         <button
                           type="button"
                           className="btn small secondary"
                           onClick={() => run(() => api(`/api/v1/suppliers/${s.id}`, { method: 'PATCH', body: { version: s.version, status: s.status === 'active' ? 'archived' : 'active' } }))}
                         >
-                          {s.status === 'active' ? 'Arxivlash' : 'Faollashtirish'}
+                          {s.status === 'active' ? 'В архив' : 'Вернуть из архива'}
                         </button>
                       </td>
                     )}
@@ -142,7 +142,7 @@ export default function SuppliersPage() {
       </Async>
 
       {manage ? (
-        <Section title={editing ? `Tahrirlash: ${editing.name}` : 'Yangi turoperator / yetkazib beruvchi'}>
+        <Section title={editing ? `Редактирование: ${editing.name}` : 'Новый туроператор / поставщик'}>
           <form
             className="row"
             onSubmit={async (e) => {
@@ -155,10 +155,10 @@ export default function SuppliersPage() {
               }
             }}
           >
-            <Field label="Kompaniya nomi">
+            <Field label="Название компании">
               <input value={form.name} onChange={set('name')} required />
             </Field>
-            <Field label="Turi">
+            <Field label="Тип">
               <select value={form.kind} onChange={set('kind')}>
                 {Object.entries(SUPPLIER_KIND_LABELS).map(([k, v]) => (
                   <option key={k} value={k}>
@@ -167,20 +167,20 @@ export default function SuppliersPage() {
                 ))}
               </select>
             </Field>
-            <Field label="Mas’ul shaxs">
+            <Field label="Контактное лицо">
               <input value={form.contactPerson} onChange={set('contactPerson')} />
             </Field>
-            <Field label="Telefon">
+            <Field label="Телефон">
               <input value={form.phone} onChange={set('phone')} inputMode="tel" />
             </Field>
             <Field label="Email">
               <input type="email" value={form.email} onChange={set('email')} />
             </Field>
-            <Field label="Izoh">
+            <Field label="Заметка">
               <input value={form.note} onChange={set('note')} />
             </Field>
             <button className="btn" type="submit">
-              {editing ? 'O‘zgarishni saqlash' : 'Yaratish'}
+              {editing ? 'Сохранить изменения' : 'Создать'}
             </button>
             {editing && (
               <button
@@ -191,13 +191,13 @@ export default function SuppliersPage() {
                   setForm(EMPTY);
                 }}
               >
-                Bekor qilish
+                Отмена
               </button>
             )}
           </form>
         </Section>
       ) : (
-        <p className="muted">O‘zgartirish rahbar va administrator uchun. Siz lidga turoperator tanlay olasiz.</p>
+        <p className="muted">Редактировать справочник может администратор. Вы можете выбрать туроператора в карточке лида.</p>
       )}
     </>
   );

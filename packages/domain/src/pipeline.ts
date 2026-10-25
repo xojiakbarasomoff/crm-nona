@@ -15,16 +15,16 @@ export const STAGES = [
 ] as const;
 export type Stage = (typeof STAGES)[number];
 
-export const STAGE_LABELS_UZ: Record<Stage, string> = {
-  NEW: 'Yangi lid',
-  CONTACTED: 'Mijoz bilan aloqa o‘rnatildi',
-  QUALIFIED: 'Mijoz talablari aniqlandi',
-  PREPARING_OFFER: 'Taklif tayyorlanmoqda',
-  OFFER_SENT: 'Taklif mijozga yuborildi',
-  AWAITING_PAYMENT: 'To‘lov kutilmoqda',
-  WON: 'Sotuv muvaffaqiyatli yakunlandi',
-  LOST: 'Bekor qilindi',
-  FOLLOW_UP: 'Qayta aloqa talab qilinadi',
+export const STAGE_LABELS_RU: Record<Stage, string> = {
+  NEW: 'Новый лид',
+  CONTACTED: 'Контакт установлен',
+  QUALIFIED: 'Потребности выяснены',
+  PREPARING_OFFER: 'Готовится предложение',
+  OFFER_SENT: 'Предложение отправлено',
+  AWAITING_PAYMENT: 'Ожидается оплата',
+  WON: 'Продажа завершена',
+  LOST: 'Отменён',
+  FOLLOW_UP: 'Требуется повторный контакт',
 };
 
 export const CLOSED_STAGES: ReadonlySet<Stage> = new Set(['WON', 'LOST']);
@@ -135,7 +135,7 @@ export function resumeFromFollowUp(returnStage: Stage | null): Stage {
 }
 
 /**
- * For stage changes observed from amoCRM (which we cannot block), returns the list of missing
+ * For stage changes that were not made through the transition checks, returns the list of missing
  * fields so the caller can record an anomaly and create a correction task (TZ §11.2, AC14).
  */
 export function detectAnomaly(observedStage: Stage, facts: LeadFacts): MissingField[] {

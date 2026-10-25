@@ -36,23 +36,23 @@ function LoginForm() {
       }}
     >
       <img className="login-logo" src="/nona-logo-bordo.png" alt="NONA Travel" width={200} height={110} />
-      <h1>Tizimga kirish</h1>
-      <Field label="Login yoki email">
+      <h1>Вход в систему</h1>
+      <Field label="Логин">
         <input type="text" autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
       </Field>
-      <Field label="Parol">
+      <Field label="Пароль">
         <input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
       </Field>
       {needTotp && (
-        <Field label="MFA kodi (6 raqam)">
+        <Field label="Код MFA (6 цифр)">
           <input inputMode="numeric" pattern="\d{6}" autoComplete="one-time-code" value={totp} onChange={(e) => setTotp(e.target.value)} required />
         </Field>
       )}
       <FormError error={error} />
       <button className="btn" type="submit" disabled={busy}>
-        {busy ? 'Kirilmoqda…' : 'Kirish'}
+        {busy ? 'Входим…' : 'Войти'}
       </button>
-      <p className="muted">Ochiq ro‘yxatdan o‘tish yo‘q. Hisobni administrator taklif havolasi orqali yaratadi.</p>
+      <p className="muted">Самостоятельной регистрации нет. Учётную запись создаёт администратор.</p>
     </form>
   );
 }

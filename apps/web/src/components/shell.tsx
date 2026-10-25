@@ -3,15 +3,16 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { api, useApi, type ApiError } from '../lib/api';
+import { api, ROLE_LABELS, useApi, type ApiError } from '../lib/api';
 import { Icon, type IconName } from './icons';
 import { Loading } from './ui';
 
 export interface Me {
   id: string;
   email: string;
+  login: string | null;
   fullName: string;
-  role: 'ADMIN' | 'HEAD' | 'MANAGER';
+  role: 'ADMIN' | 'MANAGER' | 'USER';
   capabilities: string[];
   mfa: { required: boolean; enrolled: boolean; verified: boolean };
   appMode: 'demo' | 'staging' | 'production';
@@ -21,6 +22,8 @@ export interface Me {
 const MeContext = createContext<Me | null>(null);
 export const useMe = () => useContext(MeContext)!;
 export const canDo = (me: Me, cap: string) => me.capabilities.includes(cap);
+/** Роль «Пользователь» — только просмотр; сервер всё равно отклоняет изменения. */
+export const canWrite = (me: Me) => me.role !== 'USER';
 
 
 /** Connects to the SSE stream; every change event triggers a refetch in mounted views. */
@@ -57,19 +60,18 @@ export function Shell({ children }: { children: ReactNode }) {
       });
   }, [pathname, router]);
 
-  if (!me) return error && error.status !== 401 ? <div className="state error">{error.message}</div> : <Loading label="Sessiya tekshirilmoqda…" />;
+  if (!me) return error && error.status !== 401 ? <div className="state error">{error.message}</div> : <Loading label="Проверка сеанса…" />;
 
   const nav: Array<[string, string, boolean]> = [
-    ['/dashboard', 'Boshqaruv paneli', true],
-    ['/leads', 'Lidlar', true],
-    ['/orders', 'Buyurtmalar', true],
-    ['/suppliers', 'Turoperatorlar', true],
-    ['/flights', 'Reyslar', true],
-    ['/reminders', 'Eslatmalar', true],
-    ['/duplicates', 'Dublikatlar', true],
-    ['/integrations', 'Integratsiyalar', canDo(me, 'integrations.manage') || canDo(me, 'dashboard.company')],
-    ['/users', 'Foydalanuvchilar', canDo(me, 'users.manage')],
-    ['/settings', 'Sozlamalar', canDo(me, 'integrations.manage')],
+    ['/dashboard', 'Панель управления', true],
+    ['/leads', 'Лиды', true],
+    ['/orders', 'Заказы', true],
+    ['/suppliers', 'Туроператоры', true],
+    ['/flights', 'Рейсы', true],
+    ['/reminders', 'Напоминания', true],
+    ['/integrations', 'Интеграции', canDo(me, 'integrations.manage') || canDo(me, 'dashboard.company')],
+    ['/users', 'Пользователи', canDo(me, 'users.manage')],
+    ['/settings', 'Настройки', canDo(me, 'integrations.manage')],
   ];
   const unread = notifications.data?.items.filter((n) => !n.readAt).length ?? 0;
 
@@ -81,7 +83,7 @@ export function Shell({ children }: { children: ReactNode }) {
             <img src="/nona-logo-white.png" alt="NONA Travel" width={188} height={103} />
             <span>NONA Travel CRM</span>
           </div>
-          <nav aria-label="Asosiy bo‘limlar">
+          <nav aria-label="Основные разделы">
             {nav
               .filter(([, , show]) => show)
               .map(([href, label]) => (
@@ -98,15 +100,15 @@ export function Shell({ children }: { children: ReactNode }) {
               </span>
               <div>
                 <div className="who-name">{me.fullName}</div>
-                <div className="muted">{me.role === 'ADMIN' ? 'Administrator' : me.role === 'HEAD' ? 'Savdo rahbari' : 'Menejer'}</div>
+                <div className="muted">{ROLE_LABELS[me.role] ?? me.role}</div>
               </div>
             </div>
             {me.role === 'ADMIN' && (
-              <div className="muted" title="Yangilanish holati (administrator uchun)">
-                {live === 'live' ? '● Jonli yangilanish' : '○ Davriy yangilanish'}
+              <div className="muted" title="Состояние обновления (для администратора)">
+                {live === 'live' ? '● Живое обновление' : '○ Периодическое обновление'}
               </div>
             )}
-            <Link href="/notifications">Bildirishnomalar {unread > 0 && <span className="badge bad">{unread}</span>}</Link>
+            <Link href="/notifications">Уведомления {unread > 0 && <span className="badge bad">{unread}</span>}</Link>
             <button
               type="button"
               className="btn link"
@@ -115,18 +117,18 @@ export function Shell({ children }: { children: ReactNode }) {
                 router.replace('/login');
               }}
             >
-              Chiqish
+              Выйти
             </button>
           </div>
         </aside>
         <main className="content">
           {me.appMode === 'demo' && pathname !== '/dashboard' && (
             <div className="demo-banner" role="note">
-              Instagram kiruvchi xabarlar — {me.liveStatus?.instagramDirectInboundVerified ? 'ulangan' : 'sinovdan o‘tmagan'}. amoCRM, CRM’dan javob va reklama formalari — ulanmagan.
+              Входящие сообщения Instagram — {me.liveStatus?.instagramDirectInboundVerified ? 'подключены' : 'не проверены'}. Ответы из CRM и рекламные формы — не подключены.
               {canDo(me, 'integrations.manage') && (
                 <>
                   {' '}
-                  <Link href="/integrations">Batafsil</Link>
+                  <Link href="/integrations">Подробнее</Link>
                 </>
               )}
             </div>

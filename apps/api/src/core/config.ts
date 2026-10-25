@@ -1,10 +1,6 @@
 import { z } from 'zod';
 import { parseAppMode, type AppMode } from '@crm/integrations';
 
-const csv = z
-  .string()
-  .optional()
-  .transform((v) => (v ? v.split(',').map((s) => s.trim()).filter(Boolean) : []));
 const optionalNumber = z
   .string()
   .optional()
@@ -24,15 +20,6 @@ const schema = z.object({
   COOKIE_SECURE: z.string().default('true'),
   /** Demo-only: login by short name (admin/user1/user2), simple passwords, no admin MFA. Rejected outside demo mode. */
   DEMO_SIMPLE_LOGIN: z.string().default('false'),
-  AMO_CLIENT_ID: z.string().default(''),
-  AMO_CLIENT_SECRET: z.string().default(''),
-  AMO_REDIRECT_URI: z.string().default(''),
-  AMO_ALLOWED_DOMAINS: csv,
-  AMO_RATE_LIMIT_RPS: z.coerce.number().default(5),
-  AMO_CHAT_CHANNEL_ID: z.string().default(''),
-  AMO_CHAT_SECRET: z.string().default(''),
-  AMO_CHAT_BOT_NAME: z.string().default('Instagram Direct'),
-  DIRECT_CHANNEL_MODE: z.enum(['native_connector', 'custom_channel']).default('custom_channel'),
   META_APP_ID: z.string().default(''),
   META_APP_SECRET: z.string().default(''),
   META_VERIFY_TOKEN: z.string().default(''),
@@ -67,7 +54,6 @@ const schema = z.object({
   MAX_UPLOAD_BYTES: z.coerce.number().default(10 * 1024 * 1024),
   SCHEDULER_INTERVAL_MS: z.coerce.number().default(15_000),
   OUTBOX_INTERVAL_MS: z.coerce.number().default(1_000),
-  RECONCILE_INTERVAL_MS: z.coerce.number().default(300_000),
   METRICS_TOKEN: z.string().default(''),
 });
 
@@ -84,9 +70,6 @@ export interface AppConfig {
   encryptionKey: string;
   cookieSecure: boolean;
   demoSimpleLogin: boolean;
-  amo: { clientId: string; clientSecret: string; redirectUri: string; allowedDomains: string[]; rps: number };
-  amoChats: { channelId: string; secret: string; botName: string };
-  directChannelMode: 'native_connector' | 'custom_channel';
   meta: {
     appId: string;
     appSecret: string;
@@ -107,7 +90,6 @@ export interface AppConfig {
   maxUploadBytes: number;
   schedulerIntervalMs: number;
   outboxIntervalMs: number;
-  reconcileIntervalMs: number;
   metricsToken: string;
 }
 
@@ -132,9 +114,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     encryptionKey: e.ENCRYPTION_KEY,
     cookieSecure,
     demoSimpleLogin,
-    amo: { clientId: e.AMO_CLIENT_ID, clientSecret: e.AMO_CLIENT_SECRET, redirectUri: e.AMO_REDIRECT_URI, allowedDomains: e.AMO_ALLOWED_DOMAINS, rps: e.AMO_RATE_LIMIT_RPS },
-    amoChats: { channelId: e.AMO_CHAT_CHANNEL_ID, secret: e.AMO_CHAT_SECRET, botName: e.AMO_CHAT_BOT_NAME },
-    directChannelMode: e.DIRECT_CHANNEL_MODE,
     meta: {
       appId: e.META_APP_ID,
       appSecret: e.META_APP_SECRET,
@@ -166,7 +145,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     maxUploadBytes: e.MAX_UPLOAD_BYTES,
     schedulerIntervalMs: Math.min(e.SCHEDULER_INTERVAL_MS, 30_000),
     outboxIntervalMs: e.OUTBOX_INTERVAL_MS,
-    reconcileIntervalMs: e.RECONCILE_INTERVAL_MS,
     metricsToken: e.METRICS_TOKEN,
   };
 }

@@ -4,6 +4,7 @@ import { useRef, useState } from 'react';
 import { api, ApiError, fmtDateTime, useApi } from '../lib/api';
 import { DOC_CATEGORY_LABELS } from '../lib/format';
 import { Badge, FormError, Section } from './ui';
+import { canWrite, useMe } from './shell';
 
 interface Att {
   id: string;
@@ -29,12 +30,14 @@ function csrf() {
 }
 
 /**
- * Hujjatlar: kategoriya bo'yicha guruhlanadi va mijoz / buyurtma / yo'lovchiga bog'lanadi.
- * Private storage, virus tekshiruvi (skandan o'tmaguncha ochilmaydi), qisqa muddatli yuklab olish havolasi — backend'da.
- * `owners` — yuklashda tanlanadigan bog'lanish ob'ektlari; birinchisi — asosiy (ro'yxat shu ob'ekt bo'yicha olinadi).
+ * Документы: группируются по категориям и привязываются к клиенту / заказу / пассажиру.
+ * Закрытое хранилище, проверка на вирусы (до проверки файл не открывается), короткоживущая ссылка на скачивание — на сервере.
+ * `owners` — объекты привязки при загрузке; первый — основной (список берётся по нему).
  */
-export function Attachments({ ownerType, ownerId, owners, title = 'Fayllar' }: { ownerType: DocOwner['type']; ownerId: string; owners?: DocOwner[]; title?: string }) {
-  const targets: DocOwner[] = owners?.length ? owners : [{ type: ownerType, id: ownerId, label: 'Shu obyekt' }];
+export function Attachments({ ownerType, ownerId, owners, title = 'Файлы' }: { ownerType: DocOwner['type']; ownerId: string; owners?: DocOwner[]; title?: string }) {
+  const me = useMe();
+  const writable = canWrite(me);
+  const targets: DocOwner[] = owners?.length ? owners : [{ type: ownerType, id: ownerId, label: 'Этот объект' }];
   const related = ownerType === 'order' && targets.length > 1;
   const q = `ownerType=${ownerType}&ownerId=${ownerId}${related ? '&related=1' : ''}`;
   const state = useApi<{ items: Att[] }>(`/api/v1/attachments?${q}`, { pollMs: 10_000 });
@@ -56,7 +59,7 @@ export function Attachments({ ownerType, ownerId, owners, title = 'Fayllar' }: {
         credentials: 'same-origin',
       });
       const body = await res.json().catch(() => null);
-      if (!res.ok) throw new ApiError(res.status, body?.error?.code ?? 'ERROR', body?.error?.message ?? `Xato ${res.status}`, body?.error?.field_errors ?? {});
+      if (!res.ok) throw new ApiError(res.status, body?.error?.code ?? 'ERROR', body?.error?.message ?? `Ошибка ${res.status}`, body?.error?.field_errors ?? {});
       await state.reload();
     } catch (e) {
       setError(e as ApiError);
@@ -71,11 +74,12 @@ export function Attachments({ ownerType, ownerId, owners, title = 'Fayllar' }: {
 
   return (
     <Section title={title}>
-      <p className="muted">PDF, rasm, DOCX, XLSX; 10 MB gacha. Fayl tekshiruvdan o‘tmaguncha ochilmaydi. Pasport nusxasi ommaviy ochilmaydi.</p>
+      <p className="muted">PDF, изображения, DOCX, XLSX; до 10 МБ. Файл не открывается, пока не пройдёт проверку. Копия паспорта не открывается публично.</p>
+      {writable && (
       <div className="row">
         <label className="field">
-          <span className="field-label">Hujjat turi</span>
-          <select value={category} onChange={(e) => setCategory(e.target.value)} aria-label="Hujjat turi">
+          <span className="field-label">Тип документа</span>
+          <select value={category} onChange={(e) => setCategory(e.target.value)} aria-label="Тип документа">
             {Object.entries(DOC_CATEGORY_LABELS).map(([k, v]) => (
               <option key={k} value={k}>
                 {v}
@@ -85,8 +89,8 @@ export function Attachments({ ownerType, ownerId, owners, title = 'Fayllar' }: {
         </label>
         {targets.length > 1 && (
           <label className="field">
-            <span className="field-label">Kimga tegishli</span>
-            <select value={target} onChange={(e) => setTarget(Number(e.target.value))} aria-label="Kimga tegishli">
+            <span className="field-label">К чему относится</span>
+            <select value={target} onChange={(e) => setTarget(Number(e.target.value))} aria-label="К чему относится">
               {targets.map((t, i) => (
                 <option key={`${t.type}:${t.id}`} value={i}>
                   {t.label}
@@ -96,12 +100,13 @@ export function Attachments({ ownerType, ownerId, owners, title = 'Fayllar' }: {
           </label>
         )}
         <label className="btn secondary" style={{ display: 'inline-block' }}>
-          {busy ? 'Yuklanmoqda…' : 'Fayl yuklash'}
-          <input ref={input} type="file" aria-label="Fayl yuklash" style={{ display: 'none' }} accept=".pdf,.png,.jpg,.jpeg,.webp,.docx,.xlsx" onChange={(e) => e.target.files?.[0] && void uploadFile(e.target.files[0])} />
+          {busy ? 'Загрузка…' : 'Загрузить файл'}
+          <input ref={input} type="file" aria-label="Загрузить файл" style={{ display: 'none' }} accept=".pdf,.png,.jpg,.jpeg,.webp,.docx,.xlsx" onChange={(e) => e.target.files?.[0] && void uploadFile(e.target.files[0])} />
         </label>
       </div>
+      )}
       <FormError error={error} />
-      {groups.length === 0 && <div className="state empty">Hujjat yuklanmagan</div>}
+      {groups.length === 0 && <div className="state empty">Документы не загружены</div>}
       {groups.map(([cat, list]) => (
         <div key={cat} className="doc-group">
           <h3 className="doc-title">
@@ -112,16 +117,16 @@ export function Attachments({ ownerType, ownerId, owners, title = 'Fayllar' }: {
               {list.map((a) => (
                 <tr key={a.id}>
                   <td>
-                    {cat === 'passport' ? 'Pasport nusxasi' : a.fileName}
+                    {cat === 'passport' ? 'Копия паспорта' : a.fileName}
                     {a.ownerLabel && related && <div className="muted">{a.ownerLabel}</div>}
                   </td>
                   <td className="muted">{Math.ceil(a.size / 1024)} KB</td>
                   <td>{fmtDateTime(a.createdAt)}</td>
                   <td>
-                    {a.scanState === 'clean' && <Badge tone="ok">Tekshirildi</Badge>}
-                    {a.scanState === 'pending' && <Badge tone="info">Virus tekshiruvi kutilmoqda</Badge>}
-                    {a.scanState === 'infected' && <Badge tone="bad">Zararli — bloklangan</Badge>}
-                    {a.scanState === 'error' && <Badge tone="warn">Tekshiruv xatosi</Badge>}
+                    {a.scanState === 'clean' && <Badge tone="ok">Проверен</Badge>}
+                    {a.scanState === 'pending' && <Badge tone="info">Ожидает проверки на вирусы</Badge>}
+                    {a.scanState === 'infected' && <Badge tone="bad">Опасный — заблокирован</Badge>}
+                    {a.scanState === 'error' && <Badge tone="warn">Ошибка проверки</Badge>}
                   </td>
                   <td>
                     {a.scanState === 'clean' && (
@@ -137,11 +142,12 @@ export function Attachments({ ownerType, ownerId, owners, title = 'Fayllar' }: {
                           }
                         }}
                       >
-                        Yuklab olish
+                        Скачать
                       </button>
                     )}
+                    {writable && (
                     <select
-                      aria-label={`Hujjat turini o‘zgartirish: ${cat === 'passport' ? 'pasport' : a.fileName}`}
+                      aria-label={`Изменить тип документа: ${cat === 'passport' ? 'паспорт' : a.fileName}`}
                       value={a.category}
                       onChange={async (e) => {
                         try {
@@ -159,11 +165,13 @@ export function Attachments({ ownerType, ownerId, owners, title = 'Fayllar' }: {
                         </option>
                       ))}
                     </select>
+                    )}
+                    {writable && (
                     <button
                       type="button"
                       className="btn small secondary"
                       onClick={async () => {
-                        if (!window.confirm(`«${cat === 'passport' ? 'Pasport nusxasi' : a.fileName}» o‘chirilsinmi?`)) return;
+                        if (!window.confirm(`Удалить «${cat === 'passport' ? 'Копия паспорта' : a.fileName}»?`)) return;
                         try {
                           await api(`/api/v1/attachments/${a.id}`, { method: 'DELETE' });
                           await state.reload();
@@ -172,8 +180,9 @@ export function Attachments({ ownerType, ownerId, owners, title = 'Fayllar' }: {
                         }
                       }}
                     >
-                      O‘chirish
+                      Удалить
                     </button>
+                    )}
                   </td>
                 </tr>
               ))}

@@ -60,7 +60,7 @@ export interface AssignmentInput {
   contactOwner: { userId: string; eligible: boolean } | null;
   stickyOwnerEnabled: boolean;
   roundRobinPick: { userId: string; nextPointer: number } | null;
-  /** When amoCRM requires a responsible user and nobody is eligible. */
+  /** When nobody is eligible: the company duty user receives the lead. */
   dutyUserId: string | null;
 }
 

@@ -50,7 +50,7 @@ describe('pipeline transitions (TZ §11)', () => {
   it('closed leads need explicit reopen', () => {
     expect(checkTransition('WON', 'NEW', facts(), null)).toMatchObject({ ok: false, code: 'CLOSED_REQUIRES_REOPEN' });
   });
-  it('WON without order is an anomaly when observed from amoCRM (AC14)', () => {
+  it('WON without order is an anomaly (AC14)', () => {
     expect(detectAnomaly('WON', facts())).toEqual(['order', 'order.agreed_amount', 'order.sale_evidence']);
   });
 });
@@ -161,6 +161,7 @@ describe('sync and retry helpers', () => {
   it('masking and scope', () => {
     expect(maskReference('ABC123')).toBe('***123');
     expect(ownerScope({ id: 'm', role: 'MANAGER' })).toBe('m');
-    expect(ownerScope({ id: 'h', role: 'HEAD' })).toBeNull();
+    expect(ownerScope({ id: 'h', role: 'ADMIN' })).toBeNull();
+    expect(ownerScope({ id: 'u', role: 'USER' })).toBe('u');
   });
 });

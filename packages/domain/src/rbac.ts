@@ -3,7 +3,7 @@
  * describes capabilities so that API, export, SSE and UI read from one source.
  */
 
-export const ROLES = ['ADMIN', 'HEAD', 'MANAGER'] as const;
+export const ROLES = ['ADMIN', 'MANAGER', 'USER'] as const;
 export type Role = (typeof ROLES)[number];
 
 export type Capability =
@@ -12,8 +12,6 @@ export type Capability =
   | 'records.view_all'
   | 'records.edit_all'
   | 'leads.reassign'
-  | 'duplicates.resolve'
-  | 'duplicates.flag'
   | 'export'
   | 'audit.read_all'
   | 'audit.read_own'
@@ -23,7 +21,7 @@ export type Capability =
   | 'integrations.replay'
   | 'reference.view_full'
   | 'suppliers.manage'
-  /** Tannarx (net price), foyda va yetkazib beruvchi qaytarimlarini ko‘rish/kiritish. Rahbar va administratorda standart; menejerga administrator shaxsiy yoqadi. */
+  /** Tannarx (net price), foyda va yetkazib beruvchi qaytarimlarini ko‘rish/kiritish. Administratorda standart; menejerga administrator shaxsiy yoqadi. */
   | 'finance.cost.view';
 
 const MATRIX: Record<Role, ReadonlySet<Capability>> = {
@@ -33,8 +31,6 @@ const MATRIX: Record<Role, ReadonlySet<Capability>> = {
     'records.view_all',
     'records.edit_all',
     'leads.reassign',
-    'duplicates.resolve',
-    'duplicates.flag',
     'export',
     'audit.read_all',
     'dashboard.company',
@@ -45,23 +41,15 @@ const MATRIX: Record<Role, ReadonlySet<Capability>> = {
     'suppliers.manage',
     'finance.cost.view',
   ]),
-  HEAD: new Set<Capability>([
-    'records.view_all',
-    'records.edit_all',
-    'leads.reassign',
-    'duplicates.resolve',
-    'duplicates.flag',
-    'export',
-    'audit.read_all',
-    'dashboard.company',
-    'reminders.assign_others',
-    'leads.reopen',
-    'reference.view_full',
-    'suppliers.manage',
-    'finance.cost.view',
-  ]),
-  MANAGER: new Set<Capability>(['duplicates.flag', 'audit.read_own']),
+  MANAGER: new Set<Capability>(['audit.read_own']),
+  /** Faqat o‘qish: o‘ziga biriktirilgan ma’lumotlar. Server har qanday yozuvchi so‘rovni rad etadi (`isReadOnlyRole`). */
+  USER: new Set<Capability>([]),
 };
+
+/** Faqat o‘qish roli: GET/HEAD dan boshqa so‘rovlar server tomonida rad etiladi. */
+export function isReadOnlyRole(role: Role): boolean {
+  return role === 'USER';
+}
 
 export function can(role: Role, cap: Capability): boolean {
   return MATRIX[role].has(cap);

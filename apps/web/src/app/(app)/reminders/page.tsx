@@ -4,6 +4,8 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { api, fmtDateTime, useApi, type ApiError } from '../../../lib/api';
 import { Async, Badge, FormError } from '../../../components/ui';
+import { OCCURRENCE_STATE_LABELS } from '../../../lib/format';
+import { canWrite, useMe } from '../../../components/shell';
 
 interface Row {
   id: string;
@@ -18,6 +20,7 @@ interface Row {
 }
 
 export default function RemindersPage() {
+  const me = useMe();
   const [stateFilter, setStateFilter] = useState('');
   const state = useApi<{ items: Row[] }>(`/api/v1/reminders?limit=200${stateFilter ? `&state=${stateFilter}` : ''}`);
   const [error, setError] = useState<ApiError | null>(null);
@@ -32,14 +35,14 @@ export default function RemindersPage() {
   };
   return (
     <>
-      <h1>Eslatmalar</h1>
+      <h1>Напоминания</h1>
       <div className="tabs">
         {[
-          ['', 'Faol'],
-          ['due', 'Vaqti kelgan'],
-          ['completed', 'Bajarilgan'],
-          ['missed', 'O‘tkazib yuborilgan'],
-          ['cancelled', 'Bekor qilingan'],
+          ['', 'Активные'],
+          ['due', 'Пора выполнить'],
+          ['completed', 'Выполненные'],
+          ['missed', 'Пропущенные'],
+          ['cancelled', 'Отменённые'],
         ].map(([k, v]) => (
           <button key={k} type="button" className="btn secondary" aria-pressed={stateFilter === k} onClick={() => setStateFilter(k!)}>
             {v}
@@ -53,34 +56,34 @@ export default function RemindersPage() {
             <table>
               <thead>
                 <tr>
-                  <th>Eslatma</th>
-                  <th>Vaqt</th>
-                  <th>Holat</th>
-                  <th>Amal</th>
+                  <th>Напоминание</th>
+                  <th>Срок</th>
+                  <th>Статус</th>
+                  <th>Действие</th>
                 </tr>
               </thead>
               <tbody>
                 {d.items.map((r) => (
                   <tr key={r.id}>
                     <td>
-                      <b>{r.title}</b> {r.escalatedAt && <Badge tone="bad">Eskalatsiya</Badge>}
+                      <b>{r.title}</b> {r.escalatedAt && <Badge tone="bad">Эскалация</Badge>}
                       <div className="muted">{r.body}</div>
-                      {r.orderId && <Link href={`/orders/${r.orderId}`}>Buyurtmani ochish</Link>}
+                      {r.orderId && <Link href={`/orders/${r.orderId}`}>Открыть заказ</Link>}
                     </td>
                     <td>{fmtDateTime(r.dueAt)}</td>
                     <td>
-                      <Badge tone={r.state === 'due' ? 'warn' : 'neutral'}>{r.state}</Badge>
-                      {r.kind === 'milestone' && r.state === 'due' && <div className="hint">Natija kiritilishi kerak (buyurtmada reys tekshiruvi)</div>}
+                      <Badge tone={r.state === 'due' ? 'warn' : 'neutral'}>{OCCURRENCE_STATE_LABELS[r.state] ?? r.state}</Badge>
+                      {r.kind === 'milestone' && r.state === 'due' && <div className="hint">Нужно ввести результат (проверка рейса в заказе)</div>}
                     </td>
                     <td>
-                      {['scheduled', 'due', 'snoozed'].includes(r.state) && (
+                      {canWrite(me) && ['scheduled', 'due', 'snoozed'].includes(r.state) && (
                         <>
                           <button className="btn small secondary" type="button" onClick={() => act(() => api(`/api/v1/reminders/${r.id}`, { method: 'PATCH', body: { action: 'snooze', minutes: 30 } }))}>
-                            30 daq keyinga
+                            Отложить на 30 мин.
                           </button>
                           {r.kind === 'manual' && (
                             <button className="btn small" type="button" onClick={() => act(() => api(`/api/v1/reminders/${r.id}/complete`, { method: 'POST', body: {} }))}>
-                              Bajarildi
+                              Выполнено
                             </button>
                           )}
                         </>

@@ -4,8 +4,9 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { api, fmtDateTime, isoToTashkentLocal, newKey, SOURCE_LABELS, STAGE_LABELS, tashkentLocalToIso, useApi, type ApiError } from '../../../../lib/api';
-import { Async, Badge, Field, FormError, InstagramLink, IsoDateField, LocalDateTimeField, Section, SyncBadge } from '../../../../components/ui';
-import { canDo, useMe } from '../../../../components/shell';
+import { FULFILLMENT_LABELS } from '../../../../lib/format';
+import { Async, Badge, Field, FormError, InstagramLink, IsoDateField, LocalDateTimeField, Section } from '../../../../components/ui';
+import { canDo, canWrite, useMe } from '../../../../components/shell';
 import { Attachments } from '../../../../components/attachments';
 import { ContactEditForm } from '../../../../components/manual-lead';
 
@@ -18,8 +19,6 @@ interface LeadDetail {
     ownerId: string | null;
     firstSource: string;
     firstPlacement: string;
-    syncState: string;
-    amoLeadId: string | null;
     contactId: string;
     tourOperatorId: string | null;
     requirements: Record<string, unknown>;
@@ -30,7 +29,6 @@ interface LeadDetail {
     nextContactAt: string | null;
     followUpNote: string | null;
     anomaly: { stage: string; missing: string[] } | null;
-    pendingChange: { stage?: string; ownerId?: string } | null;
     firstResponseDueAt: string | null;
     firstHumanActionAt: string | null;
     slaBreachedAt: string | null;
@@ -41,11 +39,17 @@ interface LeadDetail {
   offers: Array<{ id: string; version: number; content: string; amount: string; currency: string; sentAt: string | null; acceptedAt: string | null; validUntil: string | null }>;
   orders: Array<{ id: string; orderNo: string; fulfillmentState: string }>;
   contact: { id: string; fullName: string | null; firstName: string | null; lastName: string | null; primaryPhone: string | null; telegramUsername: string | null; instagramUsername: string | null; instagramName: string | null } | null;
-  pendingOperations: Array<{ id: string; action: string; state: string; lastError: string | null }>;
   tourOperator: { id: string; name: string; status: string } | null;
-  /** Faol buyurtma bo'lsa turoperator buyurtmaniki (tarixiy bog'lanish): lid kartasida o'zgartirilmaydi. */
+  /** Если есть активный заказ, туроператор принадлежит заказу (историческая связь): в карточке лида не меняется. */
   operatorOwnedByOrder: { id: string; orderNo: string } | null;
 }
+
+const EVENT_LABELS: Record<string, string> = {
+  created: 'Лид создан',
+  stage_change: 'Смена этапа',
+  reopened: 'Повторно открыт',
+  owner_change: 'Смена ответственного',
+};
 
 export default function LeadPage() {
   const { id } = useParams<{ id: string }>();
@@ -55,6 +59,7 @@ export default function LeadPage() {
   const team = useApi<{ items: Array<{ id: string; fullName: string; role: string }> }>('/api/v1/team');
   const [error, setError] = useState<ApiError | null>(null);
   const [editingContact, setEditingContact] = useState(false);
+  const writable = canWrite(me);
   const run = async (fn: () => Promise<unknown>) => {
     setError(null);
     try {
@@ -73,9 +78,7 @@ export default function LeadPage() {
         const req = l.requirements as Record<string, string | number | null>;
         return (
           <>
-            <h1>
-              {l.name} <SyncBadge state={l.syncState} />
-            </h1>
+            <h1>{l.name}</h1>
             {d.contact?.instagramUsername && (
               <p>
                 Instagram: <b>@{d.contact.instagramUsername}</b> <InstagramLink username={d.contact.instagramUsername} withHandle={false} />
@@ -83,75 +86,67 @@ export default function LeadPage() {
               </p>
             )}
             <p className="muted">
-              Bosqich: <b>{STAGE_LABELS[l.stage]}</b>
-              {l.pendingChange && (
-                <>
-                  {' '}
-                  → <Badge tone="info">Sinxronlanmoqda: {l.pendingChange.stage ? STAGE_LABELS[l.pendingChange.stage] : `mas’ul ${userName(l.pendingChange.ownerId ?? null)}`}</Badge>
-                </>
-              )}{' '}
-              · Mas’ul: {userName(l.ownerId)} · Manba: {SOURCE_LABELS[l.firstSource]} · amoCRM: {l.amoLeadId ?? 'yaratilmagan'} · Javob muddati: {fmtDateTime(l.firstResponseDueAt)}
+              Этап: <b>{STAGE_LABELS[l.stage]}</b> · Ответственный: {userName(l.ownerId)} · Источник: {SOURCE_LABELS[l.firstSource] ?? l.firstSource} · Срок первого ответа: {fmtDateTime(l.firstResponseDueAt)}
             </p>
-            {l.slaBreachedAt && !l.firstHumanActionAt && <div className="state error">SLA buzildi: birinchi inson javobi {fmtDateTime(l.firstResponseDueAt)} gacha qayd etilmadi.</div>}
+            {l.slaBreachedAt && !l.firstHumanActionAt && <div className="state error">Срок ответа нарушен: первый ответ сотрудника не зафиксирован до {fmtDateTime(l.firstResponseDueAt)}.</div>}
             {l.anomaly && (
               <div className="state stale">
-                Anomaliya: amoCRM’da «{STAGE_LABELS[l.anomaly.stage]}» bosqichi uchun ma’lumot yetishmaydi — {l.anomaly.missing.join(', ')}. Tuzatish vazifasi yaratilgan.
-              </div>
-            )}
-            {d.pendingOperations.length > 0 && (
-              <div className="state">
-                amoCRM bilan sinxronlash kutilmoqda{d.pendingOperations.some((o) => o.lastError) ? `: ${d.pendingOperations.find((o) => o.lastError)?.lastError}` : ''}
+                Аномалия: для этапа «{STAGE_LABELS[l.anomaly.stage]}» не хватает данных — {l.anomaly.missing.join(', ')}. Создана задача на исправление.
               </div>
             )}
             <FormError error={error} />
             <div className="split">
               <div>
-                <RequirementsForm lead={l} req={req} onSave={(body) => run(() => api(`/api/v1/leads/${id}`, { method: 'PATCH', body: { version: l.version, ...body } }))} />
+                <RequirementsForm lead={l} req={req} readOnly={!writable} onSave={(body) => run(() => api(`/api/v1/leads/${id}`, { method: 'PATCH', body: { version: l.version, ...body } }))} />
                 <OffersSection
                   offers={d.offers}
+                  readOnly={!writable}
                   onCreate={(body) => run(() => api(`/api/v1/leads/${id}/offers`, { method: 'POST', body, idempotencyKey: newKey() }))}
                   onSent={(oid) => run(() => api(`/api/v1/offers/${oid}/sent`, { method: 'POST', body: { channel: 'instagram_direct' } }))}
                   onAccept={(oid) => run(() => api(`/api/v1/offers/${oid}/accept`, { method: 'POST' }))}
                 />
                 <Attachments ownerType="lead" ownerId={id} />
-                <Section title="Tarix">
+                <Section title="История">
                   <ul>
                     {d.events.map((e) => (
                       <li key={e.id}>
-                        {fmtDateTime(e.effectiveAt)} — {e.kind}
+                        {fmtDateTime(e.effectiveAt)} — {EVENT_LABELS[e.kind] ?? e.kind}
                         {e.newStage ? `: ${e.oldStage ? STAGE_LABELS[e.oldStage] : '∅'} → ${STAGE_LABELS[e.newStage]}` : ''}
-                        {e.newOwnerId ? ` · mas’ul: ${userName(e.oldOwnerId)} → ${userName(e.newOwnerId)}` : ''} <span className="muted">({e.origin}{e.reason ? `, ${e.reason}` : ''})</span>
+                        {e.newOwnerId ? ` · ответственный: ${userName(e.oldOwnerId)} → ${userName(e.newOwnerId)}` : ''}
+                        {e.reason ? <span className="muted"> ({e.reason})</span> : null}
                       </li>
                     ))}
                   </ul>
                 </Section>
               </div>
               <div>
-                <Section title="Bosqichni o‘zgartirish">
-                  <StageChanger current={l.stage} disabled={!!l.pendingChange} onChange={(stage) => run(() => api(`/api/v1/leads/${id}/stage`, { method: 'PATCH', body: { version: l.version, stage } }))} />
-                  {canDo(me, 'leads.reopen') && (l.stage === 'WON' || l.stage === 'LOST') && (
-                    <button
-                      className="btn secondary"
-                      type="button"
-                      onClick={() => {
-                        const reason = window.prompt('Qayta ochish sababi');
-                        if (reason) void run(() => api(`/api/v1/leads/${id}/reopen`, { method: 'POST', body: { reason } }));
-                      }}
-                    >
-                      Qayta ochish
-                    </button>
-                  )}
-                </Section>
+                {writable && (
+                  <Section title="Изменить этап">
+                    <StageChanger current={l.stage} onChange={(stage) => run(() => api(`/api/v1/leads/${id}/stage`, { method: 'PATCH', body: { version: l.version, stage } }))} />
+                    {canDo(me, 'leads.reopen') && (l.stage === 'WON' || l.stage === 'LOST') && (
+                      <button
+                        className="btn secondary"
+                        type="button"
+                        onClick={() => {
+                          const reason = window.prompt('Причина повторного открытия');
+                          if (reason) void run(() => api(`/api/v1/leads/${id}/reopen`, { method: 'POST', body: { reason } }));
+                        }}
+                      >
+                        Открыть заново
+                      </button>
+                    )}
+                  </Section>
+                )}
                 {canDo(me, 'leads.reassign') && (
-                  <Section title="Mas’ulni o‘zgartirish">
+                  <Section title="Сменить ответственного">
                     <select
-                      aria-label="Yangi mas’ul"
+                      aria-label="Новый ответственный"
                       defaultValue=""
                       onChange={(e) => {
-                        if (e.target.value) void run(() => api(`/api/v1/leads/${id}/assignee`, { method: 'PATCH', body: { userId: e.target.value, reason: 'Rahbar qarori' } }));
+                        if (e.target.value) void run(() => api(`/api/v1/leads/${id}/assignee`, { method: 'PATCH', body: { userId: e.target.value, reason: 'Решение администратора' } }));
                       }}
                     >
-                      <option value="">Tanlang…</option>
+                      <option value="">Выберите…</option>
                       {team.data?.items.map((u) => (
                         <option key={u.id} value={u.id}>
                           {u.fullName}
@@ -160,8 +155,8 @@ export default function LeadPage() {
                     </select>
                   </Section>
                 )}
-                <TourOperatorPicker current={d.tourOperator} ownedBy={d.operatorOwnedByOrder} onSave={(tourOperatorId) => run(() => api(`/api/v1/leads/${id}`, { method: 'PATCH', body: { version: l.version, tourOperatorId } }))} />
-                <Section title="Mijoz">
+                <TourOperatorPicker current={d.tourOperator} ownedBy={d.operatorOwnedByOrder} readOnly={!writable} onSave={(tourOperatorId) => run(() => api(`/api/v1/leads/${id}`, { method: 'PATCH', body: { version: l.version, tourOperatorId } }))} />
+                <Section title="Клиент">
                   {d.contact && editingContact ? (
                     <ContactEditForm
                       leadId={l.id}
@@ -175,7 +170,7 @@ export default function LeadPage() {
                   ) : d.contact ? (
                     <>
                       <div>{d.contact.fullName && d.contact.fullName !== 'Instagram mijoz' ? d.contact.fullName : d.contact.instagramUsername ? `@${d.contact.instagramUsername}` : d.contact.fullName ?? '—'}</div>
-                      <div className="muted">{d.contact.primaryPhone ?? 'Telefon yo‘q'}</div>
+                      <div className="muted">{d.contact.primaryPhone ?? 'Телефон не указан'}</div>
                       {d.contact.telegramUsername && (
                         <div className="muted">
                           Telegram:{' '}
@@ -184,29 +179,31 @@ export default function LeadPage() {
                           </a>
                         </div>
                       )}
-                      {l.note && <div className="muted">Izoh: {l.note}</div>}
-                      {(me.role === 'ADMIN' || me.role === 'HEAD' || l.ownerId === me.id) && (
+                      {l.note && <div className="muted">Заметка: {l.note}</div>}
+                      {writable && (me.role === 'ADMIN' || l.ownerId === me.id) && (
                         <button className="btn secondary" type="button" onClick={() => setEditingContact(true)}>
-                          Tahrirlash
+                          Редактировать
                         </button>
                       )}
-                      <Link href={`/contacts/${d.contact.id}`}>Mijoz kartasi va yozishmalar</Link>
+                      <Link href={`/contacts/${d.contact.id}`}>Карточка клиента и переписка</Link>
                     </>
                   ) : (
                     '—'
                   )}
                 </Section>
-                <Section title="Buyurtma">
+                <Section title="Заказ">
                   {d.orders.length ? (
                     d.orders.map((o) => (
                       <div key={o.id}>
-                        <Link href={`/orders/${o.id}`}>{o.orderNo}</Link> <Badge>{o.fulfillmentState}</Badge>
+                        <Link href={`/orders/${o.id}`}>{o.orderNo}</Link> <Badge>{FULFILLMENT_LABELS[o.fulfillmentState] ?? o.fulfillmentState}</Badge>
                       </div>
                     ))
-                  ) : (
+                  ) : writable ? (
                     <button className="btn" type="button" onClick={() => run(async () => router.push(`/orders/${(await api<{ id: string }>('/api/v1/orders', { method: 'POST', body: { leadId: id } })).id}`))}>
-                      Buyurtma yaratish
+                      Создать заказ
                     </button>
+                  ) : (
+                    <span className="muted">Заказа пока нет</span>
                   )}
                 </Section>
               </div>
@@ -218,39 +215,39 @@ export default function LeadPage() {
   );
 }
 
-/** Turoperator (xizmat yetkazib beruvchi). Reklama manbasi emas: u yuqoridagi «Manba» maydonida. */
-function TourOperatorPicker({ current, ownedBy, onSave }: { current: LeadDetail['tourOperator']; ownedBy: LeadDetail['operatorOwnedByOrder']; onSave: (id: string | null) => void }) {
+/** Туроператор (поставщик услуги). Это не рекламный источник: источник указан выше в поле «Источник». */
+function TourOperatorPicker({ current, ownedBy, readOnly, onSave }: { current: LeadDetail['tourOperator']; ownedBy: LeadDetail['operatorOwnedByOrder']; readOnly: boolean; onSave: (id: string | null) => void }) {
   const list = useApi<{ items: Array<{ id: string; name: string; status: string }> }>('/api/v1/suppliers?status=active&kind=tour_operator');
   const options = list.data?.items ?? [];
   const all = current && !options.some((o) => o.id === current.id) ? [...options, current] : options;
   return (
-    <Section title="Turoperator">
-      <Field label="Yetkazib beruvchi turoperator" hint="Mijoz qayerdan kelgani («Manba») bilan aralashtirmang">
-        <select value={current?.id ?? ''} onChange={(e) => onSave(e.target.value || null)} aria-label="Turoperator" disabled={!!ownedBy}>
-          <option value="">Tanlanmagan</option>
+    <Section title="Туроператор">
+      <Field label="Туроператор-поставщик" hint="Не путайте с источником обращения клиента">
+        <select value={current?.id ?? ''} onChange={(e) => onSave(e.target.value || null)} aria-label="Туроператор" disabled={!!ownedBy || readOnly}>
+          <option value="">Не выбран</option>
           {all.map((o) => (
             <option key={o.id} value={o.id}>
               {o.name}
-              {o.status === 'archived' ? ' (arxiv)' : ''}
+              {o.status === 'archived' ? ' (архив)' : ''}
             </option>
           ))}
         </select>
       </Field>
       {ownedBy && (
         <p className="hint">
-          Buyurtma <Link href={`/orders/${ownedBy.id}`}>{ownedBy.orderNo}</Link> mavjud: turoperator buyurtmaning tarixiy bog‘lanishi. Uni buyurtma kartasida (sabab va audit bilan) o‘zgartiring — eski sotuvlar statistikasi lid o‘zgarishidan ta’sirlanmaydi.
+          Есть заказ <Link href={`/orders/${ownedBy.id}`}>{ownedBy.orderNo}</Link>: туроператор — историческая связь заказа. Меняйте его в карточке заказа (с причиной и записью в журнале); статистика прошлых продаж от изменений лида не зависит.
         </p>
       )}
     </Section>
   );
 }
 
-function StageChanger({ current, disabled, onChange }: { current: string; disabled: boolean; onChange: (s: string) => void }) {
+function StageChanger({ current, onChange }: { current: string; onChange: (s: string) => void }) {
   const [stage, setStage] = useState('');
   return (
     <div className="row">
-      <select aria-label="Yangi bosqich" value={stage} onChange={(e) => setStage(e.target.value)} disabled={disabled}>
-        <option value="">Tanlang…</option>
+      <select aria-label="Новый этап" value={stage} onChange={(e) => setStage(e.target.value)}>
+        <option value="">Выберите…</option>
         {Object.entries(STAGE_LABELS)
           .filter(([k]) => k !== current)
           .map(([k, v]) => (
@@ -259,15 +256,14 @@ function StageChanger({ current, disabled, onChange }: { current: string; disabl
             </option>
           ))}
       </select>
-      <button className="btn" type="button" disabled={!stage || disabled} onClick={() => onChange(stage)}>
-        amoCRM’ga yuborish
+      <button className="btn" type="button" disabled={!stage} onClick={() => onChange(stage)}>
+        Применить
       </button>
-      {disabled && <span className="hint">Oldingi o‘zgarish sinxronlanmoqda</span>}
     </div>
   );
 }
 
-function RequirementsForm({ lead, req, onSave }: { lead: LeadDetail['lead']; req: Record<string, string | number | null>; onSave: (body: Record<string, unknown>) => void }) {
+function RequirementsForm({ lead, req, readOnly, onSave }: { lead: LeadDetail['lead']; req: Record<string, string | number | null>; readOnly: boolean; onSave: (body: Record<string, unknown>) => void }) {
   const [f, setF] = useState({
     serviceType: lead.serviceType ?? '',
     origin: String(req.origin ?? ''),
@@ -291,7 +287,7 @@ function RequirementsForm({ lead, req, onSave }: { lead: LeadDetail['lead']; req
   const num = (v: string) => (v === '' ? null : Number(v));
   const str = (v: string) => (v === '' ? null : v);
   return (
-    <Section title="Talablar va lokal maydonlar">
+    <Section title="Пожелания клиента и рабочие поля">
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -319,138 +315,145 @@ function RequirementsForm({ lead, req, onSave }: { lead: LeadDetail['lead']; req
           });
         }}
       >
-        <div className="row">
-          <Field label="Xizmat turi">
-            <select value={f.serviceType} onChange={set('serviceType')}>
-              <option value="">—</option>
-              <option value="avia">Avia</option>
-              <option value="tour_package">Tur paket</option>
-              <option value="hotel">Mehmonxona</option>
-              <option value="visa">Viza</option>
-              <option value="other">Boshqa</option>
-            </select>
-          </Field>
-          <Field label="Qayerdan">
-            <input value={f.origin} onChange={set('origin')} />
-          </Field>
-          <Field label="Qayerga">
-            <input value={f.destination} onChange={set('destination')} />
-          </Field>
-        </div>
-        <div className="row">
-          <Field label="Ketish (dan)">
-            <IsoDateField value={f.dateFrom} onValue={(v) => set('dateFrom')({ target: { value: v } } as never)} />
-          </Field>
-          <Field label="Qaytish (gacha)">
-            <IsoDateField value={f.dateTo} onValue={(v) => set('dateTo')({ target: { value: v } } as never)} />
-          </Field>
-          <Field label="Katta">
-            <input type="number" min={0} value={f.adults} onChange={set('adults')} />
-          </Field>
-          <Field label="Bola">
-            <input type="number" min={0} value={f.children} onChange={set('children')} />
-          </Field>
-          <Field label="Chaqaloq">
-            <input type="number" min={0} value={f.infants} onChange={set('infants')} />
-          </Field>
-        </div>
-        <div className="row">
-          <Field label="Budjet holati">
-            <select value={f.budgetState} onChange={set('budgetState')}>
-              <option value="">—</option>
-              <option value="known">Ma’lum</option>
-              <option value="undetermined">Aniqlanmagan</option>
-            </select>
-          </Field>
-          <Field label="Budjet">
-            <input value={f.budgetAmount} onChange={set('budgetAmount')} inputMode="decimal" />
-          </Field>
-          <Field label="Valyuta">
-            <select value={f.budgetCurrency} onChange={set('budgetCurrency')}>
-              <option>USD</option>
-              <option>UZS</option>
-              <option>EUR</option>
-            </select>
-          </Field>
-        </div>
-        <div className="row">
-          <Field label="Aloqa natijasi">
-            <input value={f.contactOutcome} onChange={set('contactOutcome')} />
-          </Field>
-          <Field label="Taklif muddati">
-            <LocalDateTimeField value={f.offerPrepDueAt} onValue={(v) => set('offerPrepDueAt')({ target: { value: v } } as never)} />
-          </Field>
-          <Field label="To‘lov muddati">
-            <IsoDateField value={f.paymentDueAt} onValue={(v) => set('paymentDueAt')({ target: { value: v } } as never)} />
-          </Field>
-        </div>
-        <div className="row">
-          <Field label="Qayta aloqa vaqti">
-            <LocalDateTimeField value={f.nextContactAt} onValue={(v) => set('nextContactAt')({ target: { value: v } } as never)} />
-          </Field>
-          <Field label="Qayta aloqa izohi">
-            <input value={f.followUpNote} onChange={set('followUpNote')} />
-          </Field>
-          <Field label="Bekor qilish sababi kodi">
-            <input value={f.lostReasonCode} onChange={set('lostReasonCode')} />
-          </Field>
-        </div>
-        <button className="btn" type="submit">
-          Saqlash
-        </button>
+        <fieldset disabled={readOnly} style={{ border: 0, padding: 0, margin: 0 }}>
+          <div className="row">
+            <Field label="Тип услуги">
+              <select value={f.serviceType} onChange={set('serviceType')}>
+                <option value="">—</option>
+                <option value="avia">Авиабилеты</option>
+                <option value="tour_package">Турпакет</option>
+                <option value="hotel">Отель</option>
+                <option value="transfer">Трансфер</option>
+                <option value="visa">Виза</option>
+                <option value="other">Другое</option>
+              </select>
+            </Field>
+            <Field label="Откуда">
+              <input value={f.origin} onChange={set('origin')} />
+            </Field>
+            <Field label="Куда">
+              <input value={f.destination} onChange={set('destination')} />
+            </Field>
+          </div>
+          <div className="row">
+            <Field label="Вылет (с)">
+              <IsoDateField value={f.dateFrom} onValue={(v) => set('dateFrom')({ target: { value: v } } as never)} />
+            </Field>
+            <Field label="Возвращение (по)">
+              <IsoDateField value={f.dateTo} onValue={(v) => set('dateTo')({ target: { value: v } } as never)} />
+            </Field>
+            <Field label="Взрослые">
+              <input type="number" min={0} value={f.adults} onChange={set('adults')} />
+            </Field>
+            <Field label="Дети">
+              <input type="number" min={0} value={f.children} onChange={set('children')} />
+            </Field>
+            <Field label="Младенцы">
+              <input type="number" min={0} value={f.infants} onChange={set('infants')} />
+            </Field>
+          </div>
+          <div className="row">
+            <Field label="Бюджет: статус">
+              <select value={f.budgetState} onChange={set('budgetState')}>
+                <option value="">—</option>
+                <option value="known">Известен</option>
+                <option value="undetermined">Не определён</option>
+              </select>
+            </Field>
+            <Field label="Бюджет">
+              <input value={f.budgetAmount} onChange={set('budgetAmount')} inputMode="decimal" />
+            </Field>
+            <Field label="Валюта">
+              <select value={f.budgetCurrency} onChange={set('budgetCurrency')}>
+                <option>USD</option>
+                <option>UZS</option>
+                <option>EUR</option>
+              </select>
+            </Field>
+          </div>
+          <div className="row">
+            <Field label="Итог контакта">
+              <input value={f.contactOutcome} onChange={set('contactOutcome')} />
+            </Field>
+            <Field label="Срок подготовки предложения">
+              <LocalDateTimeField value={f.offerPrepDueAt} onValue={(v) => set('offerPrepDueAt')({ target: { value: v } } as never)} />
+            </Field>
+            <Field label="Срок оплаты">
+              <IsoDateField value={f.paymentDueAt} onValue={(v) => set('paymentDueAt')({ target: { value: v } } as never)} />
+            </Field>
+          </div>
+          <div className="row">
+            <Field label="Время повторного контакта">
+              <LocalDateTimeField value={f.nextContactAt} onValue={(v) => set('nextContactAt')({ target: { value: v } } as never)} />
+            </Field>
+            <Field label="Заметка к повторному контакту">
+              <input value={f.followUpNote} onChange={set('followUpNote')} />
+            </Field>
+            <Field label="Причина отмены">
+              <input value={f.lostReasonCode} onChange={set('lostReasonCode')} />
+            </Field>
+          </div>
+          {!readOnly && (
+            <button className="btn" type="submit">
+              Сохранить
+            </button>
+          )}
+        </fieldset>
       </form>
     </Section>
   );
 }
 
-function OffersSection({ offers, onCreate, onSent, onAccept }: { offers: LeadDetail['offers']; onCreate: (b: Record<string, unknown>) => void; onSent: (id: string) => void; onAccept: (id: string) => void }) {
+function OffersSection({ offers, readOnly, onCreate, onSent, onAccept }: { offers: LeadDetail['offers']; readOnly: boolean; onCreate: (b: Record<string, unknown>) => void; onSent: (id: string) => void; onAccept: (id: string) => void }) {
   const [content, setContent] = useState('');
   const [amount, setAmount] = useState('');
   const [currency, setCurrency] = useState('USD');
   return (
-    <Section title="Takliflar (versiyalar o‘zgarmaydi)">
+    <Section title="Предложения (версии не изменяются)">
       {offers.map((o) => (
         <div key={o.id} className="card">
-          <b>v{o.version}</b> — {o.amount} {o.currency} {o.sentAt ? <Badge tone="info">Yuborilgan {fmtDateTime(o.sentAt)}</Badge> : <Badge>Qoralama</Badge>} {o.acceptedAt && <Badge tone="ok">Tasdiqlangan</Badge>}
+          <b>v{o.version}</b> — {o.amount} {o.currency} {o.sentAt ? <Badge tone="info">Отправлено {fmtDateTime(o.sentAt)}</Badge> : <Badge>Черновик</Badge>} {o.acceptedAt && <Badge tone="ok">Принято клиентом</Badge>}
           <p>{o.content}</p>
-          {!o.sentAt && (
+          {!readOnly && !o.sentAt && (
             <button className="btn small" type="button" onClick={() => onSent(o.id)}>
-              Yuborildi deb belgilash
+              Отметить как отправленное
             </button>
           )}
-          {o.sentAt && !o.acceptedAt && (
+          {!readOnly && o.sentAt && !o.acceptedAt && (
             <button className="btn small" type="button" onClick={() => onAccept(o.id)}>
-              Mijoz tasdiqladi
+              Клиент подтвердил
             </button>
           )}
         </div>
       ))}
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          onCreate({ content, amount, currency });
-          setContent('');
-        }}
-      >
-        <Field label="Yangi versiya matni">
-          <textarea value={content} onChange={(e) => setContent(e.target.value)} required />
-        </Field>
-        <div className="row">
-          <Field label="Summa">
-            <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" required pattern="\d+(\.\d{1,2})?" />
+      {!readOnly && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            onCreate({ content, amount, currency });
+            setContent('');
+          }}
+        >
+          <Field label="Текст новой версии">
+            <textarea value={content} onChange={(e) => setContent(e.target.value)} required />
           </Field>
-          <Field label="Valyuta">
-            <select value={currency} onChange={(e) => setCurrency(e.target.value)}>
-              <option>USD</option>
-              <option>UZS</option>
-              <option>EUR</option>
-            </select>
-          </Field>
-          <button className="btn" type="submit">
-            Taklif versiyasini yaratish
-          </button>
-        </div>
-      </form>
+          <div className="row">
+            <Field label="Сумма">
+              <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" required pattern="\d+(\.\d{1,2})?" />
+            </Field>
+            <Field label="Валюта">
+              <select value={currency} onChange={(e) => setCurrency(e.target.value)}>
+                <option>USD</option>
+                <option>UZS</option>
+                <option>EUR</option>
+              </select>
+            </Field>
+            <button className="btn" type="submit">
+              Создать версию предложения
+            </button>
+          </div>
+        </form>
+      )}
     </Section>
   );
 }

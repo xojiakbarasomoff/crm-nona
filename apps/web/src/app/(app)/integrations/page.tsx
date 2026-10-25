@@ -2,12 +2,11 @@
 
 import { useState } from 'react';
 import { api, fmtDateTime, useApi, type ApiError } from '../../../lib/api';
-import { Async, Badge, Field, FormError, Section } from '../../../components/ui';
+import { Async, Badge, FormError, Section } from '../../../components/ui';
 import { canDo, useMe } from '../../../components/shell';
 
 interface Health {
   appMode: string;
-  directChannelMode: string;
   adapters: Array<{ name: string; kind: string }>;
   connections: Array<{ id: string; provider: string; mode: string; accountId: string; accountDomain: string | null; health: string; healthReason: string | null; lastWebhookAt: string | null; lastSyncAt: string | null; lastError: string | null; disconnectedAt: string | null }>;
   inbox: Record<string, number>;
@@ -19,7 +18,6 @@ interface Health {
   needsOperator: Array<{ id: string; action: string; state: string; lastError: string | null; updatedAt: string }>;
   metrics: Record<string, number>;
   overdueReminders: number;
-  checkpoints: Array<{ stream: string; lastRunAt: string | null; lastResult: unknown; cursor: unknown }>;
   retention: { status: string; confirmed?: boolean; rawWebhookDays?: number; technicalLogDays?: number; messageContentMonths?: number };
   slaBreachesOpen: number;
   attachmentsPendingScan: number;
@@ -27,15 +25,15 @@ interface Health {
   storage: { name: string; kind: string };
 }
 
-const PROVIDER_LABEL: Record<string, string> = { AMOCRM_REST: 'amoCRM', AMOCRM_CHATS: 'amoCRM chat', META_DIRECT: 'Instagram Direct', META_LEADS: 'Reklama formalari (Lead Ads)' };
-const HEALTH_LABEL: Record<string, string> = { ok: 'Ishlayapti', degraded: 'Cheklangan', paused: 'To‘xtatilgan', disconnected: 'Uzilgan', down: 'Ishlamayapti' };
-const REASON_LABEL: Record<string, string> = { awaiting_live_verification: 'javob sinovi kutilmoqda', webhook_subscription_unconfirmed: 'obuna tasdiqlanmagan', token_refresh_failed: 'token yangilanmadi' };
+const PROVIDER_LABEL: Record<string, string> = { META_DIRECT: 'Instagram Direct', META_LEADS: 'Рекламные формы (Lead Ads)' };
+const HEALTH_LABEL: Record<string, string> = { ok: 'Работает', degraded: 'Ограничено', paused: 'Приостановлено', disconnected: 'Отключено', down: 'Не работает' };
+const REASON_LABEL: Record<string, string> = { awaiting_live_verification: 'ожидается проверка ответа', webhook_subscription_unconfirmed: 'подписка не подтверждена', token_refresh_failed: 'токен не обновился', disconnected_by_admin: 'отключено администратором' };
+const OP_STATE_LABEL: Record<string, string> = { unknown: 'результат неизвестен', paused: 'приостановлено', dead: 'остановлено' };
 
 export default function IntegrationsPage() {
   const me = useMe();
   const state = useApi<Health>('/api/v1/integrations/health', { pollMs: 10_000 });
   const [error, setError] = useState<ApiError | null>(null);
-  const [domain, setDomain] = useState('');
   const ig = useApi<{ configured: boolean; oauthRedirectUri: string; webhookCallbackPath: string; verifyTokenConfigured: boolean; signatureSecretConfigured: boolean; graphVersion: string | null; connections: Array<{ id: string; accountId: string; username: string | null; state: string; health: string; healthReason: string | null; verifiedInboundAt: string | null; verifiedOutboundAt: string | null; expiresAt: string | null }> }>('/api/v1/integrations/instagram/status');
   const act = async (fn: () => Promise<unknown>) => {
     setError(null);
@@ -48,22 +46,21 @@ export default function IntegrationsPage() {
   };
   return (
     <>
-      <h1>Integratsiyalar</h1>
+      <h1>Интеграции</h1>
       <FormError error={error} />
       <Async state={state}>
         {(h) => (
           <>
-            <Section title="Ulanishlar">
+            <Section title="Подключения">
               <div className="table-wrap">
                 <table>
                   <thead>
                     <tr>
-                      <th>Ulanish</th>
-                      <th>Akkaunt</th>
-                      <th>Holat</th>
-                      <th>Oxirgi xabar</th>
-                      <th>Oxirgi sinxronlash</th>
-                      <th>Xato</th>
+                      <th>Подключение</th>
+                      <th>Аккаунт</th>
+                      <th>Состояние</th>
+                      <th>Последнее сообщение</th>
+                      <th>Ошибка</th>
                       <th />
                     </tr>
                   </thead>
@@ -71,12 +68,12 @@ export default function IntegrationsPage() {
                     {h.connections.map((c) => (
                       <tr key={c.id}>
                         <td>
-                          {PROVIDER_LABEL[c.provider] ?? c.provider} {c.mode === 'demo' && <Badge tone="warn">demo</Badge>}
+                          {PROVIDER_LABEL[c.provider] ?? c.provider} {c.mode === 'demo' && <Badge tone="warn">демо</Badge>}
                         </td>
                         <td>{c.accountDomain ?? c.accountId}</td>
                         <td>
                           {c.mode === 'demo' ? (
-                            <Badge tone="warn">Demo — haqiqiy ulanish yo‘q</Badge>
+                            <Badge tone="warn">Демо — реального подключения нет</Badge>
                           ) : (
                             <>
                               <Badge tone={c.health === 'ok' ? 'ok' : 'warn'}>{HEALTH_LABEL[c.health] ?? c.health}</Badge> <span className="muted">{c.healthReason ? REASON_LABEL[c.healthReason] ?? c.healthReason : ''}</span>
@@ -84,12 +81,11 @@ export default function IntegrationsPage() {
                           )}
                         </td>
                         <td>{fmtDateTime(c.lastWebhookAt)}</td>
-                        <td>{fmtDateTime(c.lastSyncAt)}</td>
                         <td className="muted">{c.lastError ?? '—'}</td>
                         <td>
                           {canDo(me, 'integrations.manage') && !c.disconnectedAt && (
-                            <button className="btn small danger" type="button" onClick={() => window.confirm('Ulanishni uzasizmi? Yangi API ishlari pauzaga olinadi.') && act(() => api(`/api/v1/integrations/${c.id}/disconnect`, { method: 'POST' }))}>
-                              Uzish
+                            <button className="btn small danger" type="button" onClick={() => window.confirm('Отключить подключение? Приём новых событий будет приостановлен.') && act(() => api(`/api/v1/integrations/${c.id}/disconnect`, { method: 'POST' }))}>
+                              Отключить
                             </button>
                           )}
                         </td>
@@ -98,41 +94,22 @@ export default function IntegrationsPage() {
                   </tbody>
                 </table>
               </div>
-              {canDo(me, 'integrations.manage') && (
-                <form
-                  className="row"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    void act(async () => {
-                      const r = await api<{ authorizeUrl: string }>('/api/v1/integrations/amocrm/oauth/start', { method: 'POST', body: { domain } });
-                      window.location.href = r.authorizeUrl;
-                    });
-                  }}
-                >
-                  <Field label="amoCRM domeni (allowlist)">
-                    <input value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="kompaniya.amocrm.ru" required />
-                  </Field>
-                  <button className="btn" type="submit">
-                    amoCRM’ni ulash / qayta ulash
-                  </button>
-                </form>
-              )}
             </Section>
             {canDo(me, 'integrations.manage') && (
               <Section title="Instagram Direct">
                 <p className="muted">
-                  Kompaniya akkaunti egasi Instagram oynasida ruxsat beradi; parol bu yerga kiritilmaydi. Professional (Business/Creator) akkaunt kerak.
+                  Владелец аккаунта компании даёт разрешение в окне Instagram; пароль сюда не вводится. Нужен профессиональный аккаунт (Business/Creator).
                 </p>
-                {ig.data && !ig.data.configured && <div className="state error">Instagram ulanishi sozlanmagan: administrator sozlamalarni kiritishi kerak.</div>}
+                {ig.data && !ig.data.configured && <div className="state error">Подключение Instagram не настроено: администратору нужно указать настройки.</div>}
                 {ig.data && (
                   <details className="help">
-                    <summary>Texnik sozlamalar</summary>
+                    <summary>Технические настройки</summary>
                     <ul className="hint">
                       <li>
                         OAuth redirect URI: <code>{ig.data.oauthRedirectUri}</code>
                       </li>
                       <li>
-                        Webhook manzili: <code>{typeof window === 'undefined' ? '' : window.location.origin}{ig.data.webhookCallbackPath}</code> · verify token: {ig.data.verifyTokenConfigured ? 'sozlangan' : 'YO‘Q'} · imzo siri: {ig.data.signatureSecretConfigured ? 'sozlangan' : 'YO‘Q'}
+                        Адрес вебхука: <code>{typeof window === 'undefined' ? '' : window.location.origin}{ig.data.webhookCallbackPath}</code> · verify token: {ig.data.verifyTokenConfigured ? 'настроен' : 'НЕТ'} · секрет подписи: {ig.data.signatureSecretConfigured ? 'настроен' : 'НЕТ'}
                       </li>
                     </ul>
                   </details>
@@ -140,13 +117,13 @@ export default function IntegrationsPage() {
                 {ig.data?.connections.map((c) => (
                   <div key={c.id} className="state">
                     <b>@{c.username ?? c.accountId}</b>{' '}
-                    {c.state === 'ready' && <Badge tone="ok">Ulangan: kiruvchi va javob sinovdan o‘tgan</Badge>}
-                    {c.state === 'inbound_verified' && <Badge tone="warn">Kiruvchi xabarlar ulangan · javob yuborish ulanmagan</Badge>}
-                    {c.state === 'outbound_verified' && <Badge tone="warn">Javob yuborish sinalgan · kiruvchi sinov kutilmoqda</Badge>}
-                    {c.state === 'not_ready' && <Badge tone="warn">Ulangan, sinov kutilmoqda</Badge>}
-                    {c.state === 'problem' && <Badge tone="bad">Muammo: {c.healthReason}</Badge>}
-                    {c.state === 'disconnected' && <Badge>Uzilgan</Badge>}
-                    <div className="muted">Kiruvchi: {c.verifiedInboundAt ? fmtDateTime(c.verifiedInboundAt) : '—'} · Chiquvchi: {c.verifiedOutboundAt ? fmtDateTime(c.verifiedOutboundAt) : '—'} · Token muddati: {c.expiresAt ? fmtDateTime(c.expiresAt) : '—'}</div>
+                    {c.state === 'ready' && <Badge tone="ok">Подключено: входящие и ответы проверены</Badge>}
+                    {c.state === 'inbound_verified' && <Badge tone="warn">Входящие сообщения подключены · отправка ответов не подключена</Badge>}
+                    {c.state === 'outbound_verified' && <Badge tone="warn">Отправка ответов проверена · проверка входящих ожидается</Badge>}
+                    {c.state === 'not_ready' && <Badge tone="warn">Подключено, проверка ожидается</Badge>}
+                    {c.state === 'problem' && <Badge tone="bad">Проблема: {c.healthReason ? REASON_LABEL[c.healthReason] ?? c.healthReason : ''}</Badge>}
+                    {c.state === 'disconnected' && <Badge>Отключено</Badge>}
+                    <div className="muted">Входящие: {c.verifiedInboundAt ? fmtDateTime(c.verifiedInboundAt) : '—'} · Исходящие: {c.verifiedOutboundAt ? fmtDateTime(c.verifiedOutboundAt) : '—'} · Токен действует до: {c.expiresAt ? fmtDateTime(c.expiresAt) : '—'}</div>
                   </div>
                 ))}
                 <button
@@ -160,22 +137,22 @@ export default function IntegrationsPage() {
                     })
                   }
                 >
-                  Instagram akkauntni ulash / qayta ulash
+                  Подключить / переподключить аккаунт Instagram
                 </button>
               </Section>
             )}
-            <Section title="Xavfsizlik va saqlash">
+            <Section title="Безопасность и хранение">
               <p>
-                Fayl skaneri: <Badge tone={h.scanner.kind === 'clamav' ? 'ok' : 'warn'}>{h.scanner.name}</Badge> · Saqlash: {h.storage.name} · Skan kutayotgan fayllar: {h.attachmentsPendingScan} · Ochiq SLA buzilishlari: {h.slaBreachesOpen}
+                Проверка файлов: <Badge tone={h.scanner.kind === 'clamav' ? 'ok' : 'warn'}>{h.scanner.name}</Badge> · Хранилище: {h.storage.name} · Файлов ожидают проверки: {h.attachmentsPendingScan} · Открытых нарушений срока ответа: {h.slaBreachesOpen}
               </p>
               <p>
-                Retention:{' '}
+                Политика хранения:{' '}
                 {h.retention.status === 'active' ? (
                   <Badge tone="ok">
-                    Faol: webhook {h.retention.rawWebhookDays} kun, yozishma {h.retention.messageContentMonths} oy
+                    Действует: вебхуки {h.retention.rawWebhookDays} дн., переписка {h.retention.messageContentMonths} мес.
                   </Badge>
                 ) : (
-                  <Badge tone="warn">Tasdiqlanmagan — tozalash o‘chirilgan</Badge>
+                  <Badge tone="warn">Не утверждена — очистка выключена</Badge>
                 )}
               </p>
               {me.role === 'ADMIN' && h.retention.status !== 'active' && (
@@ -183,158 +160,99 @@ export default function IntegrationsPage() {
                   className="btn secondary"
                   type="button"
                   onClick={() =>
-                    window.confirm('Taklif etilgan muddatlarni (webhook 30 kun, texnik log 90 kun, yozishma 12 oy) kompaniya nomidan tasdiqlaysizmi?') &&
+                    window.confirm('Утвердить предложенные сроки (вебхуки 30 дней, технические журналы 90 дней, переписка 12 месяцев) от имени компании?') &&
                     act(() => api('/api/v1/privacy/retention/confirm', { method: 'POST', body: { rawWebhookDays: 30, technicalLogDays: 90, messageContentMonths: 12 } }))
                   }
                 >
-                  Retention siyosatini tasdiqlash
+                  Утвердить политику хранения
                 </button>
               )}
             </Section>
             {canDo(me, 'integrations.manage') && (
               <details className="admin-diag">
-                <summary>Administrator diagnostikasi</summary>
-            <Section title="Adapterlar">
-              <p>
-                Rejim: <b>{h.appMode}</b> · Direct kanali: <b>{h.directChannelMode}</b>
-              </p>
-              {h.adapters.map((a) => (
-                <Badge key={a.name} tone={a.kind === 'mock' ? 'warn' : a.kind === 'live' ? 'ok' : 'neutral'}>
-                  {a.name} ({a.kind === 'mock' ? 'DEMO' : a.kind})
-                </Badge>
-              ))}
-              {h.appMode === 'demo' && <p className="muted">Demo adapterlar real integratsiya ishlaganini isbotlamaydi. Live holat: docs/feasibility.md.</p>}
-            </Section>
-            <Section title="Navbatlar va monitoring">
-              <div className="grid">
-                <div className="kpi">
-                  <div className="label">Inbox</div>
-                  <div className="value">{JSON.stringify(h.inbox)}</div>
-                  <div className="muted">Eng eski kutayotgan: {h.oldestPendingInboxAgeSec} s</div>
-                </div>
-                <div className="kpi">
-                  <div className="label">Outbox</div>
-                  <div className="value">{JSON.stringify(h.outbox)}</div>
-                  <div className="muted">Eng eski kutayotgan: {h.oldestPendingOutboxAgeSec} s</div>
-                </div>
-                <div className="kpi">
-                  <div className="label">Kechikkan eslatmalar</div>
-                  <div className="value">{h.overdueReminders}</div>
-                </div>
-                {h.heartbeats.map((b) => (
-                  <div className="kpi" key={b.name}>
-                    <div className="label">Heartbeat: {b.name}</div>
-                    <div className="value">
-                      <Badge tone={b.ageSec < 90 ? 'ok' : 'bad'}>{b.ageSec} s oldin</Badge>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <p className="muted">
-                {Object.entries(h.metrics)
-                  .map(([k, v]) => `${k}=${v}`)
-                  .join(' · ')}
-              </p>
-            </Section>
-            <Section title="Operator ko‘rigi talab etiladi (unknown / paused / dead)">
-              {[...h.needsOperator, ...h.deadLetters.map((d) => ({ ...d, state: 'dead' }))].length === 0 ? (
-                <div className="state empty">Yo‘q</div>
-              ) : (
-                <table>
-                  <tbody>
-                    {[...h.needsOperator, ...h.deadLetters.map((d) => ({ ...d, state: 'dead' }))].map((o) => (
-                      <tr key={o.id}>
-                        <td>{o.action}</td>
-                        <td>
-                          <Badge tone="bad">{o.state}</Badge>
-                        </td>
-                        <td className="muted">{o.lastError}</td>
-                        <td>{fmtDateTime(o.updatedAt)}</td>
-                        <td>
-                          {canDo(me, 'integrations.replay') && (
-                            <button className="btn small" type="button" onClick={() => act(() => api(`/api/v1/integrations/replay/${o.id}`, { method: 'POST' }))}>
-                              Xavfsiz replay
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </Section>
-            <Section title="Sinxronlash va tarixni qayta olish">
-              {canDo(me, 'integrations.manage') && (
-                <div className="row">
-                  <button className="btn secondary" type="button" onClick={() => act(() => api('/api/v1/integrations/amocrm/import', { method: 'POST' }))}>
-                    amoCRM boshlang‘ich importi
-                  </button>
-                  <button className="btn secondary" type="button" onClick={() => act(() => api('/api/v1/integrations/lead-ads/backfill', { method: 'POST', body: {} }))}>
-                    Lead Ads tarixini qayta olish
-                  </button>
-                </div>
-              )}
-              <table>
-                <thead>
-                  <tr>
-                    <th>Oqim</th>
-                    <th>Oxirgi ishga tushish</th>
-                    <th>Natija</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {h.checkpoints.map((c) => (
-                    <tr key={c.stream}>
-                      <td>{c.stream}</td>
-                      <td>{fmtDateTime(c.lastRunAt)}</td>
-                      <td className="muted">
-                        <code>{JSON.stringify(c.lastResult ?? c.cursor).slice(0, 200)}</code>
-                      </td>
-                    </tr>
+                <summary>Диагностика администратора</summary>
+                <Section title="Адаптеры">
+                  <p>
+                    Режим: <b>{h.appMode}</b>
+                  </p>
+                  {h.adapters.map((a) => (
+                    <Badge key={a.name} tone={a.kind === 'mock' ? 'warn' : a.kind === 'live' ? 'ok' : 'neutral'}>
+                      {a.name} ({a.kind === 'mock' ? 'ДЕМО' : a.kind})
+                    </Badge>
                   ))}
-                </tbody>
-              </table>
-              <p className="muted">Lead Ads: saqlanish oynasidan oldingi davr bo‘shliq sifatida ko‘rsatiladi — barcha eski lidlarni qaytarish va’da qilinmaydi.</p>
-            </Section>
-            {h.appMode === 'demo' && canDo(me, 'integrations.manage') && <DemoTools onDone={() => state.reload()} />}
+                  {h.appMode === 'demo' && <p className="muted">Демо-адаптеры не доказывают, что реальная интеграция работает.</p>}
+                </Section>
+                <Section title="Очереди и мониторинг">
+                  <div className="grid">
+                    <div className="kpi">
+                      <div className="label">Входящие события</div>
+                      <div className="value">{JSON.stringify(h.inbox)}</div>
+                      <div className="muted">Самое старое ожидающее: {h.oldestPendingInboxAgeSec} с</div>
+                    </div>
+                    <div className="kpi">
+                      <div className="label">Исходящие операции</div>
+                      <div className="value">{JSON.stringify(h.outbox)}</div>
+                      <div className="muted">Самая старая ожидающая: {h.oldestPendingOutboxAgeSec} с</div>
+                    </div>
+                    <div className="kpi">
+                      <div className="label">Просроченные напоминания</div>
+                      <div className="value">{h.overdueReminders}</div>
+                    </div>
+                    {h.heartbeats.map((b) => (
+                      <div className="kpi" key={b.name}>
+                        <div className="label">Пульс: {b.name}</div>
+                        <div className="value">
+                          <Badge tone={b.ageSec < 90 ? 'ok' : 'bad'}>{b.ageSec} с назад</Badge>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="muted">
+                    {Object.entries(h.metrics)
+                      .map(([k, v]) => `${k}=${v}`)
+                      .join(' · ')}
+                  </p>
+                </Section>
+                <Section title="Требуют проверки оператором (неизвестно / приостановлено / остановлено)">
+                  {[...h.needsOperator, ...h.deadLetters.map((d) => ({ ...d, state: 'dead' }))].length === 0 ? (
+                    <div className="state empty">Нет</div>
+                  ) : (
+                    <table>
+                      <tbody>
+                        {[...h.needsOperator, ...h.deadLetters.map((d) => ({ ...d, state: 'dead' }))].map((o) => (
+                          <tr key={o.id}>
+                            <td>{o.action}</td>
+                            <td>
+                              <Badge tone="bad">{OP_STATE_LABEL[o.state] ?? o.state}</Badge>
+                            </td>
+                            <td className="muted">{o.lastError}</td>
+                            <td>{fmtDateTime(o.updatedAt)}</td>
+                            <td>
+                              {canDo(me, 'integrations.replay') && (
+                                <button className="btn small" type="button" onClick={() => act(() => api(`/api/v1/integrations/replay/${o.id}`, { method: 'POST' }))}>
+                                  Безопасный повтор
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </Section>
+                <Section title="Повторное получение истории">
+                  <div className="row">
+                    <button className="btn secondary" type="button" onClick={() => act(() => api('/api/v1/integrations/lead-ads/backfill', { method: 'POST', body: {} }))}>
+                      Повторно получить историю Lead Ads
+                    </button>
+                  </div>
+                  <p className="muted">Lead Ads: период до окна хранения показывается как пробел — возврат всех старых лидов не обещается.</p>
+                </Section>
               </details>
             )}
           </>
         )}
       </Async>
     </>
-  );
-}
-
-function DemoTools({ onDone }: { onDone: () => void }) {
-  const [error, setError] = useState<ApiError | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
-  const fire = async (path: string, body: unknown) => {
-    setError(null);
-    try {
-      const r = await api(path, { method: 'POST', body });
-      setMsg(JSON.stringify(r));
-      onDone();
-    } catch (e) {
-      setError(e as ApiError);
-    }
-  };
-  return (
-    <Section title="DEMO simulyatorlari (faqat demo rejimida)">
-      <p className="muted">Bu tugmalar haqiqiy webhook yo‘li orqali sun’iy hodisa yuboradi. Real Meta yoki amoCRM bilan bog‘lanmaydi.</p>
-      <div className="row">
-        <button className="btn secondary" type="button" onClick={() => fire('/api/v1/demo/lead-ads', { fullName: `Demo Mijoz ${Math.floor(Math.random() * 1000)}`, phone: `+99890${Math.floor(1000000 + Math.random() * 8999999)}`, destination: 'Dubay', platform: 'ig', adId: '120000000000001' })}>
-          Lead Ads formasi
-        </button>
-        <button className="btn secondary" type="button" onClick={() => fire('/api/v1/demo/direct', { scopedSenderId: `99${Date.now()}`, text: 'Salom, Istanbulga tur bormi?' })}>
-          Direct xabar
-        </button>
-        <button className="btn secondary" type="button" onClick={() => fire('/api/v1/demo/fail-next', { target: 'amo', failure: 'rate_limited' })}>
-          Keyingi amoCRM so‘rovi 429
-        </button>
-      </div>
-      <FormError error={error} />
-      {msg && <pre className="muted">{msg}</pre>}
-    </Section>
   );
 }

@@ -235,9 +235,9 @@ describe('dastlabki foyda va qaytarimdan keyingi foyda', () => {
 });
 
 describe('tannarx/foyda huquqi', () => {
-  it('rahbar va administratorda standart bor, menejerda yo‘q; menejerga shaxsiy beriladi', () => {
+  it('administratorda standart bor, menejer va foydalanuvchida yo‘q; menejerga shaxsiy beriladi', () => {
     expect(canWith({ role: 'ADMIN' }, 'finance.cost.view')).toBe(true);
-    expect(canWith({ role: 'HEAD' }, 'finance.cost.view')).toBe(true);
+    expect(canWith({ role: 'USER' }, 'finance.cost.view')).toBe(false);
     expect(canWith({ role: 'MANAGER' }, 'finance.cost.view')).toBe(false);
     expect(canWith({ role: 'MANAGER', extraCapabilities: ['finance.cost.view'] }, 'finance.cost.view')).toBe(true);
     expect(capabilitiesFor({ role: 'MANAGER', extraCapabilities: ['finance.cost.view'] })).toContain('finance.cost.view');

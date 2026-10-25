@@ -8,19 +8,15 @@ import {
   BuiltinTestScanner,
   ClamdScanner,
   GraphMetaLeadsClient,
-  LiveAmoRestClient,
   LocalPrivateStorage,
   newObjectKey,
   safeFileName,
   signDownload,
   sniffMime,
   verifyDownload,
-  type RedisRateLimiter,
 } from '@crm/integrations';
 
 const fx = (p: string) => readFileSync(join(__dirname, '..', 'fixtures', p), 'utf8');
-const noLimiter = { acquire: async () => undefined } as unknown as RedisRateLimiter;
-const tokens = { getAccessToken: async () => 'tok', refresh: async () => 'tok2' };
 
 function fakeFetch(routes: Array<{ match: RegExp; status?: number; body?: string }>, seen: string[]) {
   return (async (url: string) => {
@@ -30,46 +26,6 @@ function fakeFetch(routes: Array<{ match: RegExp; status?: number; body?: string
     return new Response(r.status === 204 ? null : (r.body ?? ''), { status: r.status ?? 200 });
   }) as never;
 }
-
-describe('amoCRM REST pagination contract (synthetic fixtures)', () => {
-  it('lists leads page by page with updated_at filter, parses createdAt and stops without _links.next', async () => {
-    const seen: string[] = [];
-    const client = new LiveAmoRestClient('example.amocrm.ru', tokens, noLimiter, 'k', 5, fakeFetch([{ match: /page=1&/, body: fx('amocrm/leads-page-1.json') }, { match: /page=2&/, body: fx('amocrm/leads-page-2.json') }], seen));
-    const since = new Date('2026-10-01T00:00:00Z');
-    const p1 = await client.listLeadsUpdatedSince(since, 1, 2);
-    const p2 = await client.listLeadsUpdatedSince(since, 2, 2);
-    expect(p1.hasMore).toBe(true);
-    expect(p2.hasMore).toBe(false);
-    expect(p1.items.map((l) => l.id)).toEqual(['50000101', '50000102']);
-    expect(p1.items[0]).toMatchObject({ contactIds: ['60000101'], createdAt: new Date(1761200000 * 1000), responsibleUserId: '9000003' });
-    expect(p1.items[1]?.customFields['900001']).toBe('op-123');
-    expect(seen[0]).toContain(`filter[updated_at][from]=${Math.floor(since.getTime() / 1000)}`);
-    expect(seen[0]).toContain('order[updated_at]=asc');
-  });
-
-  it('treats 204 No Content as an empty last page', async () => {
-    const client = new LiveAmoRestClient('example.amocrm.ru', tokens, noLimiter, 'k', 5, fakeFetch([{ match: /contacts/, status: 204 }], []));
-    expect(await client.listContactsUpdatedSince(new Date(0), 9, 250)).toEqual({ items: [], hasMore: false });
-  });
-
-  it('normalizes contacts with phones and emails', async () => {
-    const client = new LiveAmoRestClient('example.amocrm.ru', tokens, noLimiter, 'k', 5, fakeFetch([{ match: /contacts/, body: fx('amocrm/contacts-page-1.json') }], []));
-    const r = await client.listContactsUpdatedSince(new Date(0), 1, 250);
-    expect(r.items[0]).toMatchObject({ id: '60000101', phones: ['+998900000101'], emails: ['Test@Example.com'], responsibleUserId: '9000003' });
-  });
-
-  it('retries once with a refreshed token after 401', async () => {
-    let n = 0;
-    const fetchImpl = (async (_u: string, init?: RequestInit) => {
-      n++;
-      const auth = (init?.headers as Record<string, string>).Authorization;
-      return auth === 'Bearer tok' ? new Response('{}', { status: 401 }) : new Response('{"id":1,"subdomain":"x"}', { status: 200 });
-    }) as never;
-    const client = new LiveAmoRestClient('example.amocrm.ru', tokens, noLimiter, 'k', 5, fetchImpl);
-    expect(await client.getAccount()).toEqual({ id: '1', subdomain: 'x' });
-    expect(n).toBe(2);
-  });
-});
 
 describe('Meta Lead Ads form history contract (synthetic fixtures)', () => {
   it('pages with the after cursor and a time_created filter; last page has no next', async () => {

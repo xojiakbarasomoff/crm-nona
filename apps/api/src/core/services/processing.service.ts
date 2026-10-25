@@ -1,19 +1,19 @@
 import type { IntegrationConnection, OutboxOperation, Prisma, WebhookInbox } from '@crm/database';
 import { decryptSecret } from '@crm/database';
-import { backoffDelayMs, decideRetry, formatMoney, singleCurrencySelling, type ErrorClass } from '@crm/domain';
-import { ProviderError, type AmoCrmSignal, type AmoRestClient, type ChatsOutgoingReply, type MetaEvent } from '@crm/integrations';
+import { backoffDelayMs, decideRetry, type ErrorClass } from '@crm/domain';
+import { ProviderError, type MetaEvent } from '@crm/integrations';
 import { audit } from '../audit';
-import { integrationActor, systemActor, type CoreDeps } from '../context';
-import { headRecipients, notify, publishEvent } from '../events';
+import { systemActor, type CoreDeps } from '../context';
+import { headRecipients, notify } from '../events';
 import { ConnectionPausedError, IntakeService, connectionToken } from './intake.service';
-import { LeadsService } from './leads.service';
-import { orderFinance } from './orders.service';
 import { markLiveVerified, SENDABLE_DEGRADED_REASONS } from './live-verification';
 
 type HandlerResult = { kind: 'done'; result?: Record<string, unknown> } | { kind: 'retry_later'; delayMs: number; reason: string };
 
-class DependencyPending extends Error {}
 const MAX_INBOX_ATTEMPTS = 8;
+
+/** Действия исходящей очереди, которые раньше отправлялись в amoCRM. Интеграция удалена: записи не удаляются, а закрываются без действия. */
+const LEGACY_AMO_ACTIONS = new Set(['lead.create', 'lead.stage', 'lead.reassign', 'task.create', 'task.complete', 'task.reassign', 'order.summary', 'chat.import', 'chat.status', 'amo.import']);
 
 /**
  * Inbox and outbox executors (TZ §19). Both claim rows with a lease so a crashed worker's rows are
@@ -21,10 +21,8 @@ const MAX_INBOX_ATTEMPTS = 8;
  */
 export class ProcessingService {
   private readonly intake: IntakeService;
-  private readonly leads: LeadsService;
   constructor(private readonly d: CoreDeps) {
     this.intake = new IntakeService(d);
-    this.leads = new LeadsService(d);
   }
 
   // ======================= Inbox =======================
@@ -83,35 +81,8 @@ export class ProcessingService {
           return 'ignored';
       }
     }
-    if (row.provider === 'amocrm_crm') return this.applyAmoSignal(row.connectionKey, payload as AmoCrmSignal);
-    if (row.provider === 'amocrm_chat') {
-      const reply = payload as ChatsOutgoingReply;
-      return this.intake.processChatReply({ ...reply, timestamp: new Date(reply.timestamp) }, row.connectionKey);
-    }
+    // Старые события amoCRM (если остались в очереди) закрываются без обработки.
     return 'ignored';
-  }
-
-  /** CRM webhooks are only signals: the lead is re-read from amoCRM and applied monotonically. */
-  async applyAmoSignal(routeToken: string, signal: AmoCrmSignal): Promise<string> {
-    const conn = await this.d.prisma.integrationConnection.findUnique({ where: { routeToken } });
-    if (!conn || conn.provider !== 'AMOCRM_REST') return 'ignored';
-    if (signal.accountId && signal.accountId !== conn.accountId) return 'ignored';
-    if (conn.disconnectedAt || conn.health === 'paused' || conn.health === 'disconnected') throw new ConnectionPausedError(conn.id);
-    if (signal.entity !== 'leads') return 'ignored';
-    const client = this.d.adapters.amoRest(conn);
-    const snap = await client.getLead(signal.id);
-    if (!snap) {
-      if (signal.action === 'delete') {
-        const lead = await this.d.prisma.lead.findFirst({ where: { companyId: conn.companyId, amoLeadId: signal.id } });
-        if (lead && !lead.deletedAt) {
-          await this.d.prisma.$transaction((tx) => this.leads.applyRemoteSnapshot(tx, conn.companyId, { id: signal.id, name: lead.name, pipelineId: '', statusId: '', responsibleUserId: null, price: null, updatedAt: this.d.clock.now(), createdAt: null, closedAt: null, contactIds: [], customFields: {}, deleted: true }, { origin: 'amocrm' }));
-        }
-      }
-      return 'processed';
-    }
-    const res = await this.d.prisma.$transaction((tx) => this.leads.applyRemoteSnapshot(tx, conn.companyId, snap, { origin: 'amocrm' }));
-    await this.d.prisma.integrationConnection.update({ where: { id: conn.id }, data: { lastSyncAt: this.d.clock.now() } });
-    return res.applied ? 'processed' : res.reason;
   }
 
   // ======================= Outbox =======================
@@ -162,7 +133,7 @@ export class ProcessingService {
   }
 
   private async handleOutboxError(op: OutboxOperation, err: unknown): Promise<string> {
-    const cls: ErrorClass = err instanceof ProviderError ? err.errorClass : err instanceof DependencyPending ? 'transient' : ((err as { errorClass?: ErrorClass }).errorClass ?? 'transient');
+    const cls: ErrorClass = err instanceof ProviderError ? err.errorClass : ((err as { errorClass?: ErrorClass }).errorClass ?? 'transient');
     const retryAfter = err instanceof ProviderError ? err.retryAfterMs : null;
     const decision = decideRetry(cls, op.attempts, { retryAfterMs: retryAfter, firstAttemptAt: op.firstAttemptAt ?? undefined, now: this.d.clock.now() });
     const message = (err as Error).message.slice(0, 500);
@@ -181,13 +152,13 @@ export class ProcessingService {
       case 'refresh_token':
         await this.finish(op, { state: 'paused', lastError: message, errorClass: cls });
         if (op.connectionId) await this.d.prisma.integrationConnection.update({ where: { id: op.connectionId }, data: { health: 'paused', healthReason: cls, lastError: message } });
-        await this.signalAdmins(op.companyId, 'integration_paused', `Integratsiya to‘xtatildi (${cls}): ${op.action}`, `paused:${op.id}`);
+        await this.signalAdmins(op.companyId, 'integration_paused', `Интеграция приостановлена (${cls}): ${op.action}`, `paused:${op.id}`);
         return 'paused';
       case 'dead_letter':
       default:
         await this.finish(op, { state: 'dead', lastError: message, errorClass: cls });
         await this.d.redis.incr('metrics:outbox_dead');
-        await this.signalAdmins(op.companyId, 'outbox_dead', `Operatsiya bajarilmadi va to‘xtatildi: ${op.action}`, `dead:${op.id}`);
+        await this.signalAdmins(op.companyId, 'outbox_dead', `Операция не выполнена и остановлена: ${op.action}`, `dead:${op.id}`);
         return 'dead';
     }
   }
@@ -198,10 +169,7 @@ export class ProcessingService {
     if (op.action === 'meta.send' && payload.messageId) {
       await this.d.prisma.message.update({ where: { id: payload.messageId }, data: { state: 'unknown', error: 'outcome_unknown' } });
     }
-    if (op.action === 'lead.create' && payload.leadId) {
-      await this.d.prisma.lead.update({ where: { id: payload.leadId }, data: { syncState: 'unknown' } });
-    }
-    await this.signalAdmins(op.companyId, 'outbox_unknown', `Natijasi noma’lum operatsiya: ${op.action}. Tekshirib, xavfsiz replay qiling.`, `unknown:${op.id}`);
+    await this.signalAdmins(op.companyId, 'outbox_unknown', `Результат операции неизвестен: ${op.action}. Проверьте и безопасно повторите.`, `unknown:${op.id}`);
   }
 
   private async signalAdmins(companyId: string, kind: string, title: string, key: string) {
@@ -212,48 +180,19 @@ export class ProcessingService {
   }
 
   private async connectionFor(op: OutboxOperation): Promise<IntegrationConnection | null | 'paused'> {
-    const provider = op.target === 'amocrm' ? 'AMOCRM_REST' : op.target === 'amocrm_chats' ? 'AMOCRM_CHATS' : op.target === 'meta' ? null : null;
-    if (!provider) return null;
-    const conn = await this.d.prisma.integrationConnection.findFirst({ where: { companyId: op.companyId, provider }, orderBy: { createdAt: 'asc' } });
-    if (!conn || conn.disconnectedAt || conn.health === 'paused' || conn.health === 'disconnected') return 'paused';
-    if (op.connectionId !== conn.id) await this.d.prisma.outboxOperation.update({ where: { id: op.id }, data: { connectionId: conn.id } });
-    return conn;
+    // Instagram-операции сами выбирают соединение (по беседе / обращению); общей проверки подключения нет.
+    void op;
+    return null;
   }
 
-  private amo(conn: IntegrationConnection | null): AmoRestClient {
-    if (!conn) throw new Error('amoCRM connection required');
-    return this.d.adapters.amoRest(conn);
-  }
-
-  private async runHandler(op: OutboxOperation, conn: IntegrationConnection | null): Promise<HandlerResult> {
+  private async runHandler(op: OutboxOperation, _conn: IntegrationConnection | null): Promise<HandlerResult> {
     const p = op.payload as Record<string, unknown>;
+    if (LEGACY_AMO_ACTIONS.has(op.action)) return { kind: 'done', result: { skipped: 'amocrm_removed' } };
     switch (op.action) {
-      case 'lead.create':
-        return this.handleLeadCreate(op, conn!, p.leadId as string);
-      case 'lead.stage':
-        return this.handleLeadStage(op, conn!, p.leadId as string, p.stage as string);
-      case 'lead.reassign':
-        return this.handleLeadReassign(op, conn!, p.leadId as string, p.toUserId as string);
-      case 'task.create':
-        return this.handleTaskCreate(op, conn!, p.crmTaskId as string);
-      case 'task.complete':
-        return this.handleTaskComplete(conn!, p.crmTaskId as string, (p.result as string) ?? 'Bajarildi');
-      case 'task.reassign':
-        return this.handleTaskReassign(conn!, p.crmTaskId as string, p.toUserId as string);
-      case 'order.summary':
-        return this.handleOrderSummary(op, conn!, p.orderId as string);
-      case 'chat.import':
-        return this.handleChatImport(conn, p.messageId as string);
-      case 'chat.status':
-        return this.handleChatStatus(conn, p.messageId as string, p.status as 'delivered' | 'read' | 'failed', p.error as string | undefined);
       case 'meta.enrich':
         return this.handleEnrich(p.inquiryId as string, p.adId as string, p.connectionId as string);
       case 'meta.send':
         return this.handleMetaSend(op, p.messageId as string, (p.tag as 'HUMAN_AGENT' | null) ?? null);
-      case 'amo.import': {
-        const { AmoSyncService } = await import('./amo-sync.service');
-        return { kind: 'done', result: await new AmoSyncService(this.d).importInitial(op.companyId) };
-      }
       case 'meta.backfill': {
         const { LeadAdsBackfillService } = await import('./lead-ads-backfill.service');
         const since = typeof p.since === 'string' ? new Date(p.since) : undefined;
@@ -262,278 +201,6 @@ export class ProcessingService {
       default:
         throw new ProviderError(`Unknown outbox action ${op.action}`, 'validation', null);
     }
-  }
-
-  // ---------- amoCRM ----------
-
-  private async bindCreatedLead(companyId: string, leadId: string, contactLocalId: string, amo: { leadId: string; contactId: string | null }, client: AmoRestClient, connectionId: string) {
-    const snap = await client.getLead(amo.leadId);
-    await this.d.prisma.$transaction(async (tx) => {
-      await tx.lead.update({ where: { id: leadId }, data: { amoLeadId: amo.leadId, syncState: 'synced', sourceUpdatedAt: snap?.updatedAt ?? null } });
-      if (amo.contactId) await tx.contact.updateMany({ where: { id: contactLocalId, amoContactId: null }, data: { amoContactId: amo.contactId, syncState: 'synced' } });
-      await tx.integrationMapping.createMany({
-        data: [
-          { companyId, connectionId, entityType: 'lead', localId: leadId, externalId: amo.leadId, lastSyncedAt: this.d.clock.now() },
-          ...(amo.contactId ? [{ companyId, connectionId, entityType: 'contact', localId: contactLocalId, externalId: amo.contactId, lastSyncedAt: this.d.clock.now() }] : []),
-        ],
-        skipDuplicates: true,
-      });
-      const lead = await tx.lead.findUniqueOrThrow({ where: { id: leadId } });
-      await this.leads.createCrmTask(tx, {
-        companyId,
-        key: `${leadId}:first_contact:created`,
-        entityId: leadId,
-        kind: 'first_contact',
-        text: `Birinchi aloqa: ${lead.name}`,
-        responsibleUserId: lead.ownerId,
-        dueAt: lead.firstResponseDueAt ?? new Date(this.d.clock.now().getTime() + 15 * 60_000),
-      });
-      await audit(tx, integrationActor(companyId, 'amocrm'), { entityType: 'lead', entityId: leadId, action: 'amo_linked', newValue: { amoLeadId: amo.leadId, amoContactId: amo.contactId } });
-    });
-    await publishEvent(this.d.redis, { companyId, entityType: 'lead', entityId: leadId, kind: 'synced' });
-  }
-
-  private async handleLeadCreate(op: OutboxOperation, conn: IntegrationConnection, leadId: string): Promise<HandlerResult> {
-    const lead = await this.d.prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
-    if (lead.amoLeadId) return { kind: 'done', result: { alreadyLinked: lead.amoLeadId } };
-    const client = this.amo(conn);
-    const contact = await this.d.prisma.contact.findUniqueOrThrow({ where: { id: lead.contactId } });
-    // Reconcile first on every retry: a previous attempt may have created the lead (AC29).
-    if (op.attempts > 1 || op.lastError) {
-      const found = await client.findLeadByOperationId(lead.id);
-      if (found) {
-        await this.bindCreatedLead(op.companyId, lead.id, contact.id, found, client, conn.id);
-        return { kind: 'done', result: { reconciled: true, amoLeadId: found.leadId } };
-      }
-    }
-    const status = await this.leads.statusForStage(this.d.prisma, op.companyId, lead.stage);
-    if (!status) throw new ProviderError('Pipeline status mapping missing: run amo-config', 'validation', null);
-    const owner = lead.ownerId ? await this.d.prisma.user.findUnique({ where: { id: lead.ownerId }, select: { amoUserId: true } }) : null;
-    const opField = await this.d.prisma.integrationMapping.findFirst({ where: { companyId: op.companyId, entityType: 'custom_field', localId: 'external_operation_id' } });
-    const identifiers = await this.d.prisma.contactIdentifier.findMany({ where: { contactId: contact.id, active: true } });
-    try {
-      const created = await client.createLeadWithContact({
-        name: lead.name,
-        pipelineId: status.pipelineId,
-        statusId: status.statusId,
-        responsibleUserId: owner?.amoUserId ?? null,
-        operationId: lead.id,
-        operationFieldId: opField?.externalId ?? null,
-        customFields: await this.sourceFields(op.companyId, lead),
-        contact: {
-          existingId: contact.amoContactId,
-          name: contact.fullName ?? (contact.instagramUsername ? `@${contact.instagramUsername}` : (identifiers.find((i) => i.displayUsername)?.displayUsername ?? 'Instagram mijoz')),
-          phone: contact.primaryPhone,
-          email: contact.primaryEmail,
-        },
-      });
-      await this.bindCreatedLead(op.companyId, lead.id, contact.id, created, client, conn.id);
-      return { kind: 'done', result: { amoLeadId: created.leadId } };
-    } catch (err) {
-      if (err instanceof ProviderError && err.errorClass === 'unknown_outcome') {
-        const found = await client.findLeadByOperationId(lead.id).catch(() => null);
-        if (found) {
-          await this.bindCreatedLead(op.companyId, lead.id, contact.id, found, client, conn.id);
-          return { kind: 'done', result: { reconciled: true, amoLeadId: found.leadId } };
-        }
-      }
-      throw err;
-    }
-  }
-
-  private async sourceFields(companyId: string, lead: { firstSource: string; firstInquiryId: string | null; id: string }) {
-    const maps = await this.d.prisma.integrationMapping.findMany({ where: { companyId, entityType: 'custom_field' } });
-    const field = (k: string) => maps.find((m) => m.localId === k)?.externalId;
-    const inquiry = lead.firstInquiryId ? await this.d.prisma.inquiry.findUnique({ where: { id: lead.firstInquiryId } }) : null;
-    const attribution = (inquiry?.attribution ?? {}) as Record<string, string | null>;
-    const out: Array<{ fieldId: string; value: string }> = [];
-    const push = (k: string, v: string | null | undefined) => {
-      const id = field(k);
-      if (id && v) out.push({ fieldId: id, value: v });
-    };
-    push('first_source', lead.firstSource);
-    push('source_created_at', inquiry?.sourceCreatedAt?.toISOString());
-    push('form_id', attribution.formId);
-    push('campaign_ref', attribution.campaignId);
-    push('ad_ref', attribution.adId);
-    push('travel_lead_url', `${this.d.config.appPublicUrl}/leads/${lead.id}`);
-    return out;
-  }
-
-  private async requireAmoLead(leadId: string) {
-    const lead = await this.d.prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
-    if (!lead.amoLeadId) throw new DependencyPending('amoCRM lead not created yet');
-    return lead;
-  }
-
-  private async confirmFromAmo(op: OutboxOperation, client: AmoRestClient, amoLeadId: string) {
-    const snap = await client.getLead(amoLeadId);
-    if (snap) await this.d.prisma.$transaction((tx) => this.leads.applyRemoteSnapshot(tx, op.companyId, snap, { origin: 'local_confirmed', operationKey: op.operationKey }));
-  }
-
-  private async handleLeadStage(op: OutboxOperation, conn: IntegrationConnection, leadId: string, stage: string): Promise<HandlerResult> {
-    let lead;
-    try {
-      lead = await this.requireAmoLead(leadId);
-    } catch (e) {
-      if (e instanceof DependencyPending) return { kind: 'retry_later', delayMs: 5_000, reason: 'waiting_for_amo_lead' };
-      throw e;
-    }
-    const client = this.amo(conn);
-    const status = await this.leads.statusForStage(this.d.prisma, op.companyId, stage as never);
-    if (!status) throw new ProviderError(`No amoCRM status mapped for ${stage}`, 'validation', null);
-    // Read before write: detect a conflicting manual change made in amoCRM meanwhile (TZ §5.2).
-    const current = await client.getLead(lead.amoLeadId!);
-    if (current && lead.sourceUpdatedAt && current.updatedAt > lead.sourceUpdatedAt) {
-      const remoteStage = await this.leads.stageForStatus(this.d.prisma, op.companyId, current.pipelineId, current.statusId);
-      if (remoteStage && remoteStage !== lead.stage && remoteStage !== stage) {
-        await this.d.prisma.$transaction(async (tx) => {
-          await this.leads.applyRemoteSnapshot(tx, op.companyId, current, { origin: 'amocrm' });
-          await tx.lead.update({ where: { id: lead.id }, data: { pendingChange: null as unknown as Prisma.InputJsonValue, syncState: 'conflict' } });
-          await this.leads.createCrmTask(tx, { companyId: op.companyId, key: `${lead.id}:sync_conflict:${op.id}`, entityId: lead.id, kind: 'sync_conflict', text: `amoCRM’da bosqich qo‘lda o‘zgartirilgan (${remoteStage}); web’dagi «${stage}» so‘rovi qo‘llanmadi. Tekshiring.`, responsibleUserId: lead.ownerId, dueAt: new Date(this.d.clock.now().getTime() + 3600_000) });
-        });
-        await this.d.redis.incr('metrics:sync_conflicts');
-        return { kind: 'done', result: { conflict: true, remoteStage } };
-      }
-    }
-    await client.updateLead(lead.amoLeadId!, { pipelineId: status.pipelineId, statusId: status.statusId });
-    await this.confirmFromAmo(op, client, lead.amoLeadId!);
-    return { kind: 'done' };
-  }
-
-  private async handleLeadReassign(op: OutboxOperation, conn: IntegrationConnection, leadId: string, toUserId: string): Promise<HandlerResult> {
-    let lead;
-    try {
-      lead = await this.requireAmoLead(leadId);
-    } catch (e) {
-      if (e instanceof DependencyPending) return { kind: 'retry_later', delayMs: 5_000, reason: 'waiting_for_amo_lead' };
-      throw e;
-    }
-    const user = await this.d.prisma.user.findUniqueOrThrow({ where: { id: toUserId } });
-    if (!user.amoUserId) throw new ProviderError('Target user has no amo_user_id mapping', 'validation', null);
-    const client = this.amo(conn);
-    await client.updateLead(lead.amoLeadId!, { responsibleUserId: user.amoUserId });
-    await this.confirmFromAmo(op, client, lead.amoLeadId!);
-    return { kind: 'done' };
-  }
-
-  private async amoEntityForTask(task: { entityType: string; entityId: string }): Promise<string | null> {
-    if (task.entityType === 'lead') return (await this.d.prisma.lead.findUnique({ where: { id: task.entityId } }))?.amoLeadId ?? null;
-    if (task.entityType === 'occurrence') {
-      const occ = await this.d.prisma.reminderOccurrence.findUnique({ where: { id: task.entityId } });
-      const order = occ?.orderId ? await this.d.prisma.order.findUnique({ where: { id: occ.orderId } }) : null;
-      return order ? ((await this.d.prisma.lead.findUnique({ where: { id: order.leadId } }))?.amoLeadId ?? null) : null;
-    }
-    return null;
-  }
-
-  private async handleTaskCreate(op: OutboxOperation, conn: IntegrationConnection, crmTaskId: string): Promise<HandlerResult> {
-    const task = await this.d.prisma.crmTask.findUniqueOrThrow({ where: { id: crmTaskId } });
-    if (task.amoTaskId || task.state === 'cancelled' || task.state === 'completed') return { kind: 'done', result: { skipped: task.state } };
-    const amoLeadId = await this.amoEntityForTask(task);
-    if (!amoLeadId) return { kind: 'retry_later', delayMs: 10_000, reason: 'waiting_for_amo_lead' };
-    const client = this.amo(conn);
-    if (op.attempts > 1 || op.lastError) {
-      const found = await client.findTaskByOperationKey('leads', amoLeadId, task.automationKey);
-      if (found) {
-        await this.d.prisma.crmTask.update({ where: { id: task.id }, data: { amoTaskId: found.taskId, state: 'open' } });
-        return { kind: 'done', result: { reconciled: true } };
-      }
-    }
-    const responsible = task.responsibleUserId ? await this.d.prisma.user.findUnique({ where: { id: task.responsibleUserId }, select: { amoUserId: true } }) : null;
-    try {
-      const { taskId } = await client.createTask({ entityType: 'leads', entityId: amoLeadId, text: task.text, completeTill: task.dueAt, responsibleUserId: responsible?.amoUserId ?? null, operationKey: task.automationKey });
-      await this.d.prisma.crmTask.update({ where: { id: task.id }, data: { amoTaskId: taskId, state: 'open' } });
-      if (task.entityType === 'occurrence') await this.d.prisma.notificationDelivery.updateMany({ where: { occurrenceId: task.entityId, channel: 'amocrm_task' }, data: { state: 'sent', externalTaskId: taskId, attempts: { increment: 1 } } });
-      return { kind: 'done', result: { amoTaskId: taskId } };
-    } catch (err) {
-      if (err instanceof ProviderError && err.errorClass === 'unknown_outcome') {
-        const found = await client.findTaskByOperationKey('leads', amoLeadId, task.automationKey).catch(() => null);
-        if (found) {
-          await this.d.prisma.crmTask.update({ where: { id: task.id }, data: { amoTaskId: found.taskId, state: 'open' } });
-          return { kind: 'done', result: { reconciled: true } };
-        }
-      }
-      throw err;
-    }
-  }
-
-  private async handleTaskComplete(conn: IntegrationConnection, crmTaskId: string, result: string): Promise<HandlerResult> {
-    const task = await this.d.prisma.crmTask.findUniqueOrThrow({ where: { id: crmTaskId } });
-    if (!task.amoTaskId) return { kind: 'done', result: { skipped: 'never_created' } };
-    await this.amo(conn).completeTask(task.amoTaskId, result);
-    return { kind: 'done' };
-  }
-
-  private async handleTaskReassign(conn: IntegrationConnection, crmTaskId: string, toUserId: string): Promise<HandlerResult> {
-    const task = await this.d.prisma.crmTask.findUniqueOrThrow({ where: { id: crmTaskId } });
-    const user = await this.d.prisma.user.findUniqueOrThrow({ where: { id: toUserId } });
-    if (!task.amoTaskId || !user.amoUserId) return { kind: 'done', result: { skipped: true } };
-    await this.amo(conn).updateTaskResponsible(task.amoTaskId, user.amoUserId);
-    return { kind: 'done' };
-  }
-
-  /** Short summary for the amoCRM card; failure never loses the local order (TZ §5.1). */
-  private async handleOrderSummary(op: OutboxOperation, conn: IntegrationConnection, orderId: string): Promise<HandlerResult> {
-    const order = await this.d.prisma.order.findUniqueOrThrow({ where: { id: orderId } });
-    const lead = await this.d.prisma.lead.findUniqueOrThrow({ where: { id: order.leadId } });
-    if (!lead.amoLeadId) return { kind: 'retry_later', delayMs: 10_000, reason: 'waiting_for_amo_lead' };
-    const maps = await this.d.prisma.integrationMapping.findMany({ where: { companyId: op.companyId, entityType: 'custom_field' } });
-    const field = (k: string) => maps.find((m) => m.localId === k)?.externalId;
-    const next = await this.d.prisma.flightSegment.findFirst({ where: { orderId, active: true, departureAtUtc: { gte: this.d.clock.now() } }, orderBy: { departureAtUtc: 'asc' } });
-    // amoCRM'ga faqat SOTUV jami (yagona valyutada) yuboriladi; tannarx va foyda tashqi tizimga chiqmaydi.
-    const eff = singleCurrencySelling(orderFinance(order, await this.d.prisma.orderService.findMany({ where: { orderId, removedAt: null } })));
-    const values: Array<[string, string | null]> = [
-      ['travel_order_id', order.orderNo],
-      ['travel_order_url', `${this.d.config.appPublicUrl}/orders/${order.id}`],
-      ['local_amount', eff ? `${formatMoney({ amountMinor: eff.amountMinor, currency: eff.currency })} ${eff.currency}` : order.agreedAmountMinor !== null && order.currency ? `${formatMoney({ amountMinor: order.agreedAmountMinor, currency: order.currency })} ${order.currency}` : null],
-      ['next_departure_at', next?.departureAtUtc?.toISOString() ?? null],
-      ['next_flight_no', next ? `${next.marketingCarrier} ${next.flightNumber}` : null],
-      ['next_check_state', next?.checkState ?? null],
-      ['next_reminder_at', next?.nextReminderAt?.toISOString() ?? null],
-    ];
-    const customFields = values.filter(([k, v]) => field(k) && v).map(([k, v]) => ({ fieldId: field(k)!, value: v! }));
-    const company = await this.d.prisma.company.findUniqueOrThrow({ where: { id: op.companyId } });
-    const priceCurrency = ((company.settings ?? {}) as { amoPriceCurrency?: string }).amoPriceCurrency;
-    const priceMinor = eff ? (eff.currency === priceCurrency ? eff.amountMinor : null) : priceCurrency && order.currency === priceCurrency ? order.agreedAmountMinor : null;
-    const price = priceCurrency && priceMinor !== null ? Number(priceMinor / 100n) : undefined;
-    if (!customFields.length && price === undefined) return { kind: 'done', result: { skipped: 'no_mapped_fields' } };
-    await this.amo(conn).updateLead(lead.amoLeadId, { customFields, ...(price !== undefined ? { price } : {}) });
-    await this.d.prisma.order.update({ where: { id: orderId }, data: { amoSummaryState: 'synced' } });
-    return { kind: 'done' };
-  }
-
-  // ---------- Chats / Meta ----------
-
-  private async handleChatImport(conn: IntegrationConnection | null, messageId: string): Promise<HandlerResult> {
-    if (!this.d.adapters.amoChats || !conn) return { kind: 'done', result: { skipped: 'native_connector' } };
-    const msg = await this.d.prisma.message.findUniqueOrThrow({ where: { id: messageId } });
-    if (msg.amoMessageId) return { kind: 'done' };
-    const conv = await this.d.prisma.conversation.findUniqueOrThrow({ where: { id: msg.conversationId } });
-    const scopeId = ((conn.settings ?? {}) as { scopeId?: string }).scopeId;
-    if (!scopeId) throw new ProviderError('Chats scope_id missing (G08)', 'validation', null);
-    const r = await this.d.adapters.amoChats.importInbound(scopeId, {
-      scopeId,
-      conversationId: conv.id,
-      msgId: msg.providerMessageId ?? msg.id,
-      senderId: conv.scopedPeerId,
-      senderName: conv.peerUsername,
-      text: msg.content,
-      attachments: [],
-      timestamp: msg.providerAt ?? msg.createdAt,
-    });
-    await this.d.prisma.message.update({ where: { id: msg.id }, data: { amoMessageId: r.amoMessageId } });
-    if (!conv.amoChatId) await this.d.prisma.conversation.update({ where: { id: conv.id }, data: { amoChatId: conv.id } });
-    return { kind: 'done', result: { amoMessageId: r.amoMessageId } };
-  }
-
-  private async handleChatStatus(conn: IntegrationConnection | null, messageId: string, status: 'delivered' | 'read' | 'failed', error?: string): Promise<HandlerResult> {
-    if (!this.d.adapters.amoChats || !conn) return { kind: 'done', result: { skipped: true } };
-    const msg = await this.d.prisma.message.findUniqueOrThrow({ where: { id: messageId } });
-    const scopeId = ((conn.settings ?? {}) as { scopeId?: string }).scopeId;
-    if (!scopeId || !msg.amoMessageId) return { kind: 'done', result: { skipped: true } };
-    await this.d.adapters.amoChats.setDeliveryStatus(scopeId, msg.amoMessageId, status, error);
-    return { kind: 'done' };
   }
 
   /** Enrichment is separate from lead creation; its failure is visible but never blocks (AC09). */
@@ -578,10 +245,6 @@ export class ProcessingService {
     } catch (err) {
       if (err instanceof ProviderError && err.errorClass !== 'unknown_outcome' && err.errorClass !== 'transient' && err.errorClass !== 'rate_limited') {
         await this.d.prisma.message.update({ where: { id: msg.id }, data: { state: 'failed', error: err.message.slice(0, 300) } });
-        await this.d.prisma.$transaction(async (tx) => {
-          const { enqueueOutbox } = await import('../queue');
-          await enqueueOutbox(tx, { companyId: op.companyId, operationKey: `chat.status:${msg.id}:failed`, target: 'amocrm_chats', action: 'chat.status', payload: { messageId: msg.id, status: 'failed', error: 'Instagram xabarni qabul qilmadi' } });
-        });
       } else if (err instanceof ProviderError && err.errorClass !== 'unknown_outcome') {
         await this.d.prisma.message.update({ where: { id: msg.id }, data: { state: 'queued' } });
       }

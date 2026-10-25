@@ -16,8 +16,8 @@ datasource db {
 
 enum Role {
   ADMIN
-  HEAD
   MANAGER
+  USER
 }
 
 enum UserStatus {
@@ -212,6 +212,8 @@ model User {
   id           String     @id @default(uuid()) @db.Uuid
   companyId    String     @map("company_id") @db.Uuid
   email        String     @unique
+  /// Email kiritmasdan kirish uchun (kichik harf). Parol faqat passwordHash (argon2) ko'rinishida saqlanadi.
+  login        String?    @unique
   fullName     String     @map("full_name")
   passwordHash String?    @map("password_hash")
   role         Role

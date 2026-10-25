@@ -1,23 +1,23 @@
-/** Meta "Data deletion request URL" holat sahifasi (ommaviy, kirish talab qilmaydi). Jarayon: /privacy 6-bo'lim. */
+/** Страница статуса запроса на удаление данных для Meta («Data deletion request URL»). Публичная, вход не требуется. Порядок: /privacy, раздел 6. */
 export default async function DataDeletionPage({ searchParams }: { searchParams: Promise<{ code?: string }> }) {
   const { code } = await searchParams;
   return (
     <main style={{ maxWidth: 640, margin: '48px auto', padding: '0 16px', lineHeight: 1.6 }}>
-      <h1>Ma’lumotni o‘chirish so‘rovi</h1>
+      <h1>Запрос на удаление данных</h1>
       {code && (
         <p>
-          So‘rovingiz qabul qilindi. Tasdiqlash kodi: <b>{code.slice(0, 64)}</b>
+          Ваш запрос принят. Код подтверждения: <b>{code.slice(0, 64)}</b>
         </p>
       )}
-      <p>Jarayon quyidagicha:</p>
+      <p>Порядок действий:</p>
       <ol>
-        <li>So‘rov Tizimda qayd etiladi; kompaniyaning Instagram akkauntiga ulanish to‘xtatiladi (kirish tokeni o‘chiriladi).</li>
-        <li>Tizim administratorlariga ilova ichida bildirishnoma yuboriladi.</li>
-        <li>Administrator mijoz kartasini topib «Shaxsiy ma’lumotlarni o‘chirish» amalini bajaradi: ism, telefon, email, Instagram identifikatori, xabar matnlari va fayllar anonimlashtiriladi yoki o‘chiriladi. To‘lov va buyurtma summalari hisob yuritish uchun saqlanishi mumkin.</li>
-        <li>amoCRM va Instagram’dagi nusxalar administrator tomonidan qo‘lda o‘chiriladi.</li>
+        <li>Запрос фиксируется в системе; подключение к Instagram-аккаунту компании приостанавливается (токен доступа удаляется).</li>
+        <li>Администраторам системы приходит уведомление внутри приложения.</li>
+        <li>Администратор находит карточку клиента и выполняет действие «Удалить персональные данные»: имя, телефон, email, идентификатор Instagram, тексты сообщений и файлы обезличиваются или удаляются. Суммы платежей и заказов могут сохраняться для бухгалтерского учёта.</li>
+        <li>Копии в Instagram администратор удаляет вручную.</li>
       </ol>
       <p>
-        Bu jarayon avtomatik emas: o‘chirish administrator tomonidan bajariladi. Batafsil ma’lumot va aloqa manzili: <a href="/privacy">Maxfiylik siyosati</a>.
+        Процесс не автоматический: удаление выполняет администратор. Подробности и контакты: <a href="/privacy">Политика конфиденциальности</a>.
       </p>
     </main>
   );

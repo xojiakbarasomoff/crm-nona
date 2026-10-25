@@ -1,3 +1,4 @@
+import { formatLocalRu } from '@crm/domain';
 import { audit } from '../audit';
 import { systemActor, type CoreDeps } from '../context';
 import { headRecipients, notify, publishEvent } from '../events';
@@ -26,8 +27,8 @@ export class SlaService {
         userId: l.ownerId!,
         kind: 'sla_warning',
         dedupeKey: `sla_warn:${l.id}`,
-        title: `SLA yaqinlashmoqda: ${l.name}`,
-        body: `Birinchi javob muddati: ${l.firstResponseDueAt!.toISOString()}`,
+        title: `Срок ответа истекает: ${l.name}`,
+        body: `Срок первого ответа: ${formatLocalRu(l.firstResponseDueAt!, 'Asia/Tashkent')}`,
         link: `/leads/${l.id}`,
       });
       if (created) warned++;
@@ -42,7 +43,7 @@ export class SlaService {
       await this.d.prisma.$transaction(async (tx) => {
         const recipients = new Set([...(l.owner_id ? [l.owner_id] : []), ...(await headRecipients(tx, l.company_id))]);
         for (const uid of recipients) {
-          await notify(tx, { companyId: l.company_id, userId: uid, kind: 'sla_breached', dedupeKey: `sla_breach:${l.id}:${uid}`, title: `SLA buzildi: ${l.name}`, body: 'Birinchi inson javobi muddatida qayd etilmadi. Avtomatik qayta biriktirish yo‘q — rahbar qaror qiladi.', link: `/leads/${l.id}` });
+          await notify(tx, { companyId: l.company_id, userId: uid, kind: 'sla_breached', dedupeKey: `sla_breach:${l.id}:${uid}`, title: `Срок ответа нарушен: ${l.name}`, body: 'Первый ответ сотрудника не зафиксирован в срок. Автоматического переназначения нет — решает администратор.', link: `/leads/${l.id}` });
         }
         await audit(tx, systemActor(l.company_id, 'sla'), { entityType: 'lead', entityId: l.id, action: 'sla_breached', newValue: { at: now.toISOString() } });
       });

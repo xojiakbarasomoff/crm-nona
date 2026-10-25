@@ -37,13 +37,13 @@ function resolveTime(field: string, t: LocalTimeInput | null): Date | null {
   const r = localToUtc(t.local, t.timezone, t.confirmedOffsetMinutes);
   if (r.kind === 'ok') return r.utc;
   if (r.kind === 'ambiguous') {
-    throw unprocessable('AMBIGUOUS_LOCAL_TIME', 'Bu mahalliy vaqt ikki marta uchraydi (DST). UTC offsetni tasdiqlang.', { [field]: 'ambiguous' }, {
+    throw unprocessable('AMBIGUOUS_LOCAL_TIME', 'Это местное время встречается дважды (переход на летнее/зимнее время). Подтвердите смещение UTC.', { [field]: 'ambiguous' }, {
       field,
       options: r.options.map((o) => ({ utc: o.utc.toISOString(), offsetMinutes: o.offsetMinutes })),
     });
   }
-  if (r.kind === 'nonexistent') throw unprocessable('NONEXISTENT_LOCAL_TIME', 'Bu mahalliy vaqt DST o‘tishi sababli mavjud emas', { [field]: 'nonexistent' });
-  throw unprocessable('INVALID_TIME', r.reason === 'bad_zone' ? 'IANA vaqt zonasi noto‘g‘ri (masalan, Asia/Dubai)' : 'Vaqt formati noto‘g‘ri', { [field]: r.reason });
+  if (r.kind === 'nonexistent') throw unprocessable('NONEXISTENT_LOCAL_TIME', 'Такого местного времени не существует из-за перехода на летнее/зимнее время', { [field]: 'nonexistent' });
+  throw unprocessable('INVALID_TIME', r.reason === 'bad_zone' ? 'Неверный часовой пояс IANA (например, Asia/Dubai)' : 'Неверный формат времени', { [field]: r.reason });
 }
 
 const IATA = /^[A-Z]{3}$/;
@@ -69,23 +69,23 @@ export class SegmentsService {
     const errors: Record<string, string> = {};
     if (input.originIata !== undefined && !IATA.test(input.originIata)) errors.originIata = 'iata';
     if (input.destinationIata !== undefined && !IATA.test(input.destinationIata)) errors.destinationIata = 'iata';
-    if (Object.keys(errors).length) throw unprocessable('VALIDATION_FAILED', 'Aeroport IATA kodi 3 ta lotin harfi bo‘lishi kerak', errors);
+    if (Object.keys(errors).length) throw unprocessable('VALIDATION_FAILED', 'Код аэропорта IATA — 3 латинские буквы', errors);
   }
 
   async addSegment(actor: UserActor, orderId: string, input: SegmentInput) {
     this.validate(input);
-    if (input.departure && input.departure.timezone !== input.departureTimezone) throw unprocessable('VALIDATION_FAILED', 'Jo‘nash zonasi mos emas', { departureTimezone: 'mismatch' });
-    if (input.arrival && input.arrival.timezone !== input.arrivalTimezone) throw unprocessable('VALIDATION_FAILED', 'Yetib kelish zonasi mos emas', { arrivalTimezone: 'mismatch' });
+    if (input.departure && input.departure.timezone !== input.departureTimezone) throw unprocessable('VALIDATION_FAILED', 'Часовой пояс вылета не совпадает', { departureTimezone: 'mismatch' });
+    if (input.arrival && input.arrival.timezone !== input.arrivalTimezone) throw unprocessable('VALIDATION_FAILED', 'Часовой пояс прилёта не совпадает', { arrivalTimezone: 'mismatch' });
     const departureAtUtc = resolveTime('departure', input.departure);
     const arrivalAtUtc = resolveTime('arrival', input.arrival);
     resolveTime('departureTimezone', { local: '2000-01-01T00:00', timezone: input.departureTimezone });
     resolveTime('arrivalTimezone', { local: '2000-01-01T00:00', timezone: input.arrivalTimezone });
-    if (departureAtUtc && arrivalAtUtc && arrivalAtUtc <= departureAtUtc) throw unprocessable('VALIDATION_FAILED', 'Yetib kelish jo‘nashdan keyin bo‘lishi kerak', { arrival: 'before_departure' });
+    if (departureAtUtc && arrivalAtUtc && arrivalAtUtc <= departureAtUtc) throw unprocessable('VALIDATION_FAILED', 'Прилёт должен быть позже вылета', { arrival: 'before_departure' });
 
     const seg = await this.d.prisma.$transaction(async (tx) => {
-      const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: orderId }) }), 'Buyurtma');
+      const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: orderId }) }), 'Заказ');
       if (!canEditRecord(actor, order.ownerId)) throw forbidden();
-      if (order.fulfillmentState === 'cancelled') throw unprocessable('ORDER_CANCELLED', 'Bekor qilingan buyurtma');
+      if (order.fulfillmentState === 'cancelled') throw unprocessable('ORDER_CANCELLED', 'Заказ отменён');
       await tx.$executeRaw`SELECT 1 FROM orders WHERE id = ${orderId}::uuid FOR UPDATE`;
       const max = await tx.flightSegment.aggregate({ where: { companyId: actor.companyId, orderId }, _max: { segmentNo: true } });
       const segment = await tx.flightSegment.create({
@@ -126,7 +126,7 @@ export class SegmentsService {
   private async linkPassengers(tx: Tx, companyId: string, orderId: string, segmentId: string, passengerIds: string[]) {
     if (!passengerIds.length) return;
     const ps = await tx.passenger.findMany({ where: { id: { in: passengerIds }, companyId, orderId }, select: { id: true } });
-    if (ps.length !== passengerIds.length) throw unprocessable('PASSENGER_INVALID', 'Yo‘lovchi buyurtmaga tegishli emas');
+    if (ps.length !== passengerIds.length) throw unprocessable('PASSENGER_INVALID', 'Пассажир не относится к этому заказу');
     await tx.segmentPassenger.createMany({ data: ps.map((p) => ({ companyId, segmentId, passengerId: p.id })), skipDuplicates: true });
   }
 
@@ -143,10 +143,10 @@ export class SegmentsService {
   ) {
     this.validate(patch);
     const run = async (tx: Tx) => {
-      const seg = assertFound(await tx.flightSegment.findFirst({ where: { id, companyId: actor.companyId } }), 'Segment');
-      const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: seg.orderId }) }), 'Segment');
+      const seg = assertFound(await tx.flightSegment.findFirst({ where: { id, companyId: actor.companyId } }), 'Сегмент');
+      const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: seg.orderId }) }), 'Сегмент');
       if (!canEditRecord(actor, order.ownerId)) throw forbidden();
-      if (seg.version !== version) throw conflict('VERSION_CONFLICT', 'Segment boshqa foydalanuvchi tomonidan o‘zgartirilgan. Sahifani yangilang.');
+      if (seg.version !== version) throw conflict('VERSION_CONFLICT', 'Сегмент изменён другим пользователем. Обновите страницу.');
 
       const departureTimezone = patch.departureTimezone ?? seg.departureTimezone;
       const arrivalTimezone = patch.arrivalTimezone ?? seg.arrivalTimezone;
@@ -204,12 +204,12 @@ export class SegmentsService {
             key: `segment:${id}:cancelled`,
             entityId: order.leadId,
             kind: 'contact_customer',
-            text: `Reys bekor qilindi: ${order.orderNo}, ${updated.marketingCarrier} ${updated.flightNumber}. Mijoz bilan bog‘laning.`,
+            text: `Рейс отменён: ${order.orderNo}, ${updated.marketingCarrier} ${updated.flightNumber}. Свяжитесь с клиентом.`,
             responsibleUserId: updated.ownerId,
             dueAt: new Date(this.d.clock.now().getTime() + 30 * 60_000),
           });
           if (updated.ownerId) {
-            await notify(tx, { companyId: actor.companyId, userId: updated.ownerId, kind: 'segment_cancelled', dedupeKey: `segment_cancelled:${id}`, title: `Reys bekor qilindi: ${order.orderNo}`, link: `/orders/${order.id}` });
+            await notify(tx, { companyId: actor.companyId, userId: updated.ownerId, kind: 'segment_cancelled', dedupeKey: `segment_cancelled:${id}`, title: `Рейс отменён: ${order.orderNo}`, link: `/orders/${order.id}` });
           }
         }
       } else if (bump) {
@@ -236,7 +236,7 @@ export class SegmentsService {
   /**
    * Saves a manual check result. It is bound to the current revision and to the occurrence that is
    * currently due; it completes only that occurrence (a T-168h check never completes T-24h, AC20)
-   * and closes the linked amoCRM task.
+   * and closes the linked task.
    */
   async saveCheck(
     actor: UserActor,
@@ -247,7 +247,7 @@ export class SegmentsService {
       const seg = await this.loadEditable(tx, actor, segmentId);
       const now = this.d.clock.now();
       const observed = input.observedDeparture ? resolveTime('observedDeparture', input.observedDeparture) : null;
-      if (input.result === 'changed' && !observed) throw unprocessable('VALIDATION_FAILED', 'O‘zgargan jo‘nash vaqtini kiriting', { observedDeparture: 'required' });
+      if (input.result === 'changed' && !observed) throw unprocessable('VALIDATION_FAILED', 'Введите новое время вылета', { observedDeparture: 'required' });
 
       const dueOccs = await tx.reminderOccurrence.findMany({
         where: { companyId: actor.companyId, segmentId, kind: 'milestone', scheduleRevision: seg.scheduleRevision, state: 'due', ...(input.occurrenceId ? { id: input.occurrenceId } : {}) },
@@ -277,10 +277,7 @@ export class SegmentsService {
         const task = await tx.crmTask.findFirst({ where: { companyId: actor.companyId, entityType: 'occurrence', entityId: target.id } });
         if (task && ['pending', 'open'].includes(task.state)) {
           await tx.crmTask.update({ where: { id: task.id }, data: { state: 'completed' } });
-          const { enqueueOutbox } = await import('../queue');
-          await enqueueOutbox(tx, { companyId: actor.companyId, operationKey: `task.complete:${task.id}`, target: 'amocrm', action: 'task.complete', payload: { crmTaskId: task.id, result: `Reys tekshirildi: ${input.result}` } });
         }
-        await tx.notificationDelivery.updateMany({ where: { occurrenceId: target.id, channel: 'amocrm_task' }, data: { state: 'completed' } });
       }
       await tx.flightSegment.update({
         where: { id: segmentId },
@@ -321,8 +318,8 @@ export class SegmentsService {
   }
 
   private async loadEditable(tx: Tx, actor: UserActor, segmentId: string) {
-    const seg = assertFound(await tx.flightSegment.findFirst({ where: { id: segmentId, companyId: actor.companyId } }), 'Segment');
-    const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: seg.orderId }) }), 'Segment');
+    const seg = assertFound(await tx.flightSegment.findFirst({ where: { id: segmentId, companyId: actor.companyId } }), 'Сегмент');
+    const order = assertFound(await tx.order.findFirst({ where: orderWhere(actor, { id: seg.orderId }) }), 'Сегмент');
     if (!canEditRecord(actor, order.ownerId)) throw forbidden();
     return seg;
   }

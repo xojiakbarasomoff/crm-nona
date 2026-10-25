@@ -1,8 +1,8 @@
-# Turizm CRM (amoCRM asosida)
+# NONA Travel CRM (mustaqil)
 
-Instagram Lead Ads va Direct → kontakt/lid → mas’ul menejer → taklif → sotuv → turizm buyurtmasi → ko‘p segmentli reyslar → tekshiruv eslatmalari → dashboard. Mijoz va sotuv uchun asosiy tizim — amoCRM; turizm buyurtmasi, segmentlar, eslatmalar, audit va analitik proyeksiya — PostgreSQL.
+Instagram Direct (va Lead Ads) → kontakt/lid → mas’ul menejer → taklif → sotuv → turizm buyurtmasi → ko‘p segmentli reyslar → tekshiruv eslatmalari → dashboard. CRM mustaqil ishlaydi: lid bosqichi, mas’ul, vazifalar va buyurtmalar shu tizimning o‘zida (PostgreSQL) boshqariladi, tashqi CRM kerak emas. Interfeys — rus tilida.
 
-> **Holat:** demo rejimida ishlaydigan to‘liq vertikal oqim. Real amoCRM/Meta integratsiyasi live tasdiqlanmagan — `docs/feasibility.md`, `docs/acceptance-matrix.md`, `KNOWN_LIMITATIONS.md`. Production tayyor emas.
+> **Holat:** demo rejimida ishlaydigan to‘liq vertikal oqim. Faqat Instagram Direct kiruvchi oqimi jonli tasdiqlangan; CRM’dan Instagram’ga javob yuborish va Lead Ads ulanmagan — `docs/feasibility.md`, `docs/acceptance-matrix.md`, `KNOWN_LIMITATIONS.md`. Production tayyor emas.
 
 Asosiy hujjatlar: `docs/TZ.md` (shartnoma), `docs/tz-addendum-finance.md` (turoperatorlar, tannarx/foyda, hujjatlar), `docs/user-guide-finance.md` (yo‘riqnoma), `docs/implementation-plan.md`, `docs/decisions/`, `docs/integrations.md`, `docs/runbook.md`, `docs/openapi.json`.
 
@@ -11,9 +11,9 @@ Asosiy hujjatlar: `docs/TZ.md` (shartnoma), `docs/tz-addendum-finance.md` (turop
 ```
 apps/api            NestJS HTTP API + webhook’lar; src/core — API va worker birgalikda ishlatadigan biznes modullari
 apps/worker         inbox/outbox relay (BullMQ), DB scheduler, eskalatsiya, reconciliation, CLI’lar
-apps/web            Next.js interfeys (o‘zbek lotin)
+apps/web            Next.js interfeys (rus tili)
 packages/domain     sof biznes qoidalari (pul, telefon, matching, round-robin, voronka, vaqt zonasi, milestone, KPI, RBAC)
-packages/integrations amoCRM REST/OAuth, amoCRM Chats, Meta Lead Ads/Direct, imzo, limiter, demo adapterlar
+packages/integrations Meta Lead Ads/Direct, imzo, limiter, fayl xavfsizligi, demo adapterlar
 packages/contracts  zod DTO va OpenAPI
 packages/database   Prisma schema, migratsiyalar, seed, perf dataset
 infra               Docker Compose, Dockerfile
@@ -32,7 +32,7 @@ Node mosligi: ilova (API, worker, web) Node 22.11 da ham ishga tushadi, lekin `n
 cp .env.example .env
 # ENCRYPTION_KEY va SESSION_SECRET ni to‘ldiring:
 node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
-# demo uchun META_APP_SECRET, META_VERIFY_TOKEN, AMO_CHAT_SECRET ga ixtiyoriy lokal qiymat bering
+# demo uchun META_APP_SECRET, META_VERIFY_TOKEN ga ixtiyoriy lokal qiymat bering
 
 npm ci
 npm run dev:infra        # docker compose: postgres + redis
@@ -70,8 +70,7 @@ Docker’da to‘liq stack: `docker compose -f infra/docker-compose.yml --profil
 | `npm run build` | API/worker bundle (tsup) va Next.js build |
 | `npm run db:migrate` / `npm run db:seed` | migratsiya / sun’iy seed |
 | `npm run openapi` | `docs/openapi.json` ni qayta generatsiya |
-| `npm run amo-config [-- --apply]` | amoCRM voronka/maydonlarini tekshirish (dry-run) yoki yaratish |
-| `npm run smoke:live` | G01–G09 live sinovlari (credential bo‘lmasa `blocked`) |
+| `npm run accounts:provision -- --phase=create` (JSON stdin) / `--phase=close-legacy` | ish akkauntlarini yaratish (parol faqat hash ko‘rinishida) va eski demo akkauntlarni yopish; `docs/runbook.md` |
 | `PERF_DATABASE_URL=... npm run perf:seed` | TZ §22.1 yuk dataset’i |
 | `npm run perf:measure` / `npm run perf:webhook` / `npm run perf:monitor` | API latency, webhook yuk sinovi va backlog monitori |
 | `npm run admin:invite -- --email=... --name=...` | Birinchi administratorni yaratish (demo bo‘lmagan muhit) |
@@ -80,11 +79,11 @@ Docker’da to‘liq stack: `docker compose -f infra/docker-compose.yml --profil
 
 ## Konfiguratsiya
 
-`.env.example` — barcha guruhlar: runtime rejimi, DB/Redis, public URL, session/encryption secret, amoCRM REST OAuth, amoCRM Chats kanali (alohida auth), Meta (app secret, verify token, Graph versiyasi, login yo‘li, javob oynasi), object storage, worker intervallari, monitoring. Haqiqiy access tokenlar `.env` da saqlanmaydi — OAuth’dan keyin DB’da shifrlangan holda turadi. `APP_MODE=production` da mock adapter yoki `COOKIE_SECURE=false` bilan ishga tushish rad etiladi.
+`.env.example` — barcha guruhlar: runtime rejimi, DB/Redis, public URL, session/encryption secret, Meta (app secret, verify token, Graph versiyasi, login yo‘li, javob oynasi), object storage, worker intervallari, monitoring. Haqiqiy access tokenlar `.env` da saqlanmaydi — OAuth’dan keyin DB’da shifrlangan holda turadi. `APP_MODE=production` da mock adapter yoki `COOKIE_SECURE=false` bilan ishga tushish rad etiladi.
 
 ## Arxitektura qoidalari (qisqa)
 
-- amoCRM — kontakt/lid/status/mas’ul egasi; web’dagi bosqich o‘zgarishi outbox orqali amoCRM’ga yuboriladi va tasdiqlangach proyeksiyaga qo‘llanadi (ADR 0001).
+- Lid bosqichi, mas’ul va vazifalar shu tizimda: o‘zgarish darhol qo‘llanadi, tarix (`lead_events`) va audit bilan. Rollar: Administrator, Menejer, Foydalanuvchi (faqat o‘qish). amoCRM integratsiyasi olib tashlangan (ADR 0001 tarixiy).
 - Webhook: validatsiya → PostgreSQL inbox commit → ACK → async; Meta imzosi raw body bo‘yicha.
 - Transactional outbox, unique biznes kalitlari, per-connection token refresh lock (row lock), umumiy Redis limiter.
 - Timeout’dan keyin natija noaniq bo‘lsa blind retry yo‘q: reconcile yoki `unknown` + operator.

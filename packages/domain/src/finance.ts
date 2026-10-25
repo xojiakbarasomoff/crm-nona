@@ -127,16 +127,16 @@ export function singleCurrencySelling(f: OrderFinance): { amountMinor: bigint; c
 export type RefundCheck = { ok: true } | { ok: false; code: 'REFUND_CURRENCY_MISMATCH' | 'REFUND_EXCEEDS_RECEIVED' | 'SUPPLIER_REFUND_EXCEEDS_NET' | 'NET_UNKNOWN'; message: string };
 
 export function checkCustomerRefund(f: OrderFinance, p: { currency: string; amountMinor: bigint; receivedMinor: bigint; refundedMinor: bigint }): RefundCheck {
-  if (!f.byCurrency[p.currency]) return { ok: false, code: 'REFUND_CURRENCY_MISMATCH', message: `Qaytarim valyutasi (${p.currency}) buyurtma narxlari valyutasiga mos emas (kurs bo‘yicha avtomatik o‘zgartirilmaydi)` };
-  if (p.refundedMinor + p.amountMinor > p.receivedMinor) return { ok: false, code: 'REFUND_EXCEEDS_RECEIVED', message: 'Qaytarim qabul qilingan to‘lovlardan oshib ketmasligi kerak' };
+  if (!f.byCurrency[p.currency]) return { ok: false, code: 'REFUND_CURRENCY_MISMATCH', message: `Валюта возврата (${p.currency}) не совпадает с валютой цен заказа (автоматический пересчёт по курсу не выполняется)` };
+  if (p.refundedMinor + p.amountMinor > p.receivedMinor) return { ok: false, code: 'REFUND_EXCEEDS_RECEIVED', message: 'Возврат не должен превышать полученные платежи' };
   return { ok: true };
 }
 
 export function checkSupplierRefund(f: OrderFinance, p: { currency: string; amountMinor: bigint; refundedMinor: bigint }): RefundCheck {
   const c = f.byCurrency[p.currency];
-  if (!c) return { ok: false, code: 'REFUND_CURRENCY_MISMATCH', message: `Qaytarim valyutasi (${p.currency}) buyurtma narxlari valyutasiga mos emas (kurs bo‘yicha avtomatik o‘zgartirilmaydi)` };
-  if (c.lines - c.missingNetLines === 0) return { ok: false, code: 'NET_UNKNOWN', message: 'Avval tannarxni kiriting: yetkazib beruvchi qaytarimi tannarxga nisbatan hisoblanadi' };
-  if (p.refundedMinor + p.amountMinor > c.netMinor) return { ok: false, code: 'SUPPLIER_REFUND_EXCEEDS_NET', message: 'Yetkazib beruvchidan qaytgan summa tannarxdan oshib ketmasligi kerak' };
+  if (!c) return { ok: false, code: 'REFUND_CURRENCY_MISMATCH', message: `Валюта возврата (${p.currency}) не совпадает с валютой цен заказа (автоматический пересчёт по курсу не выполняется)` };
+  if (c.lines - c.missingNetLines === 0) return { ok: false, code: 'NET_UNKNOWN', message: 'Сначала укажите себестоимость: возврат поставщика считается относительно себестоимости' };
+  if (p.refundedMinor + p.amountMinor > c.netMinor) return { ok: false, code: 'SUPPLIER_REFUND_EXCEEDS_NET', message: 'Сумма, возвращённая поставщиком, не должна превышать себестоимость' };
   return { ok: true };
 }
 

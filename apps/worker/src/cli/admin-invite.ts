@@ -1,6 +1,6 @@
 /**
  * Bootstrap the first administrator in a real deployment (no demo users exist outside demo mode).
- *   npm run admin:invite -- --email=admin@company.uz --name="Ism Familiya" [--amo-user-id=123]
+ *   npm run admin:invite -- --email=admin@company.uz --name="Ism Familiya"
  * Prints a one-time activation link (72 h). MFA enrollment is enforced at first login.
  */
 import { randomBytes } from 'node:crypto';
@@ -20,7 +20,7 @@ async function main() {
     if (await core.deps.prisma.user.findUnique({ where: { email } })) throw new Error('User already exists');
     const token = randomBytes(32).toString('base64url');
     await core.deps.prisma.$transaction(async (tx) => {
-      const user = await tx.user.create({ data: { companyId: company.id, email, fullName: name, role: 'ADMIN', status: 'invited', amoUserId: arg('amo-user-id') ?? null } });
+      const user = await tx.user.create({ data: { companyId: company.id, email, fullName: name, role: 'ADMIN', status: 'invited' } });
       await tx.userInvite.create({ data: { companyId: company.id, userId: user.id, tokenHash: sha256(token), expiresAt: new Date(Date.now() + 72 * 3600_000), createdById: user.id } });
       await tx.auditLog.create({ data: { companyId: company.id, actorType: 'system', entityType: 'user', entityId: user.id, action: 'admin_bootstrap_invited', correlationId: user.id } });
     });

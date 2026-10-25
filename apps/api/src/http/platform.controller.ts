@@ -2,12 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { Body, Controller, Get, Headers, Inject, Param, Post, Query, Req, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import type { Redis } from 'ioredis';
-import { AmoOAuthCallbackQuery, AmoOAuthStartSchema, buildOpenApi, DemoAmoChatReplySchema, DemoDirectSchema, DemoLeadAdsSchema } from '@crm/contracts';
+import { buildOpenApi, DemoDirectSchema, DemoLeadAdsSchema } from '@crm/contracts';
 import { can } from '@crm/domain';
-import { DemoAmoRestClient, DemoMetaLeadsClient, parseSignedRequest, signMetaBody, type DemoFailure } from '@crm/integrations';
+import { DemoMetaLeadsClient, parseSignedRequest, signMetaBody, type DemoFailure } from '@crm/integrations';
 import { AppError } from '../core/errors';
-import { createHmac } from 'node:crypto';
-import { eventsChannel, forbidden, notFound, requireCapOrThrow, type ChangeEvent, type Core, type UserActor } from './platform-helpers';
+import { eventsChannel, notFound, requireCapOrThrow, type ChangeEvent, type Core, type UserActor } from './platform-helpers';
 import { Actor, CORE, parse, Public, requireDemo, send, UuidPipe as uuid, type AuthedRequest } from './common';
 import { enqueueOutbox } from '../core/queue';
 import { z } from 'zod';
@@ -65,7 +64,7 @@ export class PlatformController {
   async replay(@Actor() actor: UserActor, @Param('id', uuid) id: string, @Res() res: Response) {
     requireCapOrThrow(actor, 'integrations.replay');
     const op = await this.core.processing.replay(actor.companyId, id, actor.id);
-    if (!op) throw notFound('Operatsiya');
+    if (!op) throw notFound('Операция');
     send(res, 202, { id: op.id, state: op.state });
   }
 
@@ -73,13 +72,8 @@ export class PlatformController {
   async replayInbox(@Actor() actor: UserActor, @Param('id', uuid) id: string, @Res() res: Response) {
     requireCapOrThrow(actor, 'integrations.replay');
     const r = await this.core.deps.prisma.webhookInbox.updateMany({ where: { id, companyId: actor.companyId, state: { in: ['dead', 'failed'] } }, data: { state: 'pending', nextAttemptAt: new Date(), attempts: 0 } });
-    if (!r.count) throw notFound('Hodisa');
+    if (!r.count) throw notFound('Событие');
     send(res, 202, { ok: true });
-  }
-
-  @Post('api/v1/integrations/amocrm/oauth/start')
-  async oauthStart(@Actor() actor: UserActor, @Body() body: unknown, @Res() res: Response) {
-    send(res, 200, await this.core.oauth.start(actor, parse(AmoOAuthStartSchema, body).domain));
   }
 
   // ---------------- Instagram API with Instagram Login (Direct) ----------------
@@ -185,21 +179,6 @@ export class PlatformController {
     res.status(200).json({ url: `${this.core.deps.config.appPublicUrl}/data-deletion?code=${code}`, confirmation_code: code });
   }
 
-  @Get('api/v1/integrations/amocrm/oauth/callback')
-  async oauthCallback(@Actor() actor: UserActor, @Query() q: unknown, @Res() res: Response) {
-    const input = parse(AmoOAuthCallbackQuery, q);
-    await this.core.oauth.callback(actor, { code: input.code, state: input.state, referer: input.referer });
-    res.redirect(302, `${this.core.deps.config.appPublicUrl}/integrations?connected=amocrm`);
-  }
-
-  /** Initial amoCRM import runs in the worker (resumable checkpoints); 202 + operation id. */
-  @Post('api/v1/integrations/amocrm/import')
-  async amoImport(@Actor() actor: UserActor, @Res() res: Response) {
-    requireCapOrThrow(actor, 'integrations.manage');
-    const id = await this.core.deps.prisma.$transaction((tx) => enqueueOutbox(tx, { companyId: actor.companyId, operationKey: `amo.import:${Date.now()}`, target: 'amocrm', action: 'amo.import', payload: { requestedBy: actor.id } }));
-    send(res, 202, { operationId: id });
-  }
-
   @Post('api/v1/integrations/lead-ads/backfill')
   async leadAdsBackfill(@Actor() actor: UserActor, @Body() body: { since?: string }, @Res() res: Response) {
     requireCapOrThrow(actor, 'integrations.manage');
@@ -233,7 +212,7 @@ export class PlatformController {
 
   @Post('api/v1/integrations/:id/disconnect')
   async disconnect(@Actor() actor: UserActor, @Param('id', uuid) id: string, @Res() res: Response) {
-    await this.core.oauth.disconnect(actor, id);
+    await this.core.instagram.disconnect(actor, id);
     send(res, 200, { ok: true });
   }
 
@@ -317,18 +296,6 @@ export class PlatformController {
     send(res, 200, await this.core.webhooks.metaReceive(req.rawBody ?? Buffer.alloc(0), sig));
   }
 
-  @Public()
-  @Post('webhooks/amocrm/crm/:token')
-  async amoCrm(@Param('token') token: string, @Req() req: AuthedRequest, @Res() res: Response) {
-    send(res, 200, await this.core.webhooks.amoCrmReceive(token, req.rawBody ?? Buffer.alloc(0)));
-  }
-
-  @Public()
-  @Post('webhooks/amocrm/chat/:scope')
-  async amoChat(@Param('scope') scope: string, @Req() req: AuthedRequest, @Headers('x-signature') sig: string | undefined, @Res() res: Response) {
-    send(res, 200, await this.core.webhooks.amoChatReceive(scope, req.rawBody ?? Buffer.alloc(0), sig));
-  }
-
   // ---------------- DEMO simulators (APP_MODE=demo only) ----------------
 
   /** Simulates a Lead Ads form submission end-to-end through the real webhook path. */
@@ -368,37 +335,6 @@ export class PlatformController {
       }),
     );
     send(res, 202, { mid, ...(await this.core.webhooks.metaReceive(payload, signMetaBody(payload, this.core.webhooks.signingSecretFor(payload).secret))) });
-  }
-
-  /** Simulates a manager reply typed in the amoCRM chat (signed like the Chats API webhook). */
-  @Post('api/v1/demo/amo-chat-reply')
-  async demoChatReply(@Actor() actor: UserActor, @Body() body: unknown, @Res() res: Response) {
-    requireDemo(this.core);
-    const input = parse(DemoAmoChatReplySchema, body);
-    if (actor.role === 'MANAGER') {
-      const me = await this.core.deps.prisma.user.findUniqueOrThrow({ where: { id: actor.id } });
-      if (me.amoUserId !== input.authorAmoUserId) throw forbidden();
-    }
-    const conn = await this.core.deps.prisma.integrationConnection.findFirstOrThrow({ where: { companyId: actor.companyId, provider: 'AMOCRM_CHATS' } });
-    const conv = await this.core.deps.prisma.conversation.findFirstOrThrow({ where: { id: input.conversationId, companyId: actor.companyId } });
-    const raw = Buffer.from(JSON.stringify({ account_id: 'demo_scope', time: Math.floor(Date.now() / 1000), message: { receiver: { client_id: conv.scopedPeerId }, sender: { id: input.authorAmoUserId }, conversation: { client_id: conv.id }, timestamp: Math.floor(Date.now() / 1000), message: { id: `demo_amo_${randomUUID()}`, type: 'text', text: input.text } } }));
-    const sig = createHmac('sha1', this.core.deps.config.amoChats.secret).update(raw).digest('hex');
-    send(res, 202, await this.core.webhooks.amoChatReceive(conn.routeToken, raw, sig));
-  }
-
-  /** Simulates a native change made directly in amoCRM, followed by the CRM webhook signal. */
-  @Post('api/v1/demo/amo-native-edit')
-  async demoNativeEdit(@Actor() actor: UserActor, @Body() body: { leadId: string; stage?: string; amoUserId?: string; deleted?: boolean }, @Res() res: Response) {
-    requireDemo(this.core);
-    requireCapOrThrow(actor, 'integrations.manage');
-    const lead = await this.core.deps.prisma.lead.findFirstOrThrow({ where: { id: body.leadId, companyId: actor.companyId } });
-    if (!lead.amoLeadId) throw notFound('amoCRM lid hali yaratilmagan');
-    const status = body.stage ? await this.core.leads.statusForStage(this.core.deps.prisma, actor.companyId, body.stage as never) : null;
-    const amo = this.core.deps.adapters.amoRest({ id: '', accountDomain: null, accountId: '' }) as DemoAmoRestClient;
-    await amo.simulateNativeEdit(lead.amoLeadId, { statusId: status?.statusId, responsibleUserId: body.amoUserId, deleted: body.deleted });
-    const conn = await this.core.deps.prisma.integrationConnection.findFirstOrThrow({ where: { companyId: actor.companyId, provider: 'AMOCRM_REST' } });
-    const form = `leads[status][0][id]=${lead.amoLeadId}&leads[status][0][updated_at]=${Date.now()}&account[id]=${conn.accountId}`;
-    send(res, 202, await this.core.webhooks.amoCrmReceive(conn.routeToken, Buffer.from(form)));
   }
 
   @Post('api/v1/demo/fail-next')

@@ -15,7 +15,7 @@ beforeAll(async () => {
   app = await makeApp(core);
   a = await login(app, 'menejer.a@demo.local');
   b = await login(app, 'menejer.b@demo.local');
-  head = await login(app, 'rahbar@demo.local');
+  head = await login(app, 'admin2@demo.local');
 });
 afterAll(async () => {
   await app.close();
@@ -24,12 +24,12 @@ afterAll(async () => {
 
 async function leadOwnedBy(email: string) {
   // Round-robin ish vaqtiga bog'liq (menejerlar faqat 09:00–19:00 da navbatga olinadi), shuning uchun
-  // lid rahbar tomonidan kerakli menejerga biriktiriladi: haqiqiy oqim, soatdan mustaqil.
+  // lid administrator tomonidan kerakli menejerga biriktiriladi: haqiqiy oqim, soatdan mustaqil.
   const owner = await userId(core, email);
   const lead = await newLead(app, core);
   if (lead.ownerId === owner) return lead;
   const r = await head.patch(`/api/v1/leads/${lead.id}/assignee`, { userId: owner, reason: 'test' });
-  expect(r.status).toBe(202);
+  expect(r.status).toBe(200);
   await drain(core);
   const fresh = await core.deps.prisma.lead.findUniqueOrThrow({ where: { id: lead.id } });
   expect(fresh.ownerId).toBe(owner);
@@ -65,7 +65,7 @@ describe('authentication', () => {
 
   it('invite → activate → login; blocked user loses session immediately', async () => {
     const admin = await login(app, 'admin@demo.local');
-    const inv = await admin.post('/api/v1/users', { email: `new${Date.now()}@demo.local`, fullName: 'Yangi Xodim', role: 'MANAGER', amoUserId: null });
+    const inv = await admin.post('/api/v1/users', { email: `new${Date.now()}@demo.local`, fullName: 'Yangi Xodim', role: 'MANAGER' });
     expect(inv.status).toBe(201);
     const token = new URL(inv.body.activationUrl).searchParams.get('token');
     expect((await request(app.getHttpServer()).post('/api/v1/auth/activate').send({ token, password: 'short' })).status).toBe(422);
@@ -122,17 +122,14 @@ describe('object-level RBAC (AC12)', () => {
     expect(auditRow).not.toBeNull();
   });
 
-  it('manager cannot reassign; head can (pending until amoCRM confirms)', async () => {
+  it('manager cannot reassign; administrator can (applied immediately)', async () => {
     const lead = await leadOwnedBy('menejer.a@demo.local');
     const bId = await userId(core, 'menejer.b@demo.local');
     expect((await a.patch(`/api/v1/leads/${lead.id}/assignee`, { userId: bId, reason: 'x' })).status).toBe(403);
     const r = await head.patch(`/api/v1/leads/${lead.id}/assignee`, { userId: bId, reason: 'yuklama' });
-    expect(r.status).toBe(202);
-    expect(r.body.syncState).toBe('pending');
-    await drain(core);
+    expect(r.status).toBe(200);
     const after = await core.deps.prisma.lead.findUniqueOrThrow({ where: { id: lead.id } });
     expect(after.ownerId).toBe(bId);
-    expect(after.pendingChange).toBeNull();
     // Old owner loses access immediately after the change.
     expect((await a.get(`/api/v1/leads/${lead.id}`)).status).toBe(404);
     expect((await b.get(`/api/v1/leads/${lead.id}`)).status).toBe(200);

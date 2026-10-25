@@ -7,6 +7,7 @@ import { audit } from '../audit';
 import type { CoreDeps, UserActor } from '../context';
 import { AppError, conflict, forbidden, notFound, tooMany, unauthorized, unprocessable } from '../errors';
 import { requireCap } from '../scope';
+import { reassignLeadLocal } from './leads.service';
 import { generateTotpSecret, otpauthUrl, verifyTotp } from '../totp';
 
 /** Argon2id parameters (OWASP baseline: m=19 MiB, t=2, p=1). */
@@ -18,8 +19,6 @@ const LOGIN_WINDOW_SEC = 15 * 60;
 const LOGIN_MAX = 10;
 
 export const DEMO_EMAIL_DOMAIN = '@demo.local';
-/** Short demo logins (DEMO_SIMPLE_LOGIN=true, demo mode only) → seeded demo accounts. */
-export const DEMO_LOGIN_ALIASES: Record<string, string> = { admin: 'admin@demo.local', user1: 'rahbar@demo.local', user2: 'menejer.a@demo.local' };
 export const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 const newToken = () => randomBytes(32).toString('base64url');
 
@@ -38,33 +37,33 @@ export class AuthService {
   }
 
   validatePasswordPolicy(password: string) {
-    if (password.length < 12) throw unprocessable('WEAK_PASSWORD', 'Parol kamida 12 belgidan iborat bo‘lishi kerak', { password: 'min_length_12' });
+    if (password.length < 12) throw unprocessable('WEAK_PASSWORD', 'Пароль должен содержать не менее 12 символов', { password: 'min_length_12' });
   }
 
   async login(input: { email: string; password: string; totp?: string | null; ip: string | null; userAgent: string | null }) {
     const identifier = input.email.trim().toLowerCase();
     const simple = this.d.config.demoSimpleLogin && this.d.config.mode === 'demo';
-    const email = simple ? (DEMO_LOGIN_ALIASES[identifier] ?? identifier) : identifier;
+    const email = identifier;
     const attempts = await hitCounter(this.d.redis, `login:${email}:${input.ip ?? '-'}`, LOGIN_WINDOW_SEC);
     if (attempts > LOGIN_MAX) throw tooMany();
 
-    // Demo accounts (@demo.local) never authenticate outside APP_MODE=demo.
+    // Вход по логину (без email) или по email. Демо-аккаунты (@demo.local) вне APP_MODE=demo не входят.
     const demoAccountBlocked = this.d.config.mode !== 'demo' && email.endsWith(DEMO_EMAIL_DOMAIN);
-    const user = demoAccountBlocked ? null : await this.d.prisma.user.findUnique({ where: { email } });
+    const user = demoAccountBlocked ? null : await this.d.prisma.user.findFirst({ where: { OR: [{ login: email }, { email }] } });
     // Constant-ish work even when the user does not exist.
     const ok = user?.passwordHash ? await verify(user.passwordHash, input.password).catch(() => false) : (await hash('dummy-password', ARGON), false);
     if (!user || !ok || user.status !== 'active') {
       if (user) {
         await audit(this.d.prisma, { type: 'system', id: null, companyId: user.companyId, name: 'auth' }, { entityType: 'user', entityId: user.id, action: 'login_failed', newValue: { ip: input.ip } });
       }
-      throw new AppError(401, 'INVALID_CREDENTIALS', 'Email yoki parol noto‘g‘ri');
+      throw new AppError(401, 'INVALID_CREDENTIALS', 'Неверный логин или пароль');
     }
 
     let mfaVerified = false;
     if (user.role === 'ADMIN' && user.mfaEnabled && !simple) {
-      if (!input.totp) throw new AppError(401, 'MFA_REQUIRED', 'MFA kodi talab qilinadi');
+      if (!input.totp) throw new AppError(401, 'MFA_REQUIRED', 'Требуется код MFA');
       const secret = decryptSecret(user.mfaSecretEnc!, this.d.encryptionKey);
-      if (!verifyTotp(secret, input.totp, this.d.clock.now().getTime())) throw new AppError(401, 'MFA_INVALID', 'MFA kodi noto‘g‘ri');
+      if (!verifyTotp(secret, input.totp, this.d.clock.now().getTime())) throw new AppError(401, 'MFA_INVALID', 'Неверный код MFA');
       mfaVerified = true;
     }
 
@@ -111,12 +110,11 @@ export class AuthService {
       id: user.id,
       email: user.email,
       fullName: user.fullName,
+      login: user.login,
       role: user.role,
-      amoUserId: user.amoUserId,
       capabilities: capabilitiesFor({ role: user.role, extraCapabilities: user.extraCapabilities }),
       mfa: { required: info.mfaRequired, enrolled: info.mfaEnrolled, verified: info.mfaVerified },
       appMode: this.d.config.mode,
-      /** Holat bannerida haqiqiy holatni ko'rsatish uchun (maxfiy ma'lumotsiz): jonli Instagram Direct'da kiruvchi xabar sinovdan o'tganmi. */
       liveStatus: { instagramDirectInboundVerified: await this.instagramInboundVerified(actor.companyId) },
     };
   }
@@ -130,7 +128,7 @@ export class AuthService {
 
   async startMfaEnrollment(actor: UserActor) {
     const user = await this.d.prisma.user.findUniqueOrThrow({ where: { id: actor.id } });
-    if (user.mfaEnabled) throw conflict('MFA_ALREADY_ENABLED', 'MFA allaqachon yoqilgan');
+    if (user.mfaEnabled) throw conflict('MFA_ALREADY_ENABLED', 'MFA уже включена');
     const secret = generateTotpSecret();
     await this.d.redis.set(`mfa_enroll:${user.id}`, encryptSecret(secret, this.d.encryptionKey), 'EX', 600);
     return { secret, otpauthUrl: otpauthUrl(secret, user.email) };
@@ -138,9 +136,9 @@ export class AuthService {
 
   async confirmMfaEnrollment(actor: UserActor, code: string) {
     const enc = await this.d.redis.get(`mfa_enroll:${actor.id}`);
-    if (!enc) throw unprocessable('MFA_ENROLLMENT_EXPIRED', 'MFA sozlash muddati tugadi, qaytadan boshlang');
+    if (!enc) throw unprocessable('MFA_ENROLLMENT_EXPIRED', 'Время настройки MFA истекло, начните заново');
     const secret = decryptSecret(enc, this.d.encryptionKey);
-    if (!verifyTotp(secret, code, this.d.clock.now().getTime())) throw new AppError(401, 'MFA_INVALID', 'MFA kodi noto‘g‘ri');
+    if (!verifyTotp(secret, code, this.d.clock.now().getTime())) throw new AppError(401, 'MFA_INVALID', 'Неверный код MFA');
     await this.d.prisma.$transaction(async (tx) => {
       await tx.user.update({ where: { id: actor.id }, data: { mfaEnabled: true, mfaSecretEnc: encryptSecret(secret, this.d.encryptionKey), version: { increment: 1 } } });
       if (actor.sessionId) await tx.session.update({ where: { id: actor.sessionId }, data: { mfaVerified: true } });
@@ -151,18 +149,18 @@ export class AuthService {
 
   // ---- User management (admin) ----
 
-  async inviteUser(actor: UserActor, input: { email: string; fullName: string; role: Role; amoUserId: string | null }) {
+  async inviteUser(actor: UserActor, input: { email: string; fullName: string; role: Role }) {
     requireCap(actor, 'users.manage');
     const email = input.email.trim().toLowerCase();
     const token = newToken();
     const result = await this.d.prisma.$transaction(async (tx) => {
       const exists = await tx.user.findUnique({ where: { email } });
-      if (exists) throw conflict('EMAIL_EXISTS', 'Bu email bilan foydalanuvchi mavjud');
-      const user = await tx.user.create({ data: { companyId: actor.companyId, email, fullName: input.fullName, role: input.role, amoUserId: input.amoUserId, status: 'invited' } });
+      if (exists) throw conflict('EMAIL_EXISTS', 'Пользователь с таким email уже существует');
+      const user = await tx.user.create({ data: { companyId: actor.companyId, email, fullName: input.fullName, role: input.role, status: 'invited' } });
       await tx.userInvite.create({
         data: { companyId: actor.companyId, userId: user.id, tokenHash: sha256(token), expiresAt: new Date(this.d.clock.now().getTime() + INVITE_MS), createdById: actor.id },
       });
-      await audit(tx, actor, { entityType: 'user', entityId: user.id, action: 'invited', newValue: { email, role: input.role, amoUserId: input.amoUserId } });
+      await audit(tx, actor, { entityType: 'user', entityId: user.id, action: 'invited', newValue: { email, role: input.role } });
       return user;
     });
     return { userId: result.id, activationUrl: `${this.d.config.appPublicUrl}/activate?token=${token}` };
@@ -172,11 +170,11 @@ export class AuthService {
     this.validatePasswordPolicy(password);
     const invite = await this.d.prisma.userInvite.findUnique({ where: { tokenHash: sha256(token) } });
     const now = this.d.clock.now();
-    if (!invite || invite.usedAt || invite.expiresAt <= now) throw unprocessable('INVITE_INVALID', 'Aktivlashtirish havolasi yaroqsiz yoki muddati o‘tgan');
+    if (!invite || invite.usedAt || invite.expiresAt <= now) throw unprocessable('INVITE_INVALID', 'Ссылка активации недействительна или срок её действия истёк');
     const passwordHash = await this.hashPassword(password);
     await this.d.prisma.$transaction(async (tx) => {
       const used = await tx.userInvite.updateMany({ where: { id: invite.id, usedAt: null }, data: { usedAt: now } });
-      if (used.count !== 1) throw unprocessable('INVITE_INVALID', 'Aktivlashtirish havolasi allaqachon ishlatilgan');
+      if (used.count !== 1) throw unprocessable('INVITE_INVALID', 'Ссылка активации уже использована');
       const user = await tx.user.update({ where: { id: invite.userId }, data: { passwordHash, status: 'active', version: { increment: 1 } } });
       await audit(tx, { type: 'user', id: user.id, companyId: user.companyId, role: user.role, email: user.email }, { entityType: 'user', entityId: user.id, action: 'activated' });
     });
@@ -186,8 +184,8 @@ export class AuthService {
     requireCap(actor, 'users.manage');
     await this.d.prisma.$transaction(async (tx) => {
       const user = await tx.user.findFirst({ where: { id: userId, companyId: actor.companyId } });
-      if (!user) throw notFound('Foydalanuvchi');
-      if (user.id === actor.id) throw forbidden('O‘z rolingizni o‘zgartira olmaysiz');
+      if (!user) throw notFound('Пользователь');
+      if (user.id === actor.id) throw forbidden('Нельзя изменить собственную роль');
       await tx.user.update({ where: { id: user.id }, data: { role, version: { increment: 1 } } });
       await tx.session.updateMany({ where: { userId: user.id, revokedAt: null }, data: { revokedAt: this.d.clock.now() } });
       await audit(tx, actor, { entityType: 'user', entityId: user.id, action: 'role_changed', oldValue: { role: user.role }, newValue: { role } });
@@ -206,8 +204,8 @@ export class AuthService {
     requireCap(actor, 'users.manage');
     return this.d.prisma.$transaction(async (tx) => {
       const user = await tx.user.findFirst({ where: { id: userId, companyId: actor.companyId } });
-      if (!user) throw notFound('Foydalanuvchi');
-      if (user.role !== 'MANAGER') throw unprocessable('ROLE_HAS_DEFAULT', 'Rahbar va administratorda tannarx/foyda huquqi rol bo‘yicha standart mavjud', { role: 'not_manager' });
+      if (!user) throw notFound('Пользователь');
+      if (user.role !== 'MANAGER') throw unprocessable('ROLE_HAS_DEFAULT', 'Доступ к себестоимости и прибыли настраивается только для менеджера (у администратора он есть по роли)', { role: 'not_manager' });
       const cap = GRANTABLE_CAPABILITIES[0];
       const had = user.extraCapabilities.includes(cap);
       if (had === enabled) return { id: user.id, financeCostView: had };
@@ -223,36 +221,25 @@ export class AuthService {
     const now = this.d.clock.now();
     return this.d.prisma.$transaction(async (tx) => {
       const user = await tx.user.findFirst({ where: { id: userId, companyId: actor.companyId } });
-      if (!user) throw notFound('Foydalanuvchi');
-      if (user.id === actor.id) throw forbidden('O‘zingizni bloklay olmaysiz');
+      if (!user) throw notFound('Пользователь');
+      if (user.id === actor.id) throw forbidden('Нельзя заблокировать самого себя');
       if (successorId) {
         const successor = await tx.user.findFirst({ where: { id: successorId, companyId: actor.companyId, status: 'active' } });
-        if (!successor) throw unprocessable('SUCCESSOR_INVALID', 'Yangi mas’ul faol foydalanuvchi bo‘lishi kerak');
+        if (!successor) throw unprocessable('SUCCESSOR_INVALID', 'Новый ответственный должен быть активным пользователем');
       }
       await tx.user.update({ where: { id: user.id }, data: { status: 'blocked', blockedAt: now, version: { increment: 1 } } });
       await tx.session.updateMany({ where: { userId: user.id, revokedAt: null }, data: { revokedAt: now } });
       await tx.managerPoolMember.updateMany({ where: { companyId: actor.companyId, userId: user.id }, data: { available: false } });
       let moved = { leads: 0, orders: 0, reminders: 0 };
       if (successorId) {
-        const openLeads = await tx.lead.findMany({ where: { companyId: actor.companyId, ownerId: user.id, stage: { notIn: ['WON', 'LOST'] }, deletedAt: null }, select: { id: true } });
+        const openLeads = await tx.lead.findMany({ where: { companyId: actor.companyId, ownerId: user.id, stage: { notIn: ['WON', 'LOST'] }, deletedAt: null } });
         moved = {
           leads: openLeads.length,
           orders: (await tx.order.updateMany({ where: { companyId: actor.companyId, ownerId: user.id, fulfillmentState: { notIn: ['completed', 'cancelled'] } }, data: { ownerId: successorId } })).count,
           reminders: (await tx.reminderOccurrence.updateMany({ where: { companyId: actor.companyId, assigneeId: user.id, state: { in: ['scheduled', 'due', 'snoozed', 'dispatching'] } }, data: { assigneeId: successorId } })).count,
         };
         await tx.flightSegment.updateMany({ where: { companyId: actor.companyId, ownerId: user.id, active: true }, data: { ownerId: successorId } });
-        // Lead ownership is owned by amoCRM: the reassignment goes through the normal path.
-        await tx.outboxOperation.createMany({
-          data: openLeads.map((l) => ({
-            companyId: actor.companyId,
-            operationKey: `lead.reassign:${l.id}:block:${user.id}`,
-            target: 'amocrm',
-            action: 'lead.reassign',
-            payload: { leadId: l.id, toUserId: successorId, reason: 'user_blocked' },
-            correlationId: `block:${user.id}`,
-          })),
-          skipDuplicates: true,
-        });
+        for (const l of openLeads) await reassignLeadLocal(tx, actor, l, successorId, 'user_blocked', now);
       }
       await audit(tx, actor, { entityType: 'user', entityId: user.id, action: 'blocked', newValue: { successorId, moved } });
       return moved;
@@ -263,7 +250,7 @@ export class AuthService {
     requireCap(actor, 'users.manage');
     return this.d.prisma.user.findMany({
       where: { companyId: actor.companyId },
-      select: { id: true, email: true, fullName: true, role: true, status: true, amoUserId: true, mfaEnabled: true, lastLoginAt: true, extraCapabilities: true },
+      select: { id: true, email: true, login: true, fullName: true, role: true, status: true, mfaEnabled: true, lastLoginAt: true, extraCapabilities: true },
       orderBy: { fullName: 'asc' },
     });
   }

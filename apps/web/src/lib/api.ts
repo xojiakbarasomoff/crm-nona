@@ -30,14 +30,14 @@ export async function api<T = unknown>(path: string, init: { method?: string; bo
   try {
     res = await fetch(path, { method, headers, body: init.body === undefined ? undefined : JSON.stringify(init.body), credentials: 'same-origin', cache: 'no-store' });
   } catch {
-    throw new ApiError(0, 'NETWORK', 'Server bilan aloqa yo‘q. Internetni tekshiring.');
+    throw new ApiError(0, 'NETWORK', 'Нет связи с сервером. Проверьте подключение к интернету.');
   }
   const text = await res.text();
   const data = text ? JSON.parse(text) : null;
   if (!res.ok) {
     const e = data?.error ?? {};
     if (res.status === 401 && typeof window !== 'undefined' && !path.includes('/auth/')) window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
-    throw new ApiError(res.status, e.code ?? 'ERROR', e.message ?? `Xato ${res.status}`, e.field_errors ?? {}, e.details ?? {});
+    throw new ApiError(res.status, e.code ?? 'ERROR', e.message ?? `Ошибка ${res.status}`, e.field_errors ?? {}, e.details ?? {});
   }
   return data as T;
 }
@@ -155,37 +155,43 @@ export const tashkentLocalToIso = (local: string) => new Date(`${local}:00+05:00
 export const newKey = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
 export const STAGE_LABELS: Record<string, string> = {
-  NEW: 'Yangi lid',
-  CONTACTED: 'Aloqa o‘rnatildi',
-  QUALIFIED: 'Talablar aniqlandi',
-  PREPARING_OFFER: 'Taklif tayyorlanmoqda',
-  OFFER_SENT: 'Taklif yuborildi',
-  AWAITING_PAYMENT: 'To‘lov kutilmoqda',
-  WON: 'Sotuv yakunlandi',
-  LOST: 'Bekor qilindi',
-  FOLLOW_UP: 'Qayta aloqa',
+  NEW: 'Новый лид',
+  CONTACTED: 'Контакт установлен',
+  QUALIFIED: 'Потребности выяснены',
+  PREPARING_OFFER: 'Готовится предложение',
+  OFFER_SENT: 'Предложение отправлено',
+  AWAITING_PAYMENT: 'Ожидается оплата',
+  WON: 'Продажа завершена',
+  LOST: 'Отменён',
+  FOLLOW_UP: 'Повторный контакт',
 };
 
 export const SOURCE_LABELS: Record<string, string> = {
   instagram_lead_ads: 'Instagram Lead Ads',
-  meta_lead_ads: 'Meta Lead Ads (joy noma’lum)',
+  meta_lead_ads: 'Meta Lead Ads (место неизвестно)',
   instagram_direct: 'Instagram Direct',
-  amocrm: 'amoCRM',
-  manual: 'Qo‘lda kiritilgan',
-  other: 'Boshqa',
+  amocrm: 'Прежняя система',
+  manual: 'Добавлен вручную',
+  other: 'Другое',
+};
+
+export const ROLE_LABELS: Record<string, string> = {
+  ADMIN: 'Администратор',
+  MANAGER: 'Менеджер',
+  USER: 'Пользователь',
 };
 
 export const CHECK_LABELS: Record<string, string> = {
-  pending: 'Tekshirish kutilmoqda',
-  due: 'Tekshiruv vaqti keldi',
-  in_progress: 'Reys tekshirilmoqda',
-  checked: 'Reys ma’lumotlari tekshirildi',
-  recheck_required: 'Qayta tekshirish talab etiladi',
+  pending: 'Ожидает проверки',
+  due: 'Пора проверить',
+  in_progress: 'Рейс проверяется',
+  checked: 'Данные рейса проверены',
+  recheck_required: 'Нужна повторная проверка',
 };
 
 export const OP_STATUS_LABELS: Record<string, string> = {
-  scheduled: 'Rejada',
-  schedule_changed: 'Reys vaqti o‘zgardi',
-  cancelled: 'Reys bekor qilindi',
-  departed: 'Uchib ketdi',
+  scheduled: 'По расписанию',
+  schedule_changed: 'Время рейса изменилось',
+  cancelled: 'Рейс отменён',
+  departed: 'Вылетел',
 };

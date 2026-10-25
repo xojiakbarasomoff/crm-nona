@@ -2,8 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import { DateTime } from 'luxon';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Core } from '../../apps/api/src/core';
-import { DEMO_STATUS_IDS, type DemoAmoRestClient } from '@crm/integrations';
-import { amoCrmSignal, drain, login, makeApp, makeCore, newLead, TestClock, type Session } from './helpers';
+import { drain, login, makeApp, makeCore, markWon, newLead, TestClock, type Session } from './helpers';
 
 const clock = new TestClock();
 let core: Core;
@@ -106,25 +105,23 @@ describe('orders and money (AC15, AC31)', () => {
     const r3 = await s.post(url, { ...body, amount: '600.00' }, { 'Idempotency-Key': `pay-${order.body.id}-2` });
     expect(r3.body.order.paymentState).toBe('paid');
     const r4 = await s.post(url, { ...body, amount: '100000.00', currency: 'UZS' }, { 'Idempotency-Key': `pay-${order.body.id}-3` });
-    expect(r4.body.paymentStateNote).toContain('kurs');
+    expect(r4.body.paymentStateNote).toContain('курс');
     expect(r4.body.order.paymentState).toBe('paid');
     expect((await s.post(url, { ...body, amount: '-5.00' }, { 'Idempotency-Key': `pay-${order.body.id}-4` })).status).toBe(422);
     await expect(p().payment.deleteMany({ where: { orderId: order.body.id } })).rejects.toThrow();
   });
 
   it('AC31: dashboard sums UZS and USD separately and never adds them', async () => {
-    const amo = core.deps.adapters.amoRest({ id: '', accountDomain: null, accountId: '' }) as DemoAmoRestClient;
     const ids: string[] = [];
     for (const [amount, currency] of [['100.00', 'USD'], ['1500000.00', 'UZS'], ['50.50', 'USD']] as const) {
       const lead = await newLead(app, core);
       const s = await ownerSession(lead.ownerId!);
       await s.post('/api/v1/orders', { leadId: lead.id, agreedAmount: amount, currency });
-      await amo.simulateNativeEdit(lead.amoLeadId!, { statusId: DEMO_STATUS_IDS.WON }, new Date(Date.now() + 1000));
-      await amoCrmSignal(app, core, lead.amoLeadId!);
+      await markWon(core, lead.id);
       ids.push(lead.id);
     }
     await drain(core);
-    const head = await login(app, 'rahbar@demo.local');
+    const head = await login(app, 'admin2@demo.local');
     const today = DateTime.now().setZone('Asia/Tashkent').toFormat('yyyy-MM-dd');
     const tomorrow = DateTime.now().setZone('Asia/Tashkent').plus({ days: 1 }).toFormat('yyyy-MM-dd');
     const dash = await head.get(`/api/v1/dashboard?from=${today}&to=${tomorrow}`);
@@ -167,7 +164,7 @@ describe('segments, time zones and milestones (AC16, AC17, AC18, AC19)', () => {
     const seg = await p().flightSegment.findUniqueOrThrow({ where: { id: segIds[0]! } });
     const t168 = occ.find((o) => o.segmentId === segIds[0] && o.milestone === 'T-168h')!;
     expect(t168.dueAt.getTime()).toBe(seg.departureAtUtc!.getTime() - 168 * 3600_000);
-    expect(t168.body).toContain('aeroport vaqti, Asia/Tashkent');
+    expect(t168.body).toContain('время аэропорта, Asia/Tashkent');
   });
 
   it('AC19: order entered 2h before departure → exactly one urgent check', async () => {
@@ -188,7 +185,7 @@ describe('segments, time zones and milestones (AC16, AC17, AC18, AC19)', () => {
 });
 
 describe('scheduler, checks and revisions (AC18, AC20–AC25)', () => {
-  it('AC18/AC20: due milestone → one notification + one amoCRM task; checking T-168h does not complete T-72h', async () => {
+  it('AC18/AC20: due milestone → one notification + one task; checking T-168h does not complete T-72h', async () => {
     const dep = new Date(Date.now() + 10 * 86400_000);
     const { orderId, segIds, s } = await confirmedOrder([dep]);
     clock.set(new Date(dep.getTime() - 168 * 3600_000 + 60_000));
@@ -199,7 +196,7 @@ describe('scheduler, checks and revisions (AC18, AC20–AC25)', () => {
     expect(t168.state).toBe('due');
     expect(await p().notification.count({ where: { occurrenceId: t168.id } })).toBe(1);
     const task = await p().crmTask.findFirstOrThrow({ where: { entityType: 'occurrence', entityId: t168.id } });
-    expect(task.amoTaskId).not.toBeNull();
+    expect(task).toMatchObject({ kind: 'flight_check', state: 'pending' });
     expect((await p().flightSegment.findUniqueOrThrow({ where: { id: segIds[0]! } })).checkState).toBe('due');
 
     clock.real();
@@ -279,7 +276,7 @@ describe('scheduler, checks and revisions (AC18, AC20–AC25)', () => {
     expect((await p().flightSegment.findUniqueOrThrow({ where: { id: seg.id } })).notificationState).toBe('required');
   });
 
-  it('AC23: closing the amoCRM task (or completing via API) never counts as a flight check', async () => {
+  it('AC23: closing the task (or completing via API) never counts as a flight check', async () => {
     const dep = new Date(Date.now() + 10 * 86400_000);
     const { orderId, segIds, s } = await confirmedOrder([dep]);
     clock.set(new Date(dep.getTime() - 168 * 3600_000 + 60_000));
@@ -288,8 +285,7 @@ describe('scheduler, checks and revisions (AC18, AC20–AC25)', () => {
     await drain(core);
     const occ = await p().reminderOccurrence.findFirstOrThrow({ where: { orderId, milestone: 'T-168h' } });
     const task = await p().crmTask.findFirstOrThrow({ where: { entityId: occ.id } });
-    const amo = core.deps.adapters.amoRest({ id: '', accountDomain: null, accountId: '' }) as DemoAmoRestClient;
-    await amo.completeTask(task.amoTaskId!, 'yopildi');
+    await p().crmTask.update({ where: { id: task.id }, data: { state: 'completed' } });
     const r = await s.post(`/api/v1/reminders/${occ.id}/complete`, { note: 'qildim' });
     expect(r.status).toBe(422);
     expect(r.body.error.code).toBe('CHECK_RESULT_REQUIRED');
@@ -343,7 +339,7 @@ describe('scheduler, checks and revisions (AC18, AC20–AC25)', () => {
     await core.reminders.dispatch(occ.id);
     expect(await p().notification.count({ where: { occurrenceId: occ.id } })).toBe(1);
     expect(await p().crmTask.count({ where: { entityId: occ.id } })).toBe(1);
-    expect(await p().notificationDelivery.count({ where: { occurrenceId: occ.id } })).toBe(2);
+    expect(await p().notificationDelivery.count({ where: { occurrenceId: occ.id } })).toBe(1); // faqat ilova ichidagi yetkazish (tashqi CRM vazifasi yo‘q)
     clock.real();
   });
 
@@ -358,7 +354,7 @@ describe('scheduler, checks and revisions (AC18, AC20–AC25)', () => {
     clock.set(new Date(due.getTime() + 16 * 60_000));
     await tick();
     expect((await p().reminderOccurrence.findUniqueOrThrow({ where: { id: t3.id } })).escalatedAt).not.toBeNull();
-    const headId = (await p().user.findUniqueOrThrow({ where: { email: 'rahbar@demo.local' } })).id;
+    const headId = (await p().user.findUniqueOrThrow({ where: { email: 'admin2@demo.local' } })).id;
     expect(await p().notification.count({ where: { occurrenceId: t3.id, userId: headId, kind: 'reminder_escalated' } })).toBe(1);
     clock.set(new Date(dep.getTime() + 60_000));
     await tick();

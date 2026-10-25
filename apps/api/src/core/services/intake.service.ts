@@ -1,7 +1,7 @@
 import type { Channel, IntegrationConnection, Lead, Prisma, Tx } from '@crm/database';
 import { decryptSecret } from '@crm/database';
-import { decideOutbound, normalizeEmail, normalizePhone, type CompanyPhoneRule } from '@crm/domain';
-import type { ChatsOutgoingReply, IgMessageEvent, IgReadEvent, LeadgenEvent, MetaLeadData } from '@crm/integrations';
+import { normalizeEmail, normalizePhone, type CompanyPhoneRule } from '@crm/domain';
+import type { IgMessageEvent, IgReadEvent, LeadgenEvent, MetaLeadData } from '@crm/integrations';
 import { audit } from '../audit';
 import { integrationActor, type CoreDeps } from '../context';
 import { headRecipients, notify, publishEvent } from '../events';
@@ -9,7 +9,7 @@ import { enqueueOutbox } from '../queue';
 import { identifyContact } from './identity.service';
 import { IG_PLACEHOLDER_NAME, InstagramProfileService } from './instagram-profile.service';
 import { LeadsService } from './leads.service';
-import { markLiveVerified, SENDABLE_DEGRADED_REASONS } from './live-verification';
+import { markLiveVerified } from './live-verification';
 
 export class ConnectionPausedError extends Error {
   constructor(readonly connectionId: string) {
@@ -33,7 +33,7 @@ const DEFAULT_FIELD_MAP: NonNullable<LeadFormMapping['fields']> = {
   destination: 'destination',
 };
 
-export const UNSUPPORTED_MEDIA_TEXT = 'Ushbu xabar turini Instagram’da oching';
+export const UNSUPPORTED_MEDIA_TEXT = 'Откройте это сообщение в Instagram';
 
 export function connectionToken(conn: IntegrationConnection, key: Buffer): string {
   if (!conn.credentialsEnc) return '';
@@ -80,7 +80,7 @@ export class IntakeService {
     this.profiles = new InstagramProfileService(d);
   }
 
-  private async connection(provider: 'META_LEADS' | 'META_DIRECT' | 'AMOCRM_CHATS', accountId: string) {
+  private async connection(provider: 'META_LEADS' | 'META_DIRECT', accountId: string) {
     return this.d.prisma.integrationConnection.findFirst({ where: { provider, accountId } });
   }
 
@@ -156,7 +156,7 @@ export class IntakeService {
         inquiryId: inquiry.id,
         channel,
         placement,
-        name: `${local.full_name ?? 'Lead Ads'} — ${local.destination ?? 'so‘rov'}`,
+        name: `${local.full_name ?? 'Lead Ads'} — ${local.destination ?? 'заявка'}`,
         serviceType: (local.service_type ?? mapping?.serviceType ?? null) as string | null,
         at: receivedAt,
         actor,
@@ -200,7 +200,7 @@ export class IntakeService {
     if (active.length === 1) return { lead: active[0]!, created: false };
     if (active.length > 1) {
       const owner = active[0]!.ownerId;
-      if (owner) await notify(tx, { companyId: p.companyId, userId: owner, kind: 'inquiry_needs_lead', dedupeKey: `inquiry_needs_lead:${p.inquiryId}`, title: 'Yangi murojaat: qaysi safarga tegishli ekanini tanlang', link: `/contacts/${p.contactId}` });
+      if (owner) await notify(tx, { companyId: p.companyId, userId: owner, kind: 'inquiry_needs_lead', dedupeKey: `inquiry_needs_lead:${p.inquiryId}`, title: 'Новое обращение: выберите, к какой поездке оно относится', link: `/contacts/${p.contactId}` });
       return { lead: null, created: false };
     }
     const lead = await this.leads.createLead(tx, { companyId: p.companyId, contactId: p.contactId, name: p.name, channel: p.channel, placement: p.placement, inquiryId: p.inquiryId, serviceType: p.serviceType, at: p.at, actor: p.actor, deferAssignment: true });
@@ -310,7 +310,7 @@ export class IntakeService {
       }
 
       const text = evt.isUnsupported ? UNSUPPORTED_MEDIA_TEXT : evt.text;
-      const message = await tx.message.create({
+      await tx.message.create({
         data: {
           companyId,
           conversationId: conversation.id,
@@ -329,9 +329,6 @@ export class IntakeService {
         where: { id: conversation.id },
         data: { lastInboundAt: evt.timestamp, ...(conversation.firstInboundAt ? {} : { firstInboundAt: evt.timestamp }) },
       });
-      if (this.d.adapters.amoChats) {
-        await enqueueOutbox(tx, { companyId, operationKey: `chat.import:${message.id}`, target: 'amocrm_chats', action: 'chat.import', payload: { messageId: message.id } });
-      }
       await this.finishAssignments(tx);
       return { state: 'processed' as const, conversationId: conversation.id, ownerLeadId: leadId };
     }, INTAKE_TX);
@@ -393,63 +390,6 @@ export class IntakeService {
       data: { state: 'read' },
     });
     return res.count ? 'processed' : 'ignored';
-  }
-
-  // ---------------- Reply typed in amoCRM (TZ §9.2) ----------------
-
-  async processChatReply(reply: ChatsOutgoingReply, connectionKey: string): Promise<'queued' | 'blocked' | 'duplicate' | 'ignored'> {
-    const chatConn = await this.d.prisma.integrationConnection.findFirst({ where: { provider: 'AMOCRM_CHATS', routeToken: connectionKey } });
-    if (!chatConn) return 'ignored';
-    const companyId = chatConn.companyId;
-    const conversation = await this.d.prisma.conversation.findFirst({ where: { id: reply.conversationId, companyId } });
-    if (!conversation) return 'ignored';
-    const directConn = await this.d.prisma.integrationConnection.findFirstOrThrow({ where: { id: conversation.connectionId } });
-    const operationKey = `direct.send:${reply.amoMessageId}`;
-
-    return this.d.prisma.$transaction(async (tx) => {
-      const dup = await tx.message.findFirst({ where: { companyId, amoMessageId: reply.amoMessageId } });
-      if (dup) return 'duplicate' as const;
-      const author = reply.authorAmoUserId ? await tx.user.findFirst({ where: { companyId, amoUserId: reply.authorAmoUserId, status: 'active' } }) : null;
-      const lead = conversation.leadId ? await tx.lead.findUnique({ where: { id: conversation.leadId } }) : null;
-      const senderMayReply = !!author && (author.role !== 'MANAGER' || lead?.ownerId === author.id);
-      const decision = decideOutbound(
-        {
-          now: this.d.clock.now(),
-          lastCustomerMessageAt: conversation.lastInboundAt,
-          purpose: 'human_reply',
-          // Haqiqiy sinovdan oldingi (awaiting_live_verification) ulanishdan ham javob yuborishga urinish mumkin, aks holda chiquvchi sinov o'tolmaydi.
-          connectionHealthy: !directConn.disconnectedAt && (directConn.health === 'ok' || (directConn.health === 'degraded' && !!directConn.healthReason && SENDABLE_DEGRADED_REASONS.includes(directConn.healthReason))),
-          senderMayReply,
-          recipientScopedIdVerified: reply.receiverId === conversation.scopedPeerId,
-        },
-        { standardWindowHours: this.d.config.meta.standardWindowHours, humanAgentWindowHours: this.d.config.meta.humanAgentWindowHours, humanAgentPermissionGranted: this.d.config.meta.humanAgentGranted },
-      );
-      const message = await tx.message.create({
-        data: {
-          companyId,
-          conversationId: conversation.id,
-          connectionId: conversation.connectionId,
-          direction: 'outbound',
-          type: 'text',
-          content: reply.text,
-          state: decision.allowed ? 'queued' : 'failed',
-          actorType: 'human',
-          actorUserId: author?.id ?? null,
-          amoMessageId: reply.amoMessageId,
-          operationId: reply.amoMessageId,
-          error: decision.allowed ? null : decision.reason,
-        },
-      });
-      const actor = integrationActor(companyId, 'amocrm_chat');
-      if (!decision.allowed) {
-        await enqueueOutbox(tx, { companyId, operationKey: `chat.status:${message.id}:failed`, target: 'amocrm_chats', action: 'chat.status', payload: { messageId: message.id, status: 'failed', error: decision.message } });
-        if (author) await notify(tx, { companyId, userId: author.id, kind: 'direct_blocked', dedupeKey: `direct_blocked:${message.id}`, title: 'Instagram xabari yuborilmadi', body: decision.message, link: lead ? `/leads/${lead.id}` : null });
-        await audit(tx, actor, { entityType: 'message', entityId: message.id, action: 'outbound_blocked', newValue: { reason: decision.reason } });
-        return 'blocked' as const;
-      }
-      await enqueueOutbox(tx, { companyId, operationKey, target: 'meta', action: 'meta.send', payload: { messageId: message.id, tag: decision.tag } });
-      return 'queued' as const;
-    });
   }
 
   async notifyHeads(tx: Tx, companyId: string, kind: string, title: string, key: string) {

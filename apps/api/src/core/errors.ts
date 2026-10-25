@@ -16,13 +16,13 @@ export class AppError extends Error {
   }
 }
 
-export const notFound = (what = 'Obyekt') => new AppError(404, 'NOT_FOUND', `${what} topilmadi`);
-export const forbidden = (message = 'Bu amal uchun huquqingiz yo‘q') => new AppError(403, 'FORBIDDEN', message);
-export const unauthorized = (message = 'Tizimga kiring') => new AppError(401, 'UNAUTHORIZED', message);
+export const notFound = (what = 'Объект') => new AppError(404, 'NOT_FOUND', `Не найдено: ${what.toLowerCase()}`);
+export const forbidden = (message = 'У вас нет прав на это действие') => new AppError(403, 'FORBIDDEN', message);
+export const unauthorized = (message = 'Войдите в систему') => new AppError(401, 'UNAUTHORIZED', message);
 export const conflict = (code: string, message: string, details?: Record<string, unknown>) => new AppError(409, code, message, undefined, details);
 export const unprocessable = (code: string, message: string, fieldErrors?: Record<string, string>, details?: Record<string, unknown>) =>
   new AppError(422, code, message, fieldErrors, details);
-export const tooMany = (message = 'Juda ko‘p urinish. Keyinroq qayta urinib ko‘ring') => new AppError(429, 'RATE_LIMITED', message);
+export const tooMany = (message = 'Слишком много попыток. Повторите позже') => new AppError(429, 'RATE_LIMITED', message);
 
 export function isUniqueViolation(err: unknown, target?: string): boolean {
   const e = err as { code?: string; meta?: { target?: string[] | string } };

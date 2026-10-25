@@ -5,7 +5,7 @@ import type { ApiError } from '../lib/api';
 import { CURRENCIES, fmtMoney, MEAL_PLANS, profitPreview, SERVICE_TYPE_LABELS, SUPPLIER_KIND_LABELS } from '../lib/format';
 import { Badge, Field, FormError, Help, IsoDateField, LocalDateTimeField, Section } from './ui';
 
-/** Tannarx va foyda maydonlari faqat `finance.cost.view` huquqi bo'lsa keladi (`costHidden=false`). */
+/** Поля себестоимости и прибыли приходят только при праве `finance.cost.view` (`costHidden=false`). */
 export interface FinanceView {
   costHidden: boolean;
   hasPrice: boolean;
@@ -20,13 +20,13 @@ export interface FinanceView {
       lines: number;
       net?: string | null;
       netComplete?: boolean;
-      /** Dastlabki foyda (qaytarimsiz). */
+      /** Первоначальная прибыль (без возвратов). */
       profit?: string | null;
       profitState?: 'known' | 'undetermined';
       marginPercent?: string | null;
       supplierRefunded?: string;
       netAfterRefund?: string | null;
-      /** Qaytarimdan keyingi foyda. */
+      /** Прибыль после возвратов. */
       profitAfterRefund?: string | null;
       missingNetLines?: number;
     }
@@ -66,9 +66,9 @@ export interface SupplierRef {
 
 const isNeg = (v: string | null) => !!v && v.startsWith('-');
 
-/** Foyda: avtomatik, qo'lda tahrirlanmaydi. Tannarx yo'q bo'lsa «Aniqlanmagan» (0 emas). */
+/** Прибыль считается автоматически и вручную не редактируется. Нет себестоимости — «Не определена» (не 0). */
 export function ProfitCell({ profit, currency }: { profit: string | null; currency: string }) {
-  if (profit === null) return <Badge tone="warn">Aniqlanmagan</Badge>;
+  if (profit === null) return <Badge tone="warn">Не определена</Badge>;
   return <b className={isNeg(profit) ? 'neg' : 'pos'}>{fmtMoney(profit, currency)}</b>;
 }
 
@@ -77,18 +77,18 @@ export function FinanceSummary({ finance }: { finance: FinanceView }) {
   const cost = !finance.costHidden;
   if (!cost) {
     return (
-      <Section title="Sotuv va qaytarimlar (valyutalar alohida)">
+      <Section title="Продажи и возвраты (валюты отдельно)">
         {rows.length === 0 ? (
-          <div className="state empty">Narx hali kiritilmagan.</div>
+          <div className="state empty">Цена ещё не указана.</div>
         ) : (
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Valyuta</th>
-                  <th>Sotuv narxi</th>
-                  <th>Mijozga qaytarilgan</th>
-                  <th>Qaytarimdan keyingi sotuv</th>
+                  <th>Валюта</th>
+                  <th>Цена продажи</th>
+                  <th>Возвращено клиенту</th>
+                  <th>Продажа после возвратов</th>
                 </tr>
               </thead>
               <tbody>
@@ -104,24 +104,24 @@ export function FinanceSummary({ finance }: { finance: FinanceView }) {
             </table>
           </div>
         )}
-        <p className="hint">Tannarx va foydani ko‘rish uchun alohida ruxsat kerak (administrator beradi).</p>
+        <p className="hint">Чтобы видеть себестоимость и прибыль, нужно отдельное разрешение (выдаёт администратор).</p>
       </Section>
     );
   }
   return (
-    <Section title="Foyda hisobi (valyutalar alohida)">
+    <Section title="Расчёт прибыли (валюты отдельно)">
       {rows.length === 0 ? (
-        <div className="state empty">Narx hali kiritilmagan. Sotuv narxi va tannarxni kiriting — foyda avtomatik hisoblanadi.</div>
+        <div className="state empty">Цена ещё не указана. Введите цену продажи и себестоимость — прибыль посчитается автоматически.</div>
       ) : (
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Valyuta</th>
-                <th>Sotuv narxi</th>
-                <th>Tannarx</th>
-                <th>Dastlabki foyda</th>
-                <th>Marja</th>
+                <th>Валюта</th>
+                <th>Цена продажи</th>
+                <th>Себестоимость</th>
+                <th>Первоначальная прибыль</th>
+                <th>Маржа</th>
               </tr>
             </thead>
             <tbody>
@@ -130,12 +130,12 @@ export function FinanceSummary({ finance }: { finance: FinanceView }) {
                   <td>{ccy}</td>
                   <td>{fmtMoney(r.selling, ccy)}</td>
                   <td>
-                    {r.net == null ? <span className="muted">kiritilmagan</span> : fmtMoney(r.net, ccy)}
-                    {r.net != null && !r.netComplete && <div className="muted">qisman ({r.missingNetLines} qatorda yo‘q)</div>}
+                    {r.net == null ? <span className="muted">не указана</span> : fmtMoney(r.net, ccy)}
+                    {r.net != null && !r.netComplete && <div className="muted">частично (нет в строках: {r.missingNetLines})</div>}
                   </td>
                   <td>
                     <ProfitCell profit={r.profit ?? null} currency={ccy} />
-                    {r.profit == null && <div className="muted">Tannarx to‘liq emas — 0 deb hisoblanmaydi</div>}
+                    {r.profit == null && <div className="muted">Себестоимость неполная — не считается за 0</div>}
                   </td>
                   <td>{r.marginPercent == null ? '—' : `${r.marginPercent.replace('.', ',')}%`}</td>
                 </tr>
@@ -146,17 +146,17 @@ export function FinanceSummary({ finance }: { finance: FinanceView }) {
       )}
       {rows.length > 0 && (
         <>
-          <h3>Qaytarimdan keyingi holat</h3>
+          <h3>Состояние после возвратов</h3>
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Valyuta</th>
-                  <th>Mijozga qaytarilgan</th>
-                  <th>Yetkazib beruvchidan qaytgan</th>
-                  <th>Sotuv − mijoz qaytarimi</th>
-                  <th>Tannarx − yetkazib beruvchi qaytarimi</th>
-                  <th>Qaytarimdan keyingi foyda</th>
+                  <th>Валюта</th>
+                  <th>Возвращено клиенту</th>
+                  <th>Возвращено поставщиком</th>
+                  <th>Продажа − возврат клиенту</th>
+                  <th>Себестоимость − возврат поставщика</th>
+                  <th>Прибыль после возвратов</th>
                 </tr>
               </thead>
               <tbody>
@@ -175,11 +175,11 @@ export function FinanceSummary({ finance }: { finance: FinanceView }) {
               </tbody>
             </table>
           </div>
-          {finance.refundCurrencyMismatch && <div className="state error">Qaytarim valyutasi buyurtma narxlari valyutasiga mos emas — qaytarimdan keyingi foyda hisoblanmadi.</div>}
+          {finance.refundCurrencyMismatch && <div className="state error">Валюта возврата не совпадает с валютой цен заказа — прибыль после возвратов не рассчитана.</div>}
         </>
       )}
       <p className="hint">
-        <b>Dastlabki foyda = sotuv narxi − tannarx.</b> <b>Qaytarimdan keyingi foyda = (sotuv − mijozga qaytarilgan summa) − (tannarx − yetkazib beruvchidan qaytgan summa).</b> Foyda avtomatik hisoblanadi va qo‘lda tahrirlanmaydi; manfiy bo‘lishi mumkin. Qo‘shimcha xarajatlar (komissiya, soliq, bank to‘lovlari, valyuta farqi) hisobga olinmagan, shuning uchun bu buxgalteriya bo‘yicha yakuniy «sof foyda» emas. Turpaket narxi va uning ichiga kiritilgan xizmatlar ikki marta sanalmaydi.
+        <b>Первоначальная прибыль = цена продажи − себестоимость.</b> <b>Прибыль после возвратов = (продажа − возвращено клиенту) − (себестоимость − возвращено поставщиком).</b> Прибыль считается автоматически, вручную не редактируется и может быть отрицательной. Дополнительные расходы (комиссии, налоги, банковские платежи, курсовая разница) не учтены, поэтому это не итоговая «чистая прибыль» по бухгалтерии. Цена турпакета и включённые в него услуги не считаются дважды.
       </p>
     </Section>
   );
@@ -193,7 +193,7 @@ export interface PricingOrder {
   note: string | null;
 }
 
-/** Turpaket darajasidagi narx: sotuv narxi (selling), tannarx (net), valyuta, dalil va izoh. */
+/** Цена на уровне турпакета: цена продажи, себестоимость, валюта, подтверждение и заметка. */
 export function PricingForm({ order, disabled, canCost = true, onSave }: { order: PricingOrder; disabled?: boolean; canCost?: boolean; onSave: (b: Record<string, unknown>) => void }) {
   const [amount, setAmount] = useState(order.agreedAmount ?? '');
   const [net, setNet] = useState(order.netPrice ?? '');
@@ -214,15 +214,15 @@ export function PricingForm({ order, disabled, canCost = true, onSave }: { order
       }}
     >
       <div className="row">
-        <Field label="Sotuv narxi (mijozga, selling price)">
+        <Field label="Цена продажи (для клиента)">
           <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" placeholder="1200.00" disabled={disabled} />
         </Field>
         {canCost && (
-          <Field label="Tannarx (turoperatordan, net price)" hint="Bo‘sh = noma’lum (0 emas)">
+          <Field label="Себестоимость (от туроператора)" hint="Пусто = неизвестно (не 0)">
             <input value={net} onChange={(e) => setNet(e.target.value)} inputMode="decimal" placeholder="1000.00" disabled={disabled} />
           </Field>
         )}
-        <Field label="Valyuta">
+        <Field label="Валюта">
           <select value={currency} onChange={(e) => setCurrency(e.target.value)} disabled={disabled}>
             {CURRENCIES.map((c) => (
               <option key={c}>{c}</option>
@@ -231,20 +231,20 @@ export function PricingForm({ order, disabled, canCost = true, onSave }: { order
         </Field>
         {canCost && (
           <div className="field profit-preview" aria-live="polite">
-            <span className="field-label">Foyda (avtomatik)</span>
-            {preview === null ? <span className="muted">{amount ? 'tannarx kiriting' : '—'}</span> : <b className={isNeg(preview) ? 'neg' : 'pos'}>{fmtMoney(preview, currency)}</b>}
+            <span className="field-label">Прибыль (автоматически)</span>
+            {preview === null ? <span className="muted">{amount ? 'укажите себестоимость' : '—'}</span> : <b className={isNeg(preview) ? 'neg' : 'pos'}>{fmtMoney(preview, currency)}</b>}
           </div>
         )}
       </div>
       <div className="row">
-        <Field label="Sotuv tasdiqlash dalili">
+        <Field label="Подтверждение продажи">
           <input value={evidence} onChange={(e) => setEvidence(e.target.value)} disabled={disabled} />
         </Field>
-        <Field label="Buyurtma qaydi">
+        <Field label="Заметка к заказу">
           <input value={note} onChange={(e) => setNote(e.target.value)} disabled={disabled} />
         </Field>
         <button className="btn" type="submit" disabled={disabled}>
-          Saqlash
+          Сохранить
         </button>
       </div>
     </form>
@@ -281,22 +281,22 @@ export function ServicesSection({
   const [editing, setEditing] = useState<ServiceView | null>(null);
   const nameOf = (id: string | null) => suppliers.find((s) => s.id === id)?.name ?? (id ? '—' : '');
   return (
-    <Section title="Xizmatlar: mehmonxona, transfer, avia va boshqalar">
+    <Section title="Услуги: отель, трансфер, авиа и другие">
       <p className="muted">
-        Jami = turpaket narxi + paketdan <b>tashqari</b> xizmatlar. «Paketga kiritilgan» xizmat jamiga qo‘shilmaydi.
-        <Help label="Xizmatlar haqida">Har bir xizmatda sotuv narxi, tannarx va yetkazib beruvchi alohida bo‘lishi mumkin. Reyslar «Reys segmentlari» bo‘limida.</Help>
+        Итого = цена турпакета + услуги <b>вне</b> пакета. Услуга «Входит в пакет» в итог не добавляется.
+        <Help label="Об услугах">У каждой услуги могут быть своя цена продажи, себестоимость и поставщик. Рейсы вносятся в разделе «Сегменты рейса».</Help>
       </p>
       {services.length > 0 && (
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Tur</th>
-                <th>Tavsif va tafsilot</th>
-                <th>Yetkazib beruvchi</th>
-                <th>Sotuv</th>
-                {canCost && <th>Tannarx</th>}
-                {canCost && <th>Foyda</th>}
+                <th>Тип</th>
+                <th>Описание и детали</th>
+                <th>Поставщик</th>
+                <th>Продажа</th>
+                {canCost && <th>Себестоимость</th>}
+                {canCost && <th>Прибыль</th>}
                 <th />
               </tr>
             </thead>
@@ -307,7 +307,7 @@ export function ServicesSection({
                   <td>
                     {s.description}
                     <div className="muted">{detailText(s)}</div>
-                    {s.includedInPackage && <Badge tone="info">Paketga kiritilgan — jamiga qo‘shilmaydi</Badge>}
+                    {s.includedInPackage && <Badge tone="info">Входит в пакет — в итог не добавляется</Badge>}
                   </td>
                   <td>{nameOf(s.supplierId) || '—'}</td>
                   <td>{fmtMoney(s.amount, s.currency)}</td>
@@ -315,17 +315,17 @@ export function ServicesSection({
                   {canCost && <td>{s.profit === null ? <span className="muted">—</span> : <b className={isNeg(s.profit) ? 'neg' : 'pos'}>{fmtMoney(s.profit, s.currency)}</b>}</td>}
                   <td>
                     <button type="button" className="btn small secondary" disabled={disabled} onClick={() => setEditing(s)}>
-                      Tahrirlash
+                      Редактировать
                     </button>
                     <button
                       type="button"
                       className="btn small secondary"
                       disabled={disabled}
                       onClick={async () => {
-                        if (window.confirm(`«${s.description}» xizmati olib tashlansinmi? Tarix auditda saqlanadi.`)) await onRemove(s.id);
+                        if (window.confirm(`Удалить услугу «${s.description}»? История сохранится в журнале.`)) await onRemove(s.id);
                       }}
                     >
-                      Olib tashlash
+                      Удалить
                     </button>
                   </td>
                 </tr>
@@ -411,9 +411,9 @@ function ServiceForm({
         if (ok && !initial) setF({ ...f, includedInPackage: false, description: '', amount: '', netAmount: '', hotelName: '', address: '', checkIn: '', checkOut: '', roomType: '', mealPlan: '', route: '', pickupAt: '', vehicle: '' });
       }}
     >
-      <h2>{initial ? 'Xizmatni tahrirlash' : 'Yangi xizmat qatori'}</h2>
+      <h2>{initial ? 'Редактирование услуги' : 'Новая строка услуги'}</h2>
       <div className="row">
-        <Field label="Qator turi">
+        <Field label="Тип строки">
           <select value={f.serviceType} onChange={set('serviceType')} disabled={!!initial || disabled}>
             {Object.entries(SERVICE_TYPE_LABELS)
               .filter(([k]) => k !== 'tour_package')
@@ -424,10 +424,10 @@ function ServiceForm({
               ))}
           </select>
         </Field>
-        <Field label="Tavsif">
+        <Field label="Описание">
           <input value={f.description} onChange={set('description')} required disabled={disabled} />
         </Field>
-        <Field label="Yetkazib beruvchi">
+        <Field label="Поставщик">
           <select value={f.supplierId} onChange={set('supplierId')} disabled={disabled}>
             <option value="">—</option>
             {selectable.map((s) => (
@@ -440,22 +440,22 @@ function ServiceForm({
       </div>
       {f.serviceType === 'hotel' && (
         <div className="row">
-          <Field label="Mehmonxona nomi">
+          <Field label="Название отеля">
             <input value={f.hotelName} onChange={set('hotelName')} required disabled={disabled} />
           </Field>
-          <Field label="Manzil">
+          <Field label="Адрес">
             <input value={f.address} onChange={set('address')} disabled={disabled} />
           </Field>
-          <Field label="Kirish sanasi">
+          <Field label="Дата заезда">
             <IsoDateField value={f.checkIn} onValue={(v) => set('checkIn')({ target: { value: v } } as never)} required disabled={disabled} />
           </Field>
-          <Field label="Chiqish sanasi">
+          <Field label="Дата выезда">
             <IsoDateField value={f.checkOut} onValue={(v) => set('checkOut')({ target: { value: v } } as never)} required disabled={disabled} />
           </Field>
-          <Field label="Xona turi">
+          <Field label="Тип номера">
             <input value={f.roomType} onChange={set('roomType')} placeholder="Double, Family…" disabled={disabled} />
           </Field>
-          <Field label="Ovqatlanish turi">
+          <Field label="Тип питания">
             <select value={f.mealPlan} onChange={set('mealPlan')} disabled={disabled}>
               <option value="">—</option>
               {MEAL_PLANS.map((m) => (
@@ -467,27 +467,27 @@ function ServiceForm({
       )}
       {f.serviceType === 'transfer' && (
         <div className="row">
-          <Field label="Yo‘nalish">
-            <input value={f.route} onChange={set('route')} required placeholder="Aeroport → mehmonxona" disabled={disabled} />
+          <Field label="Маршрут">
+            <input value={f.route} onChange={set('route')} required placeholder="Аэропорт → отель" disabled={disabled} />
           </Field>
-          <Field label="Sana va vaqt">
+          <Field label="Дата и время">
             <LocalDateTimeField value={f.pickupAt} onValue={(v) => set('pickupAt')({ target: { value: v } } as never)} required disabled={disabled} />
           </Field>
-          <Field label="Transport">
-            <input value={f.vehicle} onChange={set('vehicle')} placeholder="Minivan, sedan…" disabled={disabled} />
+          <Field label="Транспорт">
+            <input value={f.vehicle} onChange={set('vehicle')} placeholder="Минивэн, седан…" disabled={disabled} />
           </Field>
         </div>
       )}
       <div className="row">
-        <Field label="Sotuv narxi">
+        <Field label="Цена продажи">
           <input value={f.amount} onChange={set('amount')} inputMode="decimal" disabled={disabled} />
         </Field>
         {canCost && (
-          <Field label="Tannarx" hint="Bo‘sh = noma’lum">
+          <Field label="Себестоимость" hint="Пусто = неизвестно">
             <input value={f.netAmount} onChange={set('netAmount')} inputMode="decimal" disabled={disabled} />
           </Field>
         )}
-        <Field label="Valyuta">
+        <Field label="Валюта">
           <select value={f.currency} onChange={set('currency')} disabled={disabled}>
             {CURRENCIES.map((c) => (
               <option key={c}>{c}</option>
@@ -496,22 +496,22 @@ function ServiceForm({
         </Field>
         {canCost && (
           <div className="field profit-preview">
-            <span className="field-label">Foyda (avtomatik)</span>
+            <span className="field-label">Прибыль (автоматически)</span>
             {preview === null ? <span className="muted">—</span> : <b className={isNeg(preview) ? 'neg' : 'pos'}>{fmtMoney(preview, f.currency)}</b>}
           </div>
         )}
         <label className="check">
-          <input type="checkbox" checked={f.includedInPackage} onChange={(e) => setF({ ...f, includedInPackage: e.target.checked })} style={{ width: 'auto' }} disabled={disabled} /> Paket narxiga kiritilgan (jamiga qo‘shilmasin)
+          <input type="checkbox" checked={f.includedInPackage} onChange={(e) => setF({ ...f, includedInPackage: e.target.checked })} style={{ width: 'auto' }} disabled={disabled} /> Входит в цену пакета (не добавлять в итог)
         </label>
       </div>
       <FormError error={error} />
       <div className="row">
         <button className="btn" type="submit" disabled={disabled}>
-          {initial ? 'O‘zgarishni saqlash' : 'Xizmatni saqlash'}
+          {initial ? 'Сохранить изменения' : 'Сохранить услугу'}
         </button>
         {onCancel && (
           <button className="btn secondary" type="button" onClick={onCancel}>
-            Bekor qilish
+            Отмена
           </button>
         )}
       </div>
@@ -519,7 +519,7 @@ function ServiceForm({
   );
 }
 
-/** Yetkazib beruvchidan qaytgan summa — mijozga qaytarimdan ALOHIDA qayd etiladi (faqat tannarx huquqi bilan). */
+/** Сумма, вернувшаяся от поставщика, записывается ОТДЕЛЬНО от возврата клиенту (только с правом на себестоимость). */
 export function SupplierRefundsSection({
   refunds,
   suppliers,
@@ -539,17 +539,17 @@ export function SupplierRefundsSection({
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   const nameOf = (id: string | null) => suppliers.find((x) => x.id === id)?.name ?? '—';
   return (
-    <Section title="Yetkazib beruvchidan qaytgan summa">
-      <p className="muted">Yetkazib beruvchi bizga qaytargan pul (mijoz qaytarimidan alohida). Valyuta buyurtma valyutasiga mos bo‘lishi va tannarxdan oshmasligi kerak.</p>
+    <Section title="Возврат от поставщика">
+      <p className="muted">Деньги, которые поставщик вернул нам (отдельно от возврата клиенту). Валюта должна совпадать с валютой заказа, а сумма не должна превышать себестоимость.</p>
       {refunds.length > 0 && (
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Sana</th>
-                <th>Summa</th>
-                <th>Yetkazib beruvchi</th>
-                <th>Hujjat / izoh</th>
+                <th>Дата</th>
+                <th>Сумма</th>
+                <th>Поставщик</th>
+                <th>Документ / заметка</th>
               </tr>
             </thead>
             <tbody>
@@ -581,20 +581,20 @@ export function SupplierRefundsSection({
         }}
       >
         <div className="row">
-          <Field label="Qaytgan summa">
+          <Field label="Возвращённая сумма">
             <input value={f.amount} onChange={set('amount')} inputMode="decimal" required disabled={disabled} />
           </Field>
-          <Field label="Valyuta">
+          <Field label="Валюта">
             <select value={f.currency} onChange={set('currency')} disabled={disabled}>
               {CURRENCIES.map((c) => (
                 <option key={c}>{c}</option>
               ))}
             </select>
           </Field>
-          <Field label="Qabul qilingan sana">
+          <Field label="Дата получения">
             <IsoDateField value={f.receivedAt} onValue={(v) => set('receivedAt')({ target: { value: v } } as never)} required disabled={disabled} />
           </Field>
-          <Field label="Yetkazib beruvchi">
+          <Field label="Поставщик">
             <select value={f.supplierId} onChange={set('supplierId')} disabled={disabled}>
               <option value="">—</option>
               {suppliers.map((x) => (
@@ -604,16 +604,16 @@ export function SupplierRefundsSection({
               ))}
             </select>
           </Field>
-          <Field label="Hujjat raqami">
+          <Field label="Номер документа">
             <input value={f.reference} onChange={set('reference')} disabled={disabled} />
           </Field>
-          <Field label="Sabab">
+          <Field label="Причина">
             <input value={f.note} onChange={set('note')} disabled={disabled} />
           </Field>
         </div>
         <FormError error={error} />
         <button className="btn" type="submit" disabled={disabled}>
-          Yetkazib beruvchi qaytarimini qayd etish
+          Записать возврат от поставщика
         </button>
       </form>
     </Section>

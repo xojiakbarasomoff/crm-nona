@@ -54,10 +54,10 @@ Webhook obuna maydonlari: `messages`, `messaging_seen` (kod faqat shularni ishla
 
 ## 6. Oqim va javob yuborish — kodda nima bor
 
-- **Kiruvchi:** Meta → `POST /webhooks/meta` (imzo) → inbox → kontakt (`instagram_scoped`) → lid → navbatdagi mas’ul menejer → `chat.import` (amoCRM Chats’ga). Suhbat `(connection, IGSID)` bo‘yicha yagona; bir xil `mid` qayta kelsa takrorlanmaydi; keyingi xabarlar yangi lid yaratmaydi (sinalgan).
-- **Chiquvchi:** menejer javobni **amoCRM chatida** yozadi → amoCRM Chats webhook (`/webhooks/amocrm/chat/{scope}`) → `meta.send` → `graph.instagram.com/<ver>/me/messages`. Natija «accepted» (yetkazildi deb **aytilmaydi**, faqat Meta qabul qilgani). Live ulanish live mijozdan, demo ulanish demo mijozdan yuboradi — aralashmaydi.
-- **BLOK (6-band):** CRM’ning o‘zida javob yozish oynasi **yo‘q** — dizayn bo‘yicha javob amoCRM chatidan keladi. Shuning uchun chiquvchi javob uchun **amoCRM akkaunti + OAuth ulanishi (G01/G02) va amoCRM Chats kanali (`AMO_CHAT_CHANNEL_ID`, `AMO_CHAT_SECRET`, G08)** kerak; ular yo‘q. Instagram’ga yuborish kodi mock bilan sinalgan, haqiqiy yuborish sinalmagan. Agar amoCRM keyinga qoldirilsa, CRM ichida javob yozish oynasi qo‘shish alohida vazifa (so‘rasangiz qilaman).
-- **Railway demo rejimi:** ilova `APP_MODE=demo` va boshqa adapterlar (amoCRM, Lead Ads, Chats) mock; faqat Instagram Direct ulanishi `live`. DEMO belgisi saqlanadi — bu «real integratsiyalar tayyor» degani emas.
+- **Kiruvchi:** Meta → `POST /webhooks/meta` (imzo) → inbox → kontakt (`instagram_scoped`) → lid → navbatdagi mas’ul menejer (lid va mas’ul darhol; birinchi aloqa vazifasi yaratiladi). Suhbat `(connection, IGSID)` bo‘yicha yagona; bir xil `mid` qayta kelsa takrorlanmaydi; keyingi xabarlar yangi lid yaratmaydi (sinalgan).
+- **Chiquvchi:** CRM’dan Instagram’ga javob yuborish hozir **ulanmagan** (javob yozish interfeysi yo‘q). `meta.send` ishlovchisi tayyor, lekin uni ishga tushiruvchi (javob oynasi) hali qurilmagan.
+- **Javob yuborish:** CRM ichidagi javob oynasi keyingi bosqich; hozircha javoblar Instagram’ning o‘zida beriladi.
+- **Railway demo rejimi:** ilova `APP_MODE=demo` va Lead Ads adapteri mock; faqat Instagram Direct ulanishi `live` (haqiqiy).
 
 ## 6.1. Hujjat bilan tasdiqlangan qoidalar (Meta hujjatlari, 2026-10-25) va ular kodda qanday qo‘llanadi
 

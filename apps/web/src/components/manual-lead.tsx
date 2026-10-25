@@ -14,30 +14,30 @@ interface Candidate {
   leads: number;
 }
 
-const candidateLabel = (c: Candidate) => c.name ?? (c.instagramUsername ? `@${c.instagramUsername}` : c.telegramUsername ? `@${c.telegramUsername}` : 'Ismsiz kontakt');
+const candidateLabel = (c: Candidate) => c.name ?? (c.instagramUsername ? `@${c.instagramUsername}` : c.telegramUsername ? `@${c.telegramUsername}` : 'Контакт без имени');
 
-/** Telefon boshqa kontaktda bo'lsa: avtomatik birlashtirilmaydi — foydalanuvchi tanlaydi. */
+/** Если телефон уже есть у другого контакта, автоматического объединения нет — выбор за пользователем. */
 function Candidates({ error, onPick, onForce, forceLabel }: { error: ApiError; onPick?: (id: string) => void; onForce: () => void; forceLabel: string }) {
   const list = (error.details.candidates as Candidate[] | undefined) ?? [];
   const hidden = Number(error.details.hiddenCount ?? 0);
   return (
     <div className="state stale" role="alert">
-      <b>Bu telefon raqami boshqa kontaktda mavjud.</b> Avtomatik birlashtirilmaydi.
+      <b>Этот номер телефона уже есть у другого контакта.</b> Автоматически контакты не объединяются.
       <ul>
         {list.map((c) => (
           <li key={c.id}>
             <a href={`/contacts/${c.id}`} target="_blank" rel="noopener noreferrer">
               {candidateLabel(c)}
             </a>{' '}
-            <span className="muted">· lidlar: {c.leads}</span>{' '}
+            <span className="muted">· лидов: {c.leads}</span>{' '}
             {onPick && (
               <button type="button" className="btn secondary" onClick={() => onPick(c.id)}>
-                Shu kontaktga lid yaratish
+                Создать лид для этого контакта
               </button>
             )}
           </li>
         ))}
-        {hidden > 0 && <li className="muted">Boshqa xodimlarga tegishli {hidden} ta kontakt ham bor (ko‘rish huquqingiz yo‘q).</li>}
+        {hidden > 0 && <li className="muted">Есть ещё контакты других сотрудников: {hidden} (у вас нет прав на просмотр).</li>}
       </ul>
       <button type="button" className="btn secondary" onClick={onForce}>
         {forceLabel}
@@ -46,7 +46,7 @@ function Candidates({ error, onPick, onForce, forceLabel }: { error: ApiError; o
   );
 }
 
-/** Lidlar sahifasi: «+ Yangi lid». Manba — «Qo'lda kiritilgan»; mas'ul mavjud tayinlash qoidalari bilan. */
+/** Страница лидов: «+ Создать лид». Источник — «Добавлен вручную»; ответственный назначается по действующим правилам. */
 export function NewLeadForm({ onClose }: { onClose: () => void }) {
   const me = useMe();
   const router = useRouter();
@@ -77,7 +77,7 @@ export function NewLeadForm({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <Section title="Yangi lid">
+    <Section title="Новый лид">
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -85,30 +85,30 @@ export function NewLeadForm({ onClose }: { onClose: () => void }) {
         }}
       >
         <div className="row">
-          <Field label="Ism" error={error?.fieldErrors.firstName}>
+          <Field label="Имя" error={error?.fieldErrors.firstName}>
             <input value={f.firstName} onChange={set('firstName')} maxLength={100} autoFocus />
           </Field>
-          <Field label="Familiya" error={error?.fieldErrors.lastName}>
+          <Field label="Фамилия" error={error?.fieldErrors.lastName}>
             <input value={f.lastName} onChange={set('lastName')} maxLength={100} />
           </Field>
         </div>
-        <p className="muted">Ism yoki familiyadan kamida bittasi kerak.</p>
+        <p className="muted">Нужно указать хотя бы имя или фамилию.</p>
         <div className="row">
-          <Field label="Telefon raqami" error={error?.fieldErrors.phone} hint="+998901234567 ko‘rinishida">
+          <Field label="Номер телефона" error={error?.fieldErrors.phone} hint="В формате +998901234567">
             <input value={f.phone} onChange={set('phone')} inputMode="tel" maxLength={40} />
           </Field>
-          <Field label="Telegram username" error={error?.fieldErrors.telegram} hint="@ bilan yoki usiz">
+          <Field label="Telegram username" error={error?.fieldErrors.telegram} hint="С @ или без">
             <input value={f.telegram} onChange={set('telegram')} maxLength={120} />
           </Field>
         </div>
         <div className="row">
-          <Field label="Lid nomi (ixtiyoriy)">
-            <input value={f.name} onChange={set('name')} maxLength={200} placeholder="Bo‘sh bo‘lsa — mijoz ismi" />
+          <Field label="Название лида (необязательно)">
+            <input value={f.name} onChange={set('name')} maxLength={200} placeholder="Если пусто — имя клиента" />
           </Field>
           {canPick && (
-            <Field label="Mas’ul menejer" error={error?.fieldErrors.ownerId}>
+            <Field label="Ответственный" error={error?.fieldErrors.ownerId}>
               <select value={f.ownerId} onChange={set('ownerId')}>
-                <option value="">Avtomatik (mavjud qoidalar)</option>
+                <option value="">Автоматически (по правилам)</option>
                 {(team ?? []).map((u) => (
                   <option key={u.id} value={u.id}>
                     {u.fullName}
@@ -118,17 +118,17 @@ export function NewLeadForm({ onClose }: { onClose: () => void }) {
             </Field>
           )}
         </div>
-        <Field label="Izoh">
+        <Field label="Заметка">
           <textarea value={f.note} onChange={set('note')} maxLength={2000} rows={3} />
         </Field>
         {error && error.code !== 'PHONE_EXISTS' && <FormError error={error} />}
-        {error?.code === 'PHONE_EXISTS' && <Candidates error={error} onPick={(id) => void submit({ existingContactId: id })} onForce={() => void submit({ forceNewContact: true })} forceLabel="Baribir yangi kontakt yaratish" />}
+        {error?.code === 'PHONE_EXISTS' && <Candidates error={error} onPick={(id) => void submit({ existingContactId: id })} onForce={() => void submit({ forceNewContact: true })} forceLabel="Всё равно создать новый контакт" />}
         <div className="row">
           <button className="btn" type="submit" disabled={busy}>
-            Lidni yaratish
+            Создать лид
           </button>
           <button className="btn secondary" type="button" onClick={onClose}>
-            Bekor qilish
+            Отмена
           </button>
         </div>
       </form>
@@ -136,7 +136,7 @@ export function NewLeadForm({ onClose }: { onClose: () => void }) {
   );
 }
 
-/** Lid kartasi: mijozning ism, familiya, telefon va Telegram username'ini tahrirlash (Instagram identifikatorlari o'zgarmaydi). */
+/** Карточка лида: редактирование имени, фамилии, телефона и Telegram клиента (идентификаторы Instagram не меняются). */
 export function ContactEditForm({
   leadId,
   contact,
@@ -171,26 +171,26 @@ export function ContactEditForm({
         void save();
       }}
     >
-      <Field label="Ism" error={error?.fieldErrors.firstName}>
+      <Field label="Имя" error={error?.fieldErrors.firstName}>
         <input value={f.firstName} onChange={set('firstName')} maxLength={100} />
       </Field>
-      <Field label="Familiya" error={error?.fieldErrors.lastName}>
+      <Field label="Фамилия" error={error?.fieldErrors.lastName}>
         <input value={f.lastName} onChange={set('lastName')} maxLength={100} />
       </Field>
-      <Field label="Telefon" error={error?.fieldErrors.phone}>
+      <Field label="Телефон" error={error?.fieldErrors.phone}>
         <input value={f.phone} onChange={set('phone')} inputMode="tel" maxLength={40} />
       </Field>
       <Field label="Telegram username" error={error?.fieldErrors.telegram}>
         <input value={f.telegram} onChange={set('telegram')} maxLength={120} />
       </Field>
       {error && error.code !== 'PHONE_EXISTS' && <FormError error={error} />}
-      {error?.code === 'PHONE_EXISTS' && <Candidates error={error} onForce={() => void save(true)} forceLabel="Baribir saqlash (birlashtirilmaydi, dublikat tekshiruviga qo‘yiladi)" />}
+      {error?.code === 'PHONE_EXISTS' && <Candidates error={error} onForce={() => void save(true)} forceLabel="Всё равно сохранить (контакты не объединяются)" />}
       <div className="row">
         <button className="btn" type="submit" disabled={busy}>
-          Saqlash
+          Сохранить
         </button>
         <button className="btn secondary" type="button" onClick={onCancel}>
-          Bekor qilish
+          Отмена
         </button>
       </div>
     </form>

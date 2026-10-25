@@ -1,14 +1,14 @@
 /**
- * Maxfiylik siyosati (ommaviy, kirish talab qilmaydi). Meta ilovasi uchun «Privacy Policy URL».
- * Matn kod va konfiguratsiyadan olingan faktlarga tayanadi. Kompaniya rekvizitlari, aloqa manzili va saqlash muddatlari
- * KIRITILMAGAN (noma'lum): ular `COMPANY` va `RETENTION` ichida null bo'lib turadi va sahifada ochiq «kiritilishi kerak» deb ko'rinadi.
- * Ularni tasdiqlangan qiymatlar bilan to'ldirmaguncha sahifa nashrga tayyor hisoblanmaydi.
+ * Политика конфиденциальности (публичная, вход не требуется). Нужна как «Privacy Policy URL» приложения Meta.
+ * Текст опирается на факты из кода и настроек. Реквизиты компании, контакты и сроки хранения НЕ ЗАПОЛНЕНЫ (неизвестны):
+ * они остаются null в `COMPANY` и `RETENTION` и показываются на странице как «должно быть указано».
+ * Пока они не заполнены подтверждёнными значениями, страница не считается готовой к публикации.
  */
-// Tasdiqlangan (foydalanuvchi bergan): brend nomi, tuman, Instagram akkaunti. Yuridik nom, shahar, telefon, email — NOMA'LUM, kiritilmagan.
+// Подтверждено (дано пользователем): название бренда, район, Instagram-аккаунт. Юридическое название, город, телефон, email — НЕИЗВЕСТНЫ, не заполнены.
 const COMPANY: { brand: string; legalName: string | null; district: string; city: string | null; instagram: string; phone: string | null; email: string | null } = {
   brand: 'NONA Travel',
   legalName: null,
-  district: 'Mirzo Ulug‘bek tumani',
+  district: 'Мирзо-Улугбекский район',
   city: null,
   instagram: '@nonatravel.uz',
   phone: null,
@@ -16,98 +16,100 @@ const COMPANY: { brand: string; legalName: string | null; district: string; city
 };
 const RETENTION: { messageContentMonths: number | null; rawWebhookDays: number | null; technicalLogDays: number | null } = { messageContentMonths: null, rawWebhookDays: null, technicalLogDays: null };
 
-const TBD = (what: string) => <mark>[{what} — kompaniya tomonidan kiritilishi kerak]</mark>;
+const TBD = (what: string) => <mark>[{what} — должно быть указано компанией]</mark>;
 
-export const metadata = { title: 'Maxfiylik siyosati — NONA Travel CRM' };
+export const metadata = { title: 'Политика конфиденциальности — NONA Travel CRM' };
 
 export default function PrivacyPage() {
   return (
     <main style={{ maxWidth: 760, margin: '40px auto', padding: '0 16px', lineHeight: 1.6 }}>
-      <h1>Maxfiylik siyosati</h1>
+      <h1>Политика конфиденциальности</h1>
       <p style={{ border: '1px solid #b45309', background: '#fffbeb', color: '#78350f', padding: '10px 12px', borderRadius: 6 }}>
-        <b>Qoralama.</b> Ushbu matn hali kompaniya tomonidan to‘liq tasdiqlanmagan. Sariq belgi bilan ko‘rsatilgan maydonlar (yuridik nom, shahar, saqlash muddatlari va boshqalar) hali kiritilmagan va to‘ldirilgach matn yangilanadi.
+        <b>Черновик.</b> Этот текст ещё не утверждён компанией полностью. Поля, выделенные жёлтым (юридическое название, город, сроки хранения и другие), пока не заполнены; после заполнения текст будет обновлён.
       </p>
       <p>
-        Ushbu siyosat «NONA Travel CRM» tizimi (keyingi o‘rinlarda — «Tizim») Instagram Direct orqali kelgan murojaatlarni qabul qilish va qayta ishlashda qanday shaxsiy ma’lumotlarni
-        olishini, qayerda ishlatishini, kimlar ko‘rishini va ularni o‘chirishni qanday so‘rash mumkinligini tushuntiradi.
+        Эта политика объясняет, какие персональные данные система «NONA Travel CRM» (далее — «Система») получает при приёме и обработке обращений из Instagram Direct, где их использует, кто их видит и как
+        запросить их удаление.
       </p>
 
-      <h2>1. Ma’lumotlar egasi</h2>
+      <h2>1. Владелец данных</h2>
       <ul>
-        <li>Brend nomi: {COMPANY.brand}</li>
-        <li>Yuridik nomi: {COMPANY.legalName ?? TBD('kompaniyaning yuridik nomi')}</li>
-        <li>Manzil: {COMPANY.district}, {COMPANY.city ?? TBD('shahar')}</li>
+        <li>Название бренда: {COMPANY.brand}</li>
+        <li>Юридическое название: {COMPANY.legalName ?? TBD('юридическое название компании')}</li>
+        <li>Адрес: {COMPANY.district}, {COMPANY.city ?? TBD('город')}</li>
         <li>Instagram: {COMPANY.instagram}</li>
-        <li>Telefon / email: {COMPANY.phone || COMPANY.email ? [COMPANY.phone, COMPANY.email].filter(Boolean).join(' · ') : TBD('telefon yoki email (ixtiyoriy, hozircha ko‘rsatilmagan)')}</li>
+        <li>Телефон / email: {COMPANY.phone || COMPANY.email ? [COMPANY.phone, COMPANY.email].filter(Boolean).join(' · ') : TBD('телефон или email (необязательно, пока не указаны)')}</li>
       </ul>
 
-      <h2>2. Qanday ma’lumotlar olinadi</h2>
+      <h2>2. Какие данные собираются</h2>
       <p>
-        <b>Kompaniyaning Instagram akkaunti (ulanish vaqtida).</b> Kompaniya akkaunti egasi Instagram’ning rasmiy avtorizatsiya oynasida ruxsat beradi. Tizim akkauntning professional ID raqamini, foydalanuvchi nomini va akkaunt turini oladi,
-        shuningdek Instagram bergan kirish tokenini saqlaydi. Parol Tizimga hech qachon kiritilmaydi. Token ma’lumotlar bazasida shifrlangan holda saqlanadi.
+        <b>Instagram-аккаунт компании (при подключении).</b> Владелец аккаунта компании даёт разрешение в официальном окне авторизации Instagram. Система получает профессиональный ID аккаунта, имя пользователя и тип аккаунта, а также
+        сохраняет токен доступа, выданный Instagram. Пароль в Систему никогда не вводится. Токен хранится в базе данных в зашифрованном виде.
       </p>
       <p>
-        <b>Instagram Direct orqali yozgan shaxslar.</b> Kompaniya akkauntiga Direct xabar yozilganda Tizim Meta’dan quyidagilarni oladi: yuboruvchining Instagram doirasidagi identifikatori, (agar berilsa) foydalanuvchi nomi, xabar matni, biriktirilgan
-        fayllar haqida ma’lumot, xabar vaqti va (reklamadan kelgan bo‘lsa) reklama identifikatori. Xabarlarning o‘qilganligi haqidagi belgilar ham qabul qilinadi.
+        <b>Люди, написавшие в Instagram Direct.</b> Когда в аккаунт компании приходит сообщение Direct, Система получает от Meta: идентификатор отправителя внутри Instagram, (если он передан) имя пользователя, текст сообщения,
+        сведения о вложенных файлах, время сообщения и (если обращение пришло с рекламы) идентификатор рекламы. Принимаются также отметки о прочтении сообщений.
       </p>
       <p>
-        <b>Mijoz kartasi.</b> Murojaat asosida Tizim kontakt va lid yozuvini yaratadi. Mijoz yoki xodim keyinchalik ism, telefon, email, sayohat talablari, yo‘lovchilar ma’lumoti, buyurtma va to‘lov yozuvlarini qo‘shishi mumkin.
+        <b>Карточка клиента.</b> На основе обращения Система создаёт запись контакта и лида. Клиент или сотрудник позже может добавить имя, телефон, email, пожелания по поездке, данные пассажиров, записи о заказах и платежах.
       </p>
 
-      <h2>3. Nima uchun ishlatiladi</h2>
+      <h2>3. Для чего используются данные</h2>
       <ul>
-        <li>kelgan murojaatni qabul qilish, kontakt/lidga bog‘lash va mas’ul menejerga biriktirish;</li>
-        <li>mijozga javob berish (hozirgi holatda javob yuborish ulangan amoCRM chat kanaliga bog‘liq; u ulanmaguncha Tizimdan javob yuborilmaydi);</li>
-        <li>javob berish muddatlarini (SLA) nazorat qilish, takroriy murojaatlarni aniqlash, eslatmalar yuborish;</li>
-        <li>tur buyurtmalari, to‘lovlar va hisob yozuvlarini yuritish.</li>
+        <li>принять обращение, связать его с контактом/лидом и назначить ответственного менеджера;</li>
+        <li>ответить клиенту (сейчас отправка ответов из Системы не подключена, ответ даётся вне Системы);</li>
+        <li>контролировать сроки ответа (SLA), распознавать повторные обращения, отправлять напоминания;</li>
+        <li>вести туристические заказы, платежи и учётные записи.</li>
       </ul>
 
-      <h2>4. Kimlar ko‘radi</h2>
+      <h2>4. Кто видит данные</h2>
       <ul>
-        <li>Kompaniyaning Tizimga kirgan xodimlari, rollariga qarab: menejer — o‘ziga biriktirilgan murojaatlar; savdo rahbari va administrator — kengroq ko‘lamda. Tannarx va foyda ma’lumotlari alohida ruxsat bilan ochiladi.</li>
-        <li>Tizimdagi muhim amallar (masalan, ma’lumotni o‘chirish, ruxsat o‘zgartirish) audit jurnaliga yoziladi.</li>
         <li>
-          Texnik xizmat ko‘rsatuvchilar: Tizim bulutli infratuzilmada (Railway: ilova, PostgreSQL va Redis) ishlaydi, Instagram ma’lumotlari esa Meta Platforms orqali keladi. Kompaniya amoCRM bilan integratsiyani yoqsa, murojaat va kontakt
-          ma’lumotlari amoCRM’ga ham uzatilishi mumkin; hozir bu integratsiya ulanmagan. {TBD('boshqa xizmat ko‘rsatuvchilar ro‘yxati va ma’lumotlar joylashadigan mamlakat')}
+          Сотрудники компании, вошедшие в Систему, в зависимости от роли: менеджер и пользователь — только обращения, назначенные им; администратор — все данные. Себестоимость и прибыль открываются отдельным
+          разрешением.
+        </li>
+        <li>Важные действия в Системе (например, удаление данных, изменение прав) записываются в журнал аудита.</li>
+        <li>
+          Технические исполнители: Система работает в облачной инфраструктуре (Railway: приложение, PostgreSQL и Redis), а данные Instagram приходят через Meta Platforms.{' '}
+          {TBD('перечень других исполнителей и страна размещения данных')}
         </li>
       </ul>
 
-      <h2>5. Saqlash muddati</h2>
+      <h2>5. Срок хранения</h2>
       <p>
-        Saqlash siyosati Tizimda administrator tomonidan tasdiqlanadi; tasdiqlanmaguncha avtomatik tozalash ishlamaydi. Tasdiqlangach xom webhook ma’lumotlari, xabar matnlari va fayllar belgilangan muddat o‘tgach o‘chiriladi
-        (to‘lov va buyurtma hisob yozuvlari qonuniy talablar uchun saqlanishi mumkin).
+        Политика хранения утверждается администратором в Системе; пока она не утверждена, автоматическая очистка не работает. После утверждения необработанные данные вебхуков, тексты сообщений и файлы удаляются по
+        истечении установленного срока (учётные записи о платежах и заказах могут храниться по требованию закона).
       </p>
       <ul>
-        <li>Xabar matni: {RETENTION.messageContentMonths ? `${RETENTION.messageContentMonths} oy` : TBD('xabar matnini saqlash muddati')}</li>
-        <li>Xom webhook ma’lumotlari: {RETENTION.rawWebhookDays ? `${RETENTION.rawWebhookDays} kun` : TBD('muddat')}</li>
-        <li>Texnik loglar: {RETENTION.technicalLogDays ? `${RETENTION.technicalLogDays} kun` : TBD('muddat')}</li>
+        <li>Текст сообщений: {RETENTION.messageContentMonths ? `${RETENTION.messageContentMonths} мес.` : TBD('срок хранения текста сообщений')}</li>
+        <li>Необработанные данные вебхуков: {RETENTION.rawWebhookDays ? `${RETENTION.rawWebhookDays} дн.` : TBD('срок')}</li>
+        <li>Технические журналы: {RETENTION.technicalLogDays ? `${RETENTION.technicalLogDays} дн.` : TBD('срок')}</li>
       </ul>
 
-      <h2>6. Ma’lumotni o‘chirishni qanday so‘rash mumkin</h2>
+      <h2>6. Как запросить удаление данных</h2>
       <ol>
         <li>
-          <b>Instagram orqali:</b> Instagram sozlamalaridan «NONA Travel CRM» ilovasini olib tashlasangiz, Meta bizga o‘chirish so‘rovi yuboradi. Tizim bu so‘rovni qayd etadi, kompaniya akkaunti ulanishini to‘xtatadi (token o‘chiriladi)
-          va administratorga bildirishnoma yuboradi.
+          <b>Через Instagram:</b> если удалить приложение «NONA Travel CRM» в настройках Instagram, Meta отправит нам запрос на удаление. Система зафиксирует его, приостановит подключение аккаунта компании (токен будет удалён)
+          и уведомит администратора.
         </li>
         <li>
-          <b>Instagram Direct orqali:</b> {COMPANY.instagram} akkauntiga xabar yozing va «ma’lumotimni o‘chiring» deb ko‘rsating. Xabar kompaniya akkauntining Direct inbox’iga tushadi; kompaniyani kuzatmaydigan akkauntlardan yozilgan xabarlar «Message requests»
-          bo‘limida turadi. Administrator mijoz kartasini topib «Shaxsiy ma’lumotlarni o‘chirish» amalini bajaradi.
+          <b>Через Instagram Direct:</b> напишите в аккаунт {COMPANY.instagram} и укажите «удалите мои данные». Сообщение придёт во входящие Direct аккаунта компании; сообщения от аккаунтов, на которые компания не подписана, лежат в
+          разделе «Запросы на сообщения». Администратор найдёт карточку клиента и выполнит действие «Удалить персональные данные».
         </li>
       </ol>
       <p>
-        O‘chirishda ism, telefon, email, Instagram identifikatori va foydalanuvchi nomi, xabar matnlari, biriktirilgan fayllar va yo‘lovchi ma’lumotlari anonimlashtiriladi yoki o‘chiriladi; to‘lov va buyurtma summalari
-        hisob yuritish uchun qoladi. amoCRM yoki Instagram’dagi nusxalar administrator tomonidan qo‘lda o‘chiriladi. O‘chirish bo‘yicha so‘rov holati{' '}
-        <a href="/data-deletion">/data-deletion</a> sahifasida tushuntirilgan. Javob berish muddati: {TBD('so‘rovga javob berish muddati')}.
+        При удалении имя, телефон, email, идентификатор и имя пользователя Instagram, тексты сообщений, вложенные файлы и данные пассажиров обезличиваются или удаляются; суммы платежей и заказов остаются для учёта. Копии в
+        Instagram администратор удаляет вручную. Статус запроса на удаление описан на странице <a href="/data-deletion">/data-deletion</a>. Срок ответа: {TBD('срок ответа на запрос')}.
       </p>
 
-      <h2>7. Xavfsizlik</h2>
+      <h2>7. Безопасность</h2>
       <p>
-        Instagram tokenlari shifrlangan holda saqlanadi, Tizimga kirish rollar bo‘yicha cheklangan, muhim amallar audit jurnaliga yoziladi. Ma’lumotlar HTTPS orqali uzatiladi. Hech bir himoya to‘liq kafolat bermaydi; xavfsizlik hodisalari
-        haqida xabar berish uchun yuqoridagi Instagram akkauntiga murojaat qiling.
+        Токены Instagram хранятся в зашифрованном виде, доступ в Систему ограничен ролями, важные действия записываются в журнал аудита. Данные передаются по HTTPS. Никакая защита не даёт полной гарантии; о
+        происшествиях безопасности сообщайте через указанный выше Instagram-аккаунт.
       </p>
 
-      <h2>8. O‘zgarishlar</h2>
-      <p>Siyosat o‘zgarganda ushbu sahifa yangilanadi. Oxirgi tahrir sanasi: {TBD('tasdiqlangan sana')}.</p>
+      <h2>8. Изменения</h2>
+      <p>При изменении политики эта страница обновляется. Дата последней редакции: {TBD('утверждённая дата')}.</p>
     </main>
   );
 }

@@ -222,13 +222,9 @@ describe('eski sxemadan yangisiga migratsiya (vaqtinchalik baza)', () => {
       REDIS_URL: redisUrl!,
       LOG_LEVEL: 'silent',
       COOKIE_SECURE: 'false',
-      AMO_CLIENT_ID: 'test-client',
-      AMO_CLIENT_SECRET: 'test-secret',
-      AMO_REDIRECT_URI: 'https://crm.example.test/oauth',
-      AMO_ALLOWED_DOMAINS: 'demo-turizm.amocrm.ru',
     });
     core = createCore(config);
-    const head: UserActor = { type: 'user', id: HEAD, companyId: C, role: 'HEAD', email: 'rahbar@legacy.test' };
+    const head: UserActor = { type: 'user', id: HEAD, companyId: C, role: 'ADMIN', email: 'rahbar@legacy.test' };
     const card = await core.orders.getOrder(head, O1);
     expect(card.canCost).toBe(true);
     const usd = card.finance.byCurrency.USD as Record<string, unknown>;
@@ -244,5 +240,21 @@ describe('eski sxemadan yangisiga migratsiya (vaqtinchalik baza)', () => {
     const mc = await core.orders.getOrder(mgr, O1);
     expect(mc.canCost).toBe(false);
     expect(mc.finance.byCurrency.USD).not.toHaveProperty('profit');
+  });
+
+  it('10. rollar migratsiyasi: HEAD → MANAGER, zaxira jadvali eski rolni saqlaydi, `login` ustuni qo‘shilgan, hech bir foydalanuvchi o‘chirilmagan', async () => {
+    const usersBefore = await q<{ id: string }>(`SELECT id FROM users ORDER BY id`);
+    deploy(all);
+    const users = await q<{ id: string; role: string }>(`SELECT id, role::text AS role FROM users ORDER BY id`);
+    expect(users.map((u) => u.id)).toEqual(usersBefore.map((u) => u.id));
+    expect(users.find((u) => u.id === HEAD)!.role).toBe('MANAGER');
+    expect(users.find((u) => u.id === MGR)!.role).toBe('MANAGER');
+    const backup = await q<{ id: string; role: string }>(`SELECT id, role FROM "_backup_users_role_20261026" ORDER BY id`);
+    expect(backup.find((u) => u.id === HEAD)!.role).toBe('HEAD');
+    expect((await q<{ v: string }>(`SELECT unnest(enum_range(NULL::"Role"))::text AS v`)).map((e) => e.v)).toEqual(['ADMIN', 'MANAGER', 'USER']);
+    expect((await q<{ column_name: string }>(`SELECT column_name FROM information_schema.columns WHERE table_name='users' AND column_name='login'`)).length).toBe(1);
+    // tarixiy audit va buyurtmalar saqlangan
+    expect((await q<{ n: bigint }>(`SELECT count(*)::bigint AS n FROM audit_logs`))[0]!.n).toBeGreaterThanOrEqual(2n);
+    expect((await q<{ n: bigint }>(`SELECT count(*)::bigint AS n FROM orders`))[0]!.n).toBe(3n);
   });
 });

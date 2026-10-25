@@ -4,7 +4,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Core } from '../../apps/api/src/core';
 import { storeInboxEvent } from '../../apps/api/src/core/queue';
-import { DEMO_STATUS_IDS, type DemoAmoRestClient, type DemoMetaLeadsClient } from '@crm/integrations';
+import type { DemoMetaLeadsClient } from '@crm/integrations';
 import { WORK_SCHEDULE } from '../../packages/database/src/seed';
 import { companyId, drain, login as loginHelper, makeApp, makeCore, newLead, sendLeadAds, TestClock, userId, type Session } from './helpers';
 
@@ -21,7 +21,6 @@ const SUNDAY = DateTime.fromISO('2026-10-18T11:00:00', { zone: TZ }).toJSDate();
 let core: Core;
 let app: INestApplication;
 const p = () => core.deps.prisma;
-const amo = () => core.deps.adapters.amoRest({ id: '', accountDomain: null, accountId: '' }) as DemoAmoRestClient;
 const EICAR = 'X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*';
 
 beforeEach(() => clock.set(WORKDAY));
@@ -90,7 +89,7 @@ describe('attachments (TZ §21, AC12 files)', () => {
     expect((await owner.get(link.body.url)).status).toBe(404); // expired
     clock.set(WORKDAY);
 
-    const head = await login(app, 'rahbar@demo.local');
+    const head = await login(app, 'admin2@demo.local');
     expect((await head.get(`/api/v1/attachments?${q}`)).body.items).toHaveLength(1);
     expect(await p().auditLog.count({ where: { action: { in: ['attachment_uploaded', 'attachment_downloaded'] }, entityId: order.body.id } })).toBe(2);
     expect((await request(app.getHttpServer()).delete(`/api/v1/attachments/${up.body.id}`).set('Cookie', owner.cookie).set('X-CSRF-Token', owner.cookie.match(/crm_csrf=([^;]+)/)![1]!)).status).toBe(200);
@@ -114,17 +113,17 @@ describe('attachments (TZ §21, AC12 files)', () => {
   it('infected file on a Sunday: no manager on duty, lead is held by the head — one recipient, still quarantined', async () => {
     clock.set(SUNDAY);
     const lead = await newLead(app, core);
-    expect(lead.ownerId).toBe(await userId(core, 'rahbar@demo.local'));
+    expect(lead.ownerId).toBe(await userId(core, 'admin2@demo.local'));
     const owner = await ownerSession(lead.ownerId!);
     const up = await upload(owner, `ownerType=lead&ownerId=${lead.id}`, Buffer.from(`%PDF-1.4 ${EICAR}`), 'application/pdf');
     await core.attachments.scanPending();
     expect((await p().attachment.findUniqueOrThrow({ where: { id: up.body.id } })).scanState).toBe('infected');
-    expect(await p().notification.count({ where: { kind: 'attachment_infected', dedupeKey: { startsWith: `att_infected:${up.body.id}` } } })).toBe(1); // yuklovchi = rahbar
+    expect(await p().notification.count({ where: { kind: 'attachment_infected', dedupeKey: { startsWith: `att_infected:${up.body.id}` } } })).toBe(2); // yuklovchi (navbatchi administrator) + boshqa administrator
   });
 
   it('infected file is quarantined: storage object removed, never downloadable, people notified', async () => {
     const lead0 = await newLead(app, core);
-    expect(lead0.ownerId).not.toBe(await userId(core, 'rahbar@demo.local')); // ish kuni: menejer egasi
+    expect(lead0.ownerId).not.toBe(await userId(core, 'admin2@demo.local')); // ish kuni: menejer egasi
 
     const lead = await newLead(app, core);
     const owner = await ownerSession(lead.ownerId!);
@@ -144,7 +143,7 @@ describe('SLA notifications (TZ §10)', () => {
   it('ish kuni 11:00 (Toshkent): lid menejerga biriktiriladi (rahbarga emas)', async () => {
     const lead = await newLead(app, core);
     expect(lead.ownerId).not.toBeNull();
-    expect(lead.ownerId).not.toBe(await userId(core, 'rahbar@demo.local'));
+    expect(lead.ownerId).not.toBe(await userId(core, 'admin2@demo.local'));
   });
 
   it('approaching → manager warning; breached → manager + head, no auto reassignment', async () => {
@@ -162,24 +161,24 @@ describe('SLA notifications (TZ §10)', () => {
     const after = await p().lead.findUniqueOrThrow({ where: { id: lead.id } });
     expect(after.slaBreachedAt).not.toBeNull();
     expect(after.ownerId).toBe(lead.ownerId); // not reassigned
-    const headId = await userId(core, 'rahbar@demo.local');
+    const headId = await userId(core, 'admin2@demo.local');
     expect(await p().notification.count({ where: { kind: 'sla_breached', dedupeKey: `sla_breach:${lead.id}:${headId}` } })).toBe(1);
     expect(await p().notification.count({ where: { kind: 'sla_breached', dedupeKey: `sla_breach:${lead.id}:${lead.ownerId}` } })).toBe(1);
     await core.sla.tick();
-    expect(await p().notification.count({ where: { kind: 'sla_breached', dedupeKey: { startsWith: `sla_breach:${lead.id}:` } } })).toBe(2); // once each
+    expect(await p().notification.count({ where: { kind: 'sla_breached', dedupeKey: { startsWith: `sla_breach:${lead.id}:` } } })).toBe(3); // egasi + ikki administrator, har biriga bir marta
     clock.set(WORKDAY);
   });
 
   it('yakshanba (ish jadvalida dam): navbatchi menejer yo‘q — lid rahbarga biriktiriladi, SLA buzilishida bitta bildirishnoma (egasi = rahbar)', async () => {
     clock.set(SUNDAY);
     const lead = await newLead(app, core);
-    const headId = await userId(core, 'rahbar@demo.local');
+    const headId = await userId(core, 'admin2@demo.local');
     expect(lead.ownerId).toBe(headId); // zaxira biriktirish: ish kuni emas
     const due = new Date(clock.now().getTime() + 60 * 60_000);
     await p().lead.update({ where: { id: lead.id }, data: { firstResponseDueAt: due } });
     clock.set(new Date(due.getTime() + 60_000));
     await core.sla.tick();
-    expect(await p().notification.count({ where: { kind: 'sla_breached', dedupeKey: { startsWith: `sla_breach:${lead.id}:` } } })).toBe(1);
+    expect(await p().notification.count({ where: { kind: 'sla_breached', dedupeKey: { startsWith: `sla_breach:${lead.id}:` } } })).toBe(2); // egasi (navbatchi administrator) + boshqa administrator
   });
 
   it('a recorded human action before the deadline prevents the breach', async () => {
@@ -201,7 +200,7 @@ describe('retention and PII erasure (TZ §21)', () => {
 
   it('confirmed policy purges old raw payloads and message contents but keeps dedupe keys', async () => {
     const admin = await login(app, 'admin@demo.local');
-    const head = await login(app, 'rahbar@demo.local');
+    const head = await login(app, 'menejer.a@demo.local');
     expect((await head.post('/api/v1/privacy/retention/confirm', { rawWebhookDays: 30, technicalLogDays: 90, messageContentMonths: 12 })).status).toBe(403);
     const conf = await admin.post('/api/v1/privacy/retention/confirm', { rawWebhookDays: 30, technicalLogDays: 90, messageContentMonths: 12 });
     expect(conf.body.policy).toMatchObject({ confirmed: true, rawWebhookDays: 30 });
@@ -229,7 +228,7 @@ describe('retention and PII erasure (TZ §21)', () => {
     const file = await upload(owner, `ownerType=order&ownerId=${order.body.id}`, Buffer.from('%PDF-1.4 passport'), 'application/pdf');
     const fileRow = await p().attachment.findUniqueOrThrow({ where: { id: file.body.id } });
 
-    const head = await login(app, 'rahbar@demo.local');
+    const head = await login(app, 'menejer.a@demo.local');
     expect((await head.post(`/api/v1/contacts/${lead.contactId}/erase`, { reason: 'Mijoz so‘rovi' })).status).toBe(403);
     const admin = await login(app, 'admin@demo.local');
     const r = await admin.post(`/api/v1/contacts/${lead.contactId}/erase`, { reason: 'Mijoz so‘rovi (GDPR-ga o‘xshash)' });
@@ -237,10 +236,10 @@ describe('retention and PII erasure (TZ §21)', () => {
     expect(r.body).toMatchObject({ erased: true, providerReviewRequired: true });
 
     const contact = await p().contact.findUniqueOrThrow({ where: { id: lead.contactId } });
-    expect(contact).toMatchObject({ fullName: 'O‘chirilgan mijoz', primaryPhone: null, primaryEmail: null });
+    expect(contact).toMatchObject({ fullName: 'Удалённый клиент', primaryPhone: null, primaryEmail: null });
     expect(await p().contactIdentifier.count({ where: { contactId: lead.contactId, active: true } })).toBe(0);
     expect(await p().contactIdentifier.count({ where: { value: phone } })).toBe(0);
-    expect((await p().passenger.findFirstOrThrow({ where: { orderId: order.body.id } })).fullName).toBe('O‘chirilgan yo‘lovchi');
+    expect((await p().passenger.findFirstOrThrow({ where: { orderId: order.body.id } })).fullName).toBe('Удалённый пассажир');
     expect(await p().payment.count({ where: { orderId: order.body.id } })).toBe(1); // financial record kept
     await expect(core.deps.adapters.storage.get(fileRow.objectKey)).rejects.toThrow();
     expect(await p().crmTask.count({ where: { kind: 'pii_provider_review', entityId: lead.id } })).toBe(1);
@@ -258,52 +257,6 @@ describe('retention and PII erasure (TZ §21)', () => {
     const re = await core.privacy.reapplyTombstones(companyId);
     expect(re.reapplied).toBeGreaterThanOrEqual(1);
     expect((await p().contact.findUniqueOrThrow({ where: { id: lead.contactId } })).primaryPhone).toBeNull();
-  });
-});
-
-describe('amoCRM initial import, reconciliation and daily control (TZ §5.2)', () => {
-  it('imports active leads with contacts, resumable and idempotent; closed leads are not imported', async () => {
-    clock.set(WORKDAY);
-    const aAmo = (await p().user.findUniqueOrThrow({ where: { email: 'menejer.a@demo.local' } })).amoUserId!;
-    const created = [];
-    for (let i = 0; i < 5; i++) created.push(await amo().simulateNativeCreate({ name: `Native ${i}`, contactName: `Native Mijoz ${i}`, phone: `+99895000000${i}`, statusId: i === 4 ? DEMO_STATUS_IDS.WON! : DEMO_STATUS_IDS.CONTACTED!, responsibleUserId: aAmo, createdAt: new Date('2026-09-01T10:00:00Z') }));
-    const conn = await p().integrationConnection.findFirstOrThrow({ where: { provider: 'AMOCRM_REST' } });
-    // Interrupted run: one page only, then resume.
-    await core.amoSync.importInitial(companyId, { pageSize: 2, maxPages: 1 });
-    const cp = await p().syncCheckpoint.findUniqueOrThrow({ where: { connectionId_stream: { connectionId: conn.id, stream: 'import:contacts' } } });
-    expect((cp.cursor as { done: boolean }).done).toBe(false);
-    await core.amoSync.importInitial(companyId, { pageSize: 2 });
-    await core.amoSync.importInitial(companyId, { pageSize: 2 }); // re-run: nothing new
-    for (const [i, c] of created.entries()) {
-      const leads = await p().lead.findMany({ where: { amoLeadId: c.leadId } });
-      expect(leads).toHaveLength(i === 4 ? 0 : 1);
-      if (i < 4) {
-        expect(leads[0]).toMatchObject({ stage: 'CONTACTED', firstSource: 'amocrm', ownerId: await userId(core, 'menejer.a@demo.local') });
-        expect(leads[0]!.createdAt.toISOString()).toBe('2026-09-01T10:00:00.000Z');
-      }
-      expect(await p().contact.count({ where: { amoContactId: c.contactId } })).toBe(1);
-    }
-  });
-
-  it('incremental reconciliation imports a lead created natively after the import', async () => {
-    const conn = await p().integrationConnection.findFirstOrThrow({ where: { provider: 'AMOCRM_REST' } });
-    const later = await amo().simulateNativeCreate({ name: 'Native later', contactName: 'Kech mijoz', phone: null, statusId: DEMO_STATUS_IDS.NEW!, responsibleUserId: null });
-    const r = await core.amoSync.reconcile(conn);
-    expect(r.leads!.created).toBeGreaterThanOrEqual(1);
-    expect(await p().lead.count({ where: { amoLeadId: later.leadId } })).toBe(1);
-    await core.amoSync.reconcile(conn);
-    expect(await p().lead.count({ where: { amoLeadId: later.leadId } })).toBe(1);
-  });
-
-  it('daily control tombstones leads that vanished from amoCRM and never re-creates them', async () => {
-    const lead = await newLead(app, core);
-    await amo().simulateHardDelete(lead.amoLeadId!);
-    const conn = await p().integrationConnection.findFirstOrThrow({ where: { provider: 'AMOCRM_REST' } });
-    const r = await core.amoSync.dailyAudit(conn);
-    expect(r.tombstoned).toBeGreaterThanOrEqual(1);
-    expect((await p().lead.findUniqueOrThrow({ where: { id: lead.id } })).deletedAt).not.toBeNull();
-    expect(await p().outboxOperation.count({ where: { action: 'lead.create', payload: { path: ['leadId'], equals: lead.id } } })).toBe(1);
-    expect(await core.amoSync.dailyAuditIfDue(conn)).toBeNull(); // at most once per 24 h
   });
 });
 
@@ -349,10 +302,6 @@ describe('Lead Ads history re-fetch (TZ §8.3)', () => {
     expect(r.status).toBe(202);
     await drain(core);
     expect((await p().outboxOperation.findUniqueOrThrow({ where: { id: r.body.operationId } })).state).toBe('done');
-    const imp = await admin.post('/api/v1/integrations/amocrm/import');
-    expect(imp.status).toBe(202);
-    await drain(core);
-    expect((await p().outboxOperation.findUniqueOrThrow({ where: { id: imp.body.operationId } })).state).toBe('done');
     const health = await admin.get('/api/v1/integrations/health');
     expect(health.body.checkpoints.some((c: { stream: string }) => c.stream.startsWith('leadforms:'))).toBe(true);
     expect(health.body.retention.status).toBe('active');

@@ -18,7 +18,7 @@ export function canCost(actor: Actor): boolean {
 }
 
 export function requireCost(actor: Actor): void {
-  if (!canCost(actor)) throw forbidden('Tannarx va foydani ko‘rish/kiritish huquqingiz yo‘q');
+  if (!canCost(actor)) throw forbidden('У вас нет прав на просмотр и ввод себестоимости и прибыли');
 }
 
 export function isUser(actor: Actor): actor is UserActor {

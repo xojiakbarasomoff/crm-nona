@@ -230,3 +230,5 @@ details.help[open] { display: block; margin: 6px 0; }
 details.help .help-body { margin-top: 4px; font-size: 0.82rem; max-width: 70ch; }
 details.admin-diag { margin-top: 18px; border-top: 1px solid var(--border, #e5dad5); padding-top: 10px; }
 details.admin-diag > summary { cursor: pointer; font-weight: 600; color: var(--text-soft); }
+
+fieldset.ro { border: 0; padding: 0; margin: 0; min-width: 0; }
