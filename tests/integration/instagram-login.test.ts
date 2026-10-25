@@ -321,7 +321,7 @@ describe('Instagram Login: kiruvchi Direct → kontakt/lid → mas’ul → javo
   });
 
   it('demo tozalash rejasi (faqat o‘qish): haqiqiy Instagram kontaktlari/lidlari «saqlanadi», seed demo yozuvlari «o‘chiriladi» ro‘yxatida, qo‘lda yaratilgani «noaniq»; hech narsa o‘chirilmaydi', async () => {
-    const liveConn = await p().integrationConnection.findFirstOrThrow({ where: { provider: 'META_DIRECT', mode: 'live' } });
+    const liveConn = await p().integrationConnection.findFirstOrThrow({ where: { provider: 'META_DIRECT', mode: 'live', accountId: IG_ID } });
     const realConvs = await p().conversation.findMany({ where: { connectionId: liveConn.id } });
     expect(realConvs.length).toBeGreaterThan(0);
     // Qo'lda yaratilgan (kelib chiqishi noaniq) kontakt va lid

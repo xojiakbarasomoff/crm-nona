@@ -205,17 +205,18 @@ export class LeadsService {
 
   async get(actor: UserActor, id: string) {
     const lead = assertFound(await this.d.prisma.lead.findFirst({ where: leadWhere(actor, { id }) }), 'Лид');
-    const [events, offers, orders, contact] = await Promise.all([
+    const [events, offers, orders, contact, inquiries] = await Promise.all([
       this.d.prisma.leadEvent.findMany({ where: { companyId: actor.companyId, leadId: id }, orderBy: { effectiveAt: 'asc' } }),
       this.d.prisma.offer.findMany({ where: { companyId: actor.companyId, leadId: id }, orderBy: { version: 'desc' } }),
       this.d.prisma.order.findMany({ where: { companyId: actor.companyId, leadId: id }, select: { id: true, orderNo: true, fulfillmentState: true, tourOperatorId: true } }),
       this.d.prisma.contact.findFirst({ where: { companyId: actor.companyId, id: lead.contactId }, select: { id: true, fullName: true, firstName: true, lastName: true, primaryPhone: true, telegramUsername: true, instagramUsername: true, instagramName: true } }),
+      this.d.prisma.inquiry.findMany({ where: { companyId: actor.companyId, leadId: id, channel: { in: ['instagram_lead_ads', 'meta_lead_ads'] } }, orderBy: { receivedAt: 'desc' }, take: 100, select: { id: true, channel: true, receivedAt: true, formData: true, attribution: true } }),
     ]);
     // Faol buyurtma bo'lsa, turoperator — buyurtmaniki (tarixiy bog'lanish); aks holda lidniki.
     const activeOrder = orders.find((o) => o.fulfillmentState !== 'cancelled') ?? null;
     const operatorId = activeOrder ? activeOrder.tourOperatorId : lead.tourOperatorId;
     const op = operatorId ? await this.d.prisma.supplier.findFirst({ where: { id: operatorId, companyId: actor.companyId } }) : null;
-    return { lead, events, offers, orders, contact, tourOperator: op ? serializeSupplier(op, can(actor.role, 'reference.view_full')) : null, operatorOwnedByOrder: activeOrder ? { id: activeOrder.id, orderNo: activeOrder.orderNo } : null };
+    return { lead, events, offers, orders, contact, inquiries, tourOperator: op ? serializeSupplier(op, can(actor.role, 'reference.view_full')) : null, operatorOwnedByOrder: activeOrder ? { id: activeOrder.id, orderNo: activeOrder.orderNo } : null };
   }
 
   /** Local tourism fields are owned by PostgreSQL and change immediately (optimistic lock). */

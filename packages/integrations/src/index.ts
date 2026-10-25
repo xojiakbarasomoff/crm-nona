@@ -6,6 +6,7 @@ export * from './meta/signature';
 export * from './meta/webhook-parse';
 export * from './meta/clients';
 export * from './meta/instagram-login';
+export * from './meta/lead-ads-login';
 export * from './oauth-state';
 export * from './demo/adapters';
 export * from './files';

@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { api, fmtDateTime, useApi, type ApiError } from '../../../lib/api';
 import { Async, Badge, FormError, Section } from '../../../components/ui';
 import { canDo, useMe } from '../../../components/shell';
+import { LeadAdsConnect } from '../../../components/lead-ads-connect';
 
 interface Health {
   appMode: string;
@@ -27,7 +28,7 @@ interface Health {
 
 const PROVIDER_LABEL: Record<string, string> = { META_DIRECT: 'Instagram Direct', META_LEADS: 'Рекламные формы (Lead Ads)' };
 const HEALTH_LABEL: Record<string, string> = { ok: 'Работает', degraded: 'Ограничено', paused: 'Приостановлено', disconnected: 'Отключено', down: 'Не работает' };
-const REASON_LABEL: Record<string, string> = { awaiting_live_verification: 'ожидается проверка ответа', webhook_subscription_unconfirmed: 'подписка не подтверждена', token_refresh_failed: 'токен не обновился', disconnected_by_admin: 'отключено администратором' };
+const REASON_LABEL: Record<string, string> = { awaiting_live_verification: 'ожидается проверка ответа', awaiting_lead_ads_test: 'ожидается тестовая заявка', lead_ads_retrieval_failed: 'не удалось получить заявку', webhook_subscription_unconfirmed: 'подписка не подтверждена', token_refresh_failed: 'токен не обновился', disconnected_by_admin: 'отключено администратором' };
 const OP_STATE_LABEL: Record<string, string> = { unknown: 'результат неизвестен', paused: 'приостановлено', dead: 'остановлено' };
 
 export default function IntegrationsPage() {
@@ -141,6 +142,7 @@ export default function IntegrationsPage() {
                 </button>
               </Section>
             )}
+            {canDo(me, 'integrations.manage') && <LeadAdsConnect onChange={state.reload} />}
             <Section title="Безопасность и хранение">
               <p>
                 Проверка файлов: <Badge tone={h.scanner.kind === 'clamav' ? 'ok' : 'warn'}>{h.scanner.name}</Badge> · Хранилище: {h.storage.name} · Файлов ожидают проверки: {h.attachmentsPendingScan} · Открытых нарушений срока ответа: {h.slaBreachesOpen}

@@ -9,8 +9,10 @@ import { Async, Badge, Field, FormError, InstagramLink, IsoDateField, LocalDateT
 import { canDo, canWrite, useMe } from '../../../../components/shell';
 import { Attachments } from '../../../../components/attachments';
 import { ContactEditForm } from '../../../../components/manual-lead';
+import { LeadFormAnswers, type FormInquiry } from '../../../../components/lead-form-answers';
 
 interface LeadDetail {
+  inquiries: FormInquiry[];
   lead: {
     id: string;
     name: string;
@@ -95,6 +97,7 @@ export default function LeadPage() {
               </div>
             )}
             <FormError error={error} />
+            <LeadFormAnswers inquiries={d.inquiries ?? []} />
             <div className="split">
               <div>
                 <RequirementsForm lead={l} req={req} readOnly={!writable} onSave={(body) => run(() => api(`/api/v1/leads/${id}`, { method: 'PATCH', body: { version: l.version, ...body } }))} />

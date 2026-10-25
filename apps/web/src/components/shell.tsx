@@ -16,7 +16,7 @@ export interface Me {
   capabilities: string[];
   mfa: { required: boolean; enrolled: boolean; verified: boolean };
   appMode: 'demo' | 'staging' | 'production';
-  liveStatus?: { instagramDirectInboundVerified: boolean };
+  liveStatus?: { instagramDirectInboundVerified: boolean; instagramDirectOutboundVerified?: boolean; leadAdsVerified?: boolean };
 }
 
 const MeContext = createContext<Me | null>(null);
@@ -124,7 +124,7 @@ export function Shell({ children }: { children: ReactNode }) {
         <main className="content">
           {me.appMode === 'demo' && pathname !== '/dashboard' && (
             <div className="demo-banner" role="note">
-              Входящие сообщения Instagram — {me.liveStatus?.instagramDirectInboundVerified ? 'подключены' : 'не проверены'}. Ответы из CRM и рекламные формы — не подключены.
+              Входящие сообщения Instagram — {me.liveStatus?.instagramDirectInboundVerified ? 'подключены' : 'не проверены'}. Ответы из CRM — {me.liveStatus?.instagramDirectOutboundVerified ? 'проверены' : 'не проверены'}. Рекламные формы — {me.liveStatus?.leadAdsVerified ? 'получение заявок проверено' : 'не проверены'}.
               {canDo(me, 'integrations.manage') && (
                 <>
                   {' '}

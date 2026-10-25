@@ -11,6 +11,7 @@ import { AttachmentsService } from './services/attachments.service';
 import { SlaService } from './services/sla.service';
 import { PrivacyService } from './services/privacy.service';
 import { LeadAdsBackfillService } from './services/lead-ads-backfill.service';
+import { LeadAdsService } from './services/lead-ads.service';
 import { AuthService } from './services/auth.service';
 import { DashboardService } from './services/dashboard.service';
 import { IntakeService } from './services/intake.service';
@@ -48,6 +49,7 @@ export interface Core {
   sla: SlaService;
   privacy: PrivacyService;
   leadAdsBackfill: LeadAdsBackfillService;
+  leadAds: LeadAdsService;
   close(): Promise<void>;
 }
 
@@ -64,7 +66,7 @@ export function createCore(config: AppConfig, o: CoreOverrides = {}): Core {
   const redis = o.redis ?? new Redis(config.redisUrl, { maxRetriesPerRequest: 2 });
   redis.on('error', () => undefined);
   const logger = o.logger ?? createLogger(config.logLevel);
-  const adapters = buildAdapters(config, redis);
+  const adapters = buildAdapters(config, redis, o.fetchImpl);
   const deps: CoreDeps = { prisma, redis, config, adapters, clock: o.clock ?? systemClock, logger, encryptionKey: loadEncryptionKey(config.encryptionKey), ...(o.fetchImpl ? { fetchImpl: o.fetchImpl } : {}) };
   return {
     deps,
@@ -88,6 +90,7 @@ export function createCore(config: AppConfig, o: CoreOverrides = {}): Core {
     sla: new SlaService(deps),
     privacy: new PrivacyService(deps),
     leadAdsBackfill: new LeadAdsBackfillService(deps),
+    leadAds: new LeadAdsService(deps, o.fetchImpl),
     async close() {
       if (!o.prisma) await prisma.$disconnect();
       if (!o.redis) redis.disconnect();

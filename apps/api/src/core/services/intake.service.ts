@@ -10,6 +10,8 @@ import { identifyContact } from './identity.service';
 import { IG_PLACEHOLDER_NAME, InstagramProfileService } from './instagram-profile.service';
 import { LeadsService } from './leads.service';
 import { markLiveVerified } from './live-verification';
+import { metaLeadsFor } from '../adapters';
+import { markLeadAdsImported } from './lead-ads.service';
 
 export class ConnectionPausedError extends Error {
   constructor(readonly connectionId: string) {
@@ -81,7 +83,7 @@ export class IntakeService {
   }
 
   private async connection(provider: 'META_LEADS' | 'META_DIRECT', accountId: string) {
-    return this.d.prisma.integrationConnection.findFirst({ where: { provider, accountId } });
+    return this.d.prisma.integrationConnection.findFirst({ where: { provider, accountId, ...(provider === 'META_LEADS' ? { disconnectedAt: null } : {}) } });
   }
 
   // ---------------- Lead Ads (TZ §8) ----------------
@@ -90,16 +92,26 @@ export class IntakeService {
     const conn = await this.connection('META_LEADS', evt.pageId);
     if (!conn) return 'ignored';
     assertConnectionActive(conn);
+    const formIds = (conn.settings as { formIds?: string[] }).formIds;
+    if (conn.mode === 'live' && (!formIds?.length || !evt.formId || !formIds.includes(evt.formId))) return 'ignored';
     const companyId = conn.companyId;
     const eventKey = `meta_leads:${evt.leadgenId}`;
     const done = await this.d.prisma.inquiry.findUnique({ where: { companyId_providerEventKey: { companyId, providerEventKey: eventKey } } });
-    if (done?.processedAt) return 'duplicate';
+    if (done?.processedAt) {
+      await markLeadAdsImported(this.d, conn.id, correlationId);
+      return 'duplicate';
+    }
 
     // Fetch outside the transaction; webhook payloads never carry the answers reliably.
-    const lead = await this.d.adapters.metaLeads.fetchLead(evt.leadgenId, connectionToken(conn, this.d.encryptionKey));
+    const lead = await metaLeadsFor(this.d.adapters, conn.mode).fetchLead(evt.leadgenId, connectionToken(conn, this.d.encryptionKey)).catch(async (err: Error) => {
+      if (conn.mode === 'live') await this.d.prisma.integrationConnection.updateMany({ where: { id: conn.id, version: conn.version, disconnectedAt: null }, data: { health: 'degraded', healthReason: 'lead_ads_retrieval_failed', lastError: err.message.slice(0, 300) } });
+      throw err;
+    });
+    if (conn.mode === 'live' && lead.formId && !formIds!.includes(lead.formId)) return 'ignored';
     const company = await this.d.prisma.company.findUniqueOrThrow({ where: { id: companyId } });
     const settings = (company.settings ?? {}) as { leadForms?: Record<string, LeadFormMapping> };
-    const mapping = lead.formId ? settings.leadForms?.[lead.formId] : undefined;
+    const formId = lead.formId ?? evt.formId;
+    const mapping = formId ? settings.leadForms?.[formId] : undefined;
     const fieldMap = { ...DEFAULT_FIELD_MAP, ...(mapping?.fields ?? {}) };
     const local: Record<string, string> = {};
     for (const [providerField, value] of Object.entries(lead.fields)) {
@@ -107,6 +119,7 @@ export class IntakeService {
       if (target) local[target] = value;
     }
     const nullReasons: Record<string, string> = {};
+    local.full_name ||= [lead.fields.first_name, lead.fields.last_name].filter(Boolean).join(' ');
     if (!local.full_name) nullReasons.full_name = 'not_in_form_response';
     if (!local.phone) nullReasons.phone = 'not_in_form_response';
     const phone = normalizePhone(local.phone ?? null, company.phoneRule as CompanyPhoneRule | null);
@@ -163,6 +176,7 @@ export class IntakeService {
       });
 
       const adId = lead.adId ?? evt.adId;
+      if (linked.created && linked.lead && local.destination) await tx.lead.update({ where: { id: linked.lead.id }, data: { requirements: { destination: local.destination } } });
       await tx.inquiry.update({
         where: { id: inquiry.id },
         data: {
@@ -180,6 +194,7 @@ export class IntakeService {
       await this.finishAssignments(tx);
       return 'processed' as const;
     }, INTAKE_TX);
+    if (result === 'processed') await markLeadAdsImported(this.d, conn.id, correlationId);
     return result;
   }
 

@@ -1,5 +1,13 @@
 # Known limitations
 
+## Lead Ads qo‘shimchasi (2026-10-25)
+
+Facebook OAuth, Page/forma tanlash, `leadgen` obunasi, aralash demo/live rejimida haqiqiy
+Lead Ads marshrutlash va kartalarda forma javoblari qo‘shildi. Meta App Review, Page/Leads Access,
+Railway deploy hamda NONA Travel akkauntidan haqiqiy test lid bu kod bilan avtomatik bajarilmaydi.
+Credential yoki demo testning o‘zi live tayyorlik dalili emas. Qabul tartibi: `docs/lead-ads-setup.md`.
+Quyidagi dastlabki bosqichga tegishli qaydlar tarixiy bo‘lib, joriy holatni alohida tekshirish kerak.
+
 Holat: 2026-10-24. Tizim **production tayyor emas** — quyidagi bloklar tashqi akkaunt yoki infratuzilmaga bog‘liq. Credential talab qilmaydigan majburiy funksiyalar kod va testlar bilan yopilgan (`docs/acceptance-matrix.md`).
 
 ## 1. Tashqi akkauntga bog‘liq (⛔)

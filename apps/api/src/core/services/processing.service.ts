@@ -5,8 +5,9 @@ import { ProviderError, type MetaEvent } from '@crm/integrations';
 import { audit } from '../audit';
 import { systemActor, type CoreDeps } from '../context';
 import { headRecipients, notify } from '../events';
-import { ConnectionPausedError, IntakeService, connectionToken } from './intake.service';
+import { assertConnectionActive, ConnectionPausedError, IntakeService, connectionToken } from './intake.service';
 import { markLiveVerified, SENDABLE_DEGRADED_REASONS } from './live-verification';
+import { metaLeadsFor } from '../adapters';
 
 type HandlerResult = { kind: 'done'; result?: Record<string, unknown> } | { kind: 'retry_later'; delayMs: number; reason: string };
 
@@ -196,7 +197,7 @@ export class ProcessingService {
       case 'meta.backfill': {
         const { LeadAdsBackfillService } = await import('./lead-ads-backfill.service');
         const since = typeof p.since === 'string' ? new Date(p.since) : undefined;
-        return { kind: 'done', result: (await new LeadAdsBackfillService(this.d).run(op.companyId, { since })) as unknown as Record<string, unknown> };
+        return { kind: 'done', result: (await new LeadAdsBackfillService(this.d).run(op.companyId, { since, connectionId: typeof p.connectionId === 'string' ? p.connectionId : undefined })) as unknown as Record<string, unknown> };
       }
       default:
         throw new ProviderError(`Unknown outbox action ${op.action}`, 'validation', null);
@@ -207,7 +208,8 @@ export class ProcessingService {
   private async handleEnrich(inquiryId: string, adId: string, connectionId: string): Promise<HandlerResult> {
     const conn = await this.d.prisma.integrationConnection.findUniqueOrThrow({ where: { id: connectionId } });
     try {
-      const names = await this.d.adapters.metaLeads.fetchAdNames(adId, connectionToken(conn, this.d.encryptionKey));
+      assertConnectionActive(conn);
+      const names = await metaLeadsFor(this.d.adapters, conn.mode).fetchAdNames(adId, connectionToken(conn, this.d.encryptionKey));
       const inquiry = await this.d.prisma.inquiry.findUniqueOrThrow({ where: { id: inquiryId } });
       await this.d.prisma.inquiry.update({ where: { id: inquiryId }, data: { attribution: { ...(inquiry.attribution as object), ...names }, enrichmentState: 'done', enrichmentError: null } });
       return { kind: 'done' };

@@ -115,13 +115,18 @@ export class AuthService {
       capabilities: capabilitiesFor({ role: user.role, extraCapabilities: user.extraCapabilities }),
       mfa: { required: info.mfaRequired, enrolled: info.mfaEnrolled, verified: info.mfaVerified },
       appMode: this.d.config.mode,
-      liveStatus: { instagramDirectInboundVerified: await this.instagramInboundVerified(actor.companyId) },
+      liveStatus: await this.integrationLiveStatus(actor.companyId),
     };
   }
 
-  private async instagramInboundVerified(companyId: string): Promise<boolean> {
-    const conns = await this.d.prisma.integrationConnection.findMany({ where: { companyId, provider: 'META_DIRECT', mode: 'live', disconnectedAt: null }, select: { settings: true } });
-    return conns.some((c) => !!(c.settings as Record<string, unknown> | null)?.verifiedInboundAt);
+  private async integrationLiveStatus(companyId: string) {
+    const conns = await this.d.prisma.integrationConnection.findMany({ where: { companyId, provider: { in: ['META_DIRECT', 'META_LEADS'] }, mode: 'live', disconnectedAt: null, health: { notIn: ['paused', 'disconnected'] } }, select: { provider: true, settings: true, healthReason: true } });
+    const direct = conns.filter(c => c.provider === 'META_DIRECT');
+    return {
+      instagramDirectInboundVerified: direct.some(c => !!(c.settings as Record<string, unknown> | null)?.verifiedInboundAt),
+      instagramDirectOutboundVerified: direct.some(c => !!(c.settings as Record<string, unknown> | null)?.verifiedOutboundAt),
+      leadAdsVerified: conns.some(c => c.provider === 'META_LEADS' && c.healthReason !== 'lead_ads_retrieval_failed' && !!(c.settings as Record<string, unknown> | null)?.verifiedWebhookAt),
+    };
   }
 
   // ---- MFA enrollment (admin) ----

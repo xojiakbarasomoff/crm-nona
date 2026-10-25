@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Body, Controller, Get, Headers, Inject, Param, Post, Query, Req, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import type { Redis } from 'ioredis';
-import { buildOpenApi, DemoDirectSchema, DemoLeadAdsSchema } from '@crm/contracts';
+import { buildOpenApi, DemoDirectSchema, DemoLeadAdsSchema, LeadAdsConnectSchema } from '@crm/contracts';
 import { can } from '@crm/domain';
 import { DemoMetaLeadsClient, parseSignedRequest, signMetaBody, type DemoFailure } from '@crm/integrations';
 import { AppError } from '../core/errors';
@@ -187,6 +187,38 @@ export class PlatformController {
     send(res, 202, { operationId: id });
   }
 
+  @Get('api/v1/integrations/lead-ads/status')
+  async leadAdsStatus(@Actor() actor: UserActor, @Res() res: Response) {
+    send(res, 200, await this.core.leadAds.status(actor));
+  }
+
+  @Post('api/v1/integrations/lead-ads/oauth/start')
+  async leadAdsStart(@Actor() actor: UserActor, @Res() res: Response) {
+    send(res, 200, await this.core.leadAds.start(actor));
+  }
+
+  @Get('api/v1/integrations/lead-ads/oauth/callback')
+  async leadAdsCallback(@Actor() actor: UserActor, @Query() q: Record<string, unknown>, @Res() res: Response) {
+    const base = `${this.core.deps.config.appPublicUrl}/integrations`;
+    if (typeof q.error === 'string' || typeof q.code !== 'string' || typeof q.state !== 'string') return void res.redirect(302, `${base}?lead_ads=denied`);
+    try {
+      await this.core.leadAds.callback(actor, { code: q.code, state: q.state });
+      res.redirect(302, `${base}?lead_ads=select_page`);
+    } catch (err) {
+      res.redirect(302, `${base}?lead_ads=failed&reason=${encodeURIComponent((err as { code?: string }).code ?? 'META_ERROR')}`);
+    }
+  }
+
+  @Get('api/v1/integrations/lead-ads/forms')
+  async leadAdsForms(@Actor() actor: UserActor, @Query('pageId') pageId: string, @Res() res: Response) {
+    send(res, 200, await this.core.leadAds.forms(actor, typeof pageId === 'string' ? pageId : ''));
+  }
+
+  @Post('api/v1/integrations/lead-ads/connect')
+  async leadAdsConnect(@Actor() actor: UserActor, @Body() body: unknown, @Res() res: Response) {
+    send(res, 200, await this.core.leadAds.connect(actor, parse(LeadAdsConnectSchema, body)));
+  }
+
   @Get('api/v1/privacy/retention')
   async retention(@Actor() actor: UserActor, @Res() res: Response) {
     requireCapOrThrow(actor, 'integrations.manage');
@@ -304,7 +336,7 @@ export class PlatformController {
     requireDemo(this.core);
     requireCapOrThrow(actor, 'integrations.manage');
     const input = parse(DemoLeadAdsSchema, body);
-    const conn = await this.core.deps.prisma.integrationConnection.findFirstOrThrow({ where: { companyId: actor.companyId, provider: 'META_LEADS' } });
+    const conn = await this.core.deps.prisma.integrationConnection.findFirstOrThrow({ where: { companyId: actor.companyId, provider: 'META_LEADS', mode: 'demo' } });
     const leadgenId = `demo_${Date.now()}_${randomUUID().slice(0, 6)}`;
     const leads = this.core.deps.adapters.metaLeads as DemoMetaLeadsClient;
     await leads.registerLead({
@@ -326,7 +358,7 @@ export class PlatformController {
     requireDemo(this.core);
     requireCapOrThrow(actor, 'integrations.manage');
     const input = parse(DemoDirectSchema, body);
-    const conn = await this.core.deps.prisma.integrationConnection.findFirstOrThrow({ where: { companyId: actor.companyId, provider: 'META_DIRECT' } });
+    const conn = await this.core.deps.prisma.integrationConnection.findFirstOrThrow({ where: { companyId: actor.companyId, provider: 'META_DIRECT', mode: 'demo' } });
     const mid = `demo_mid_in_${randomUUID()}`;
     const payload = Buffer.from(
       JSON.stringify({

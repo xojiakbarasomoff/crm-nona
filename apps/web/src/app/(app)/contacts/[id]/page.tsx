@@ -8,12 +8,13 @@ import { useState } from 'react';
 import { useMe } from '../../../../components/shell';
 import { Async, Badge, FormError, InstagramLink, Section } from '../../../../components/ui';
 import { Attachments } from '../../../../components/attachments';
+import { LeadFormAnswers, type FormInquiry } from '../../../../components/lead-form-answers';
 
 interface ContactView {
   contact: { id: string; fullName: string | null; primaryPhone: string | null; primaryEmail: string | null; piiErasedAt: string | null; instagramUsername: string | null; instagramName: string | null };
   identifiers: Array<{ id: string; type: string; value: string; shared: boolean; verified: boolean; displayUsername: string | null }>;
   leads: Array<{ id: string; name: string; stage: string }>;
-  inquiries: Array<{ id: string; channel: string; placement: string; receivedAt: string; enrichmentState: string }>;
+  inquiries: Array<FormInquiry & { placement: string; enrichmentState: string }>;
   orders: Array<{ id: string; orderNo: string; fulfillmentState: string; paymentState: string }>;
   conversations: Array<{ id: string; historyAvailableFrom: string | null; messages: Array<{ id: string; direction: string; content: string | null; state: string; actorType: string; createdAt: string; type: string }> }>;
 }
@@ -76,6 +77,7 @@ export default function ContactPage() {
                   </div>
                 </Section>
               ))}
+              <LeadFormAnswers inquiries={d.inquiries} />
               <Section title="Обращения">
                 <ul>
                   {d.inquiries.map((i) => (

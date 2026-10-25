@@ -288,7 +288,8 @@ describe('Lead Ads history re-fetch (TZ §8.3)', () => {
     expect(inq).toMatchObject({ channel: 'instagram_lead_ads', placement: 'instagram_form_mapping' });
 
     const again = await core.leadAdsBackfill.run(companyId, { pageSize: 2 });
-    expect(again.forms.find((f) => f.formId === formId)).toMatchObject({ fetched: 0, newEvents: 0 });
+    // Курсор держит перекрытие в 1 с (лиды с одинаковой отметкой времени): повторные получения безвредны, новых событий нет.
+    expect(again.forms.find((f) => f.formId === formId)).toMatchObject({ newEvents: 0 });
 
     const old = await core.leadAdsBackfill.run(companyId, { since: new Date(clock.now().getTime() - 400 * 86400_000), pageSize: 2 });
     expect(old.forms.find((f) => f.formId === formId)!.gap).toMatchObject({ reason: 'outside_retrieval_window' });

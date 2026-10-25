@@ -3,6 +3,8 @@ import { audit } from '../audit';
 import { integrationActor, type CoreDeps } from '../context';
 import { storeInboxEvent } from '../queue';
 import { assertConnectionActive, connectionToken } from './intake.service';
+import { metaLeadsFor } from '../adapters';
+import type { IntegrationConnection } from '@crm/database';
 
 interface FormCursor {
   since: string;
@@ -22,12 +24,21 @@ export interface BackfillResult {
 export class LeadAdsBackfillService {
   constructor(private readonly d: CoreDeps) {}
 
-  async run(companyId: string, opts: { since?: Date; maxPagesPerForm?: number; pageSize?: number } = {}): Promise<BackfillResult> {
-    const conn = await this.d.prisma.integrationConnection.findFirstOrThrow({ where: { companyId, provider: 'META_LEADS' } });
+  async run(companyId: string, opts: { since?: Date; maxPagesPerForm?: number; pageSize?: number; connectionId?: string } = {}): Promise<BackfillResult> {
+    const connections = await this.d.prisma.integrationConnection.findMany({ where: { companyId, provider: 'META_LEADS', disconnectedAt: null, health: { notIn: ['paused', 'disconnected'] }, ...(opts.connectionId ? { id: opts.connectionId } : {}) }, orderBy: { createdAt: 'asc' } });
+    // A live Page takes precedence over historical demo connections in a mixed deployment.
+    const selected = connections.some(c => c.mode === 'live') ? connections.filter(c => c.mode === 'live') : connections;
+    const result: BackfillResult = { forms: [] };
+    for (const conn of selected) result.forms.push(...(await this.runConnection(conn, opts)).forms);
+    return result;
+  }
+
+  private async runConnection(conn: IntegrationConnection, opts: { since?: Date; maxPagesPerForm?: number; pageSize?: number }): Promise<BackfillResult> {
+    const companyId = conn.companyId;
     assertConnectionActive(conn);
     const company = await this.d.prisma.company.findUniqueOrThrow({ where: { id: companyId } });
     const forms = [
-      ...new Set([...Object.keys(((company.settings ?? {}) as { leadForms?: Record<string, unknown> }).leadForms ?? {}), ...((((conn.settings ?? {}) as { formIds?: string[] }).formIds) ?? [])]),
+      ...new Set([...(conn.mode === 'demo' ? Object.keys(((company.settings ?? {}) as { leadForms?: Record<string, unknown> }).leadForms ?? {}) : []), ...((((conn.settings ?? {}) as { formIds?: string[] }).formIds) ?? [])]),
     ];
     const token = connectionToken(conn, this.d.encryptionKey);
     const now = this.d.clock.now();
@@ -45,7 +56,7 @@ export class LeadAdsBackfillService {
       let maxSeen = since;
       const stat = { formId, fetched: 0, newEvents: 0, duplicates: 0, pages: 0, gap };
       for (let page = 0; page < (opts.maxPagesPerForm ?? 500); page++) {
-        const r = await this.d.adapters.metaLeads.listFormLeads(formId, since, after, token, opts.pageSize);
+        const r = await metaLeadsFor(this.d.adapters, conn.mode).listFormLeads(formId, since, after, token, opts.pageSize);
         stat.pages++;
         for (const lead of r.items) {
           stat.fetched++;
@@ -60,7 +71,8 @@ export class LeadAdsBackfillService {
         await this.saveCursor(conn.id, companyId, stream, { since: since.toISOString(), after }, null);
         if (!after) break;
       }
-      await this.saveCursor(conn.id, companyId, stream, { since: maxSeen.toISOString(), after: null }, stat);
+      // When the page budget is exhausted, keep the cursor instead of silently skipping the rest.
+      await this.saveCursor(conn.id, companyId, stream, after ? { since: since.toISOString(), after } : { since: new Date(Math.max(since.getTime(), maxSeen.getTime() - 1000)).toISOString(), after: null }, stat);
       result.forms.push(stat);
     }
     await audit(this.d.prisma, integrationActor(companyId, 'meta_lead_ads'), { entityType: 'integration', entityId: conn.id, action: 'lead_ads_backfill', newValue: result });

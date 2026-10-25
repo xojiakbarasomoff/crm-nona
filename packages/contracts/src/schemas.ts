@@ -19,6 +19,7 @@ const isoDateTime = z.string().datetime({ offset: true });
 
 export const STAGE = z.enum(['NEW', 'CONTACTED', 'QUALIFIED', 'PREPARING_OFFER', 'OFFER_SENT', 'AWAITING_PAYMENT', 'WON', 'LOST', 'FOLLOW_UP']);
 export const CHANNEL = z.enum(['instagram_lead_ads', 'meta_lead_ads', 'instagram_direct', 'amocrm', 'manual', 'other']);
+export const LeadAdsConnectSchema = z.object({ pageId: z.string().regex(/^\d+$/), formIds: z.array(z.string().regex(/^\d+$/)).min(1).max(100) }).strict();
 export const SERVICE_TYPE = z.enum(['avia', 'tour_package', 'hotel', 'transfer', 'visa', 'other']);
 /** Hujjat kategoriyalari (TZ qo‘shimchasi §D). */
 export const DOCUMENT_CATEGORY = z.enum(['passport', 'invoice', 'payment_receipt', 'air_ticket', 'voucher', 'other']);

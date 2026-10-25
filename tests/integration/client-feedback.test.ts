@@ -162,7 +162,7 @@ describe('holat banneri ma’lumoti', () => {
     expect(me0.liveStatus.instagramDirectInboundVerified).toBe(false);
     await p().integrationConnection.create({ data: { companyId: company.id, provider: 'META_DIRECT', mode: 'live', accountId: `ACC_${u()}`, routeToken: `rt-${u()}`, health: 'degraded', healthReason: 'awaiting_live_verification', settings: { verifiedInboundAt: new Date().toISOString() } } });
     const me1 = (await mgrA.get('/api/v1/me')).body;
-    expect(me1.liveStatus).toEqual({ instagramDirectInboundVerified: true });
+    expect(me1.liveStatus).toMatchObject({ instagramDirectInboundVerified: true });
     expect(JSON.stringify(me1)).not.toMatch(/token|secret|credential/i);
   });
 });
