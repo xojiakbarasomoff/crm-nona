@@ -37,10 +37,16 @@ interface Sets {
   liveConvIds: string[];
 }
 
+interface Only {
+  contacts: string[];
+  leads: string[];
+  orders: string[];
+}
+
 interface TableSpec {
   table: string;
   where: string;
-  args: (s: Sets, rx: { links: string; ids: string }) => unknown[];
+  args: (s: Sets, rx: { links: string; ids: string; cutoff: string | null }) => unknown[];
 }
 
 const idRx = (ids: string[]) => ids.join('|');
@@ -77,7 +83,7 @@ const SPECS: TableSpec[] = [
   { table: 'duplicate_candidates', where: `array_length(contact_ids, 1) > 0 AND contact_ids <@ $1::text[]`, args: (s) => [s.C] },
   { table: 'pii_tombstones', where: `contact_id = ANY($1${U})`, args: (s) => [s.C] },
   { table: 'contacts', where: `id = ANY($1${U})`, args: (s) => [s.C] },
-  { table: 'webhook_inbox', where: `provider = 'meta' AND connection_key = ANY($1::text[])`, args: (s) => [s.demoAccounts] },
+  { table: 'webhook_inbox', where: `provider = 'meta' AND connection_key = ANY($1::text[]) AND received_at <= coalesce($2::timestamptz, 'infinity'::timestamptz)`, args: (s, rx) => [s.demoAccounts, rx.cutoff] },
   { table: 'outbox_operations', where: `payload::text ~ $1`, args: (_s, rx) => [rx.ids] },
 ];
 
@@ -91,7 +97,7 @@ export class DemoCleanupService {
   }
 
   /** Sun'iy / haqiqiy / noaniq to'plamlar va barcha bog'liq ID'lar. */
-  private async buildSets(companyId: string) {
+  private async buildSets(companyId: string, only?: Only) {
     const p = this.d.prisma;
     const [conns, contacts, convs, inquiries, leads, orders] = await Promise.all([
       p.integrationConnection.findMany({ where: { companyId }, select: { id: true, provider: true, mode: true, accountId: true, disconnectedAt: true } }),
@@ -121,11 +127,24 @@ export class DemoCleanupService {
     const orderKind = new Map(orders.map((o) => [o.id, o.leadId && leadKind.get(o.leadId) === 'demo' && contactKind.get(o.contactId) === 'demo' ? 'demo' : o.leadId && leadKind.get(o.leadId) === 'real' ? 'real' : 'uncertain']));
 
     const pick = (m: Map<string, string>, k: string) => [...m].filter(([, v]) => v === k).map(([id]) => id).sort();
-    const C = pick(contactKind, 'demo');
-    const L = pick(leadKind, 'demo');
-    const O = pick(orderKind, 'demo');
-    const CONV = convs.filter((c) => contactKind.get(c.contactId) === 'demo').map((c) => c.id).sort();
-    const INQ = inquiries.filter((i) => (i.contactId && contactKind.get(i.contactId) === 'demo') || (i.leadId && leadKind.get(i.leadId) === 'demo')).map((i) => i.id).sort();
+    let C = pick(contactKind, 'demo');
+    let L = pick(leadKind, 'demo');
+    let O = pick(orderKind, 'demo');
+    if (only) {
+      // Faqat tasdiqlangan eksportdagi ID'lar: ularning har biri hozir ham sun'iy bo'lishi shart; eksportdan keyin kelgan yangi yozuvlarga tegilmaydi.
+      for (const [name, list, cur] of [['contacts', only.contacts, C], ['leads', only.leads, L], ['orders', only.orders, O]] as const) {
+        const have = new Set(cur);
+        const bad = list.filter((id) => !have.has(id));
+        if (bad.length) throw conflict('EXPORT_RECORD_CHANGED', `Eksportdagi ${name} yozuvi endi sun’iy deb tasniflanmaydi yoki yo‘q (${bad.length}); to‘xtatildi`);
+      }
+      C = [...only.contacts].sort();
+      L = [...only.leads].sort();
+      O = [...only.orders].sort();
+    }
+    const cSet = new Set(C);
+    const lSet = new Set(L);
+    const CONV = convs.filter((c) => cSet.has(c.contactId)).map((c) => c.id).sort();
+    const INQ = inquiries.filter((i) => (i.contactId && cSet.has(i.contactId)) || (i.leadId && lSet.has(i.leadId))).map((i) => i.id).sort();
 
     const [passengers, segments] = await Promise.all([p.passenger.findMany({ where: { companyId, orderId: { in: O } }, select: { id: true } }), p.flightSegment.findMany({ where: { companyId, orderId: { in: O } }, select: { id: true } })]);
     const P = passengers.map((x) => x.id).sort();
@@ -160,20 +179,20 @@ export class DemoCleanupService {
     return { sets, info };
   }
 
-  private regexes(s: Sets) {
+  private regexes(s: Sets, cutoff: string | null = null) {
     const linkIds = [...s.L, ...s.O, ...s.C];
     const allIds = [...s.L, ...s.O, ...s.C, ...s.INQ, ...s.TASK, ...s.P, ...s.S, ...s.ATT];
     // Bo'sh to'plam hech narsaga mos kelmaydigan regex bo'lsin (^$ bo'sh matnga ham mos kelmasligi uchun maxsus belgi).
     const never = '(?!x)x';
-    return { links: linkIds.length ? `/(leads|orders|contacts)/(${idRx(linkIds)})($|[/?#])` : never, ids: allIds.length ? idRx(allIds) : never };
+    return { links: linkIds.length ? `/(leads|orders|contacts)/(${idRx(linkIds)})($|[/?#])` : never, ids: allIds.length ? idRx(allIds) : never, cutoff };
   }
 
   private manifestHash(s: Sets, counts: Record<string, number>) {
     return sha({ C: s.C, L: s.L, O: s.O, CONV: s.CONV, INQ: s.INQ, P: s.P, S: s.S, T: s.T, OCC: s.OCC, TASK: s.TASK, ATT: s.ATT, demoAccounts: s.demoAccounts, counts });
   }
 
-  private async countRows(s: Sets): Promise<Record<string, number>> {
-    const rx = this.regexes(s);
+  private async countRows(s: Sets, cutoff: string | null = null): Promise<Record<string, number>> {
+    const rx = this.regexes(s, cutoff);
     const out: Record<string, number> = {};
     for (const spec of SPECS) {
       const rows = await this.d.prisma.$queryRawUnsafe<Array<{ n: bigint }>>(`SELECT count(*)::bigint AS n FROM "${spec.table}" WHERE ${spec.where}`, ...spec.args(s, rx));
@@ -279,13 +298,15 @@ export class DemoCleanupService {
    * O'chirish: faqat eksport hash'i mos kelganda; bitta tranzaksiya; har jadvalda o'chirilgan soni oldindan sanalgan songa teng bo'lishi shart.
    * Dashboard keshi (faqat `dash:<kompaniya>:*`) tozalanadi; Redis/navbatlar umumiy tozalanmaydi.
    */
-  async execute(actor: UserActor, input: { manifestHash: string; confirm: string; allowPaymentDeletion?: string }) {
+  async execute(actor: UserActor, input: { manifestHash: string; confirm: string; allowPaymentDeletion?: string; only?: Only; cutoff?: string }) {
     this.requireAdmin(actor);
     if (input.confirm !== 'DELETE-DEMO-RECORDS') throw unprocessable('CONFIRM_REQUIRED', 'Tasdiqlash matni noto‘g‘ri');
-    const { sets } = await this.buildSets(actor.companyId);
-    const counts = await this.countRows(sets);
+    const cutoff = input.cutoff ? new Date(input.cutoff).toISOString() : null;
+    if (input.only && !cutoff) throw unprocessable('CUTOFF_REQUIRED', 'only bilan birga eksport vaqti (cutoff) ham kerak');
+    const { sets } = await this.buildSets(actor.companyId, input.only);
+    const counts = await this.countRows(sets, cutoff);
     if (this.manifestHash(sets, counts) !== input.manifestHash) throw conflict('MANIFEST_MISMATCH', 'Ma’lumotlar eksport qilinganidan keyin o‘zgargan; qayta eksport qiling');
-    const rx = this.regexes(sets);
+    const rx = this.regexes(sets, cutoff);
     const before = await this.keepCounts(actor.companyId);
     const deleted: Record<string, number> = {};
     try {
@@ -311,7 +332,7 @@ export class DemoCleanupService {
     return { deleted, before, after, cacheKeysDeleted };
   }
 
-  private async runDelete(actor: UserActor, manifestHash: string, sets: Sets, counts: Record<string, number>, rx: { links: string; ids: string }, deleted: Record<string, number>, unlockPayments: boolean) {
+  private async runDelete(actor: UserActor, manifestHash: string, sets: Sets, counts: Record<string, number>, rx: { links: string; ids: string; cutoff: string | null }, deleted: Record<string, number>, unlockPayments: boolean) {
     await this.d.prisma.$transaction(
       async (tx) => {
         for (const spec of SPECS) {
