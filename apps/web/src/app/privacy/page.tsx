@@ -24,6 +24,9 @@ export default function PrivacyPage() {
   return (
     <main style={{ maxWidth: 760, margin: '40px auto', padding: '0 16px', lineHeight: 1.6 }}>
       <h1>Maxfiylik siyosati</h1>
+      <p style={{ border: '1px solid #b45309', background: '#fffbeb', color: '#78350f', padding: '10px 12px', borderRadius: 6 }}>
+        <b>Qoralama.</b> Ushbu matn hali kompaniya tomonidan to‘liq tasdiqlanmagan. Sariq belgi bilan ko‘rsatilgan maydonlar (yuridik nom, shahar, saqlash muddatlari va boshqalar) hali kiritilmagan va to‘ldirilgach matn yangilanadi.
+      </p>
       <p>
         Ushbu siyosat «NONA Travel CRM» tizimi (keyingi o‘rinlarda — «Tizim») Instagram Direct orqali kelgan murojaatlarni qabul qilish va qayta ishlashda qanday shaxsiy ma’lumotlarni
         olishini, qayerda ishlatishini, kimlar ko‘rishini va ularni o‘chirishni qanday so‘rash mumkinligini tushuntiradi.
