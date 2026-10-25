@@ -62,6 +62,35 @@ export class SuppliersService {
     }
   }
 
+  /**
+   * Turoperatorlarni ma'lumotnomaga IDEMPOTENT kiritish: nom katta-kichik harfsiz solishtiriladi (bazadagi unikal indeks bilan bir xil);
+   * mavjud (arxivdagi ham) yozuvga tegilmaydi, yangi yozuvlar tranzaksiyada qo'shiladi, takroriy ishga tushirish dublikat yaratmaydi.
+   */
+  async importTourOperators(actor: UserActor, names: string[]) {
+    requireCap(actor, 'suppliers.manage');
+    const wanted = new Map<string, string>();
+    for (const raw of names) {
+      const n = raw.trim().replace(/\s+/g, ' ');
+      if (n && !wanted.has(n.toLowerCase())) wanted.set(n.toLowerCase(), n);
+    }
+    return this.d.prisma.$transaction(async (tx) => {
+      const existing = await tx.supplier.findMany({ where: { companyId: actor.companyId }, select: { name: true, status: true } });
+      const have = new Map(existing.map((e) => [e.name.trim().toLowerCase(), e.status]));
+      const created: string[] = [];
+      const skipped: string[] = [];
+      for (const [key, name] of wanted) {
+        if (have.has(key)) {
+          skipped.push(name);
+          continue;
+        }
+        const s = await tx.supplier.create({ data: { companyId: actor.companyId, name, kind: 'tour_operator' } });
+        await audit(tx, actor, { entityType: 'supplier', entityId: s.id, action: 'created', newValue: { name: s.name, kind: s.kind, via: 'import' } });
+        created.push(name);
+      }
+      return { created, skipped, createdCount: created.length, skippedCount: skipped.length };
+    });
+  }
+
   async update(actor: UserActor, id: string, patch: { version: number; name?: string; kind?: SupplierKind; contactPerson?: string | null; phone?: string | null; email?: string | null; note?: string | null; status?: 'active' | 'archived' }) {
     requireCap(actor, 'suppliers.manage');
     const { version, ...fields } = patch;

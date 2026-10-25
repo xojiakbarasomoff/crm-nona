@@ -52,7 +52,7 @@ export interface Loadable<T> {
 }
 
 /** Loads data, reloads on SSE change events and every 30 s as a polling fallback (TZ §15.3). */
-export function useApi<T>(path: string | null, opts: { pollMs?: number; live?: boolean } = {}): Loadable<T> {
+export function useApi<T>(path: string | null, opts: { pollMs?: number; live?: boolean; reset?: boolean } = {}): Loadable<T> {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(!!path);
@@ -65,17 +65,24 @@ export function useApi<T>(path: string | null, opts: { pollMs?: number; live?: b
     if (!p) return;
     setLoading(true);
     try {
-      setData(await api<T>(p));
+      const fresh = await api<T>(p);
+      if (pathRef.current !== p) return; // boshqa so'rov (filtr) almashgan: eski javob yangi natija bo'lib qolmasin
+      setData(fresh);
       setError(null);
       setLoadedAt(new Date());
     } catch (e) {
-      setError(e as ApiError);
+      if (pathRef.current === p) setError(e as ApiError);
     } finally {
-      setLoading(false);
+      if (pathRef.current === p) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
+    // `reset`: so'rov manzili o'zgarganda (masalan, yangi sana oralig'i) eski natija va xato tozalanadi.
+    if (opts.reset) {
+      setData(null);
+      setError(null);
+    }
     void reload();
   }, [path, reload]);
 
@@ -93,8 +100,38 @@ export function useApi<T>(path: string | null, opts: { pollMs?: number; live?: b
   return { data, error, loading, loadedAt, reload };
 }
 
-export const fmtDateTime = (iso: string | null | undefined, zone = 'Asia/Tashkent') =>
-  iso ? new Intl.DateTimeFormat('uz-Latn-UZ', { timeZone: zone, day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(iso)) : '—';
+/** Yagona ko'rinish: «18:36 · 25.10.2026» (kompaniya vaqt zonasi; bazadagi qiymat siljitilmaydi, faqat ko'rsatiladi). */
+const dtParts = (d: Date, zone: string) => {
+  const o: Record<string, string> = {};
+  for (const p of new Intl.DateTimeFormat('en-GB', { timeZone: zone, day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(d)) o[p.type] = p.value;
+  return o;
+};
+export const fmtDateTime = (iso: string | null | undefined, zone = 'Asia/Tashkent') => {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  const p = dtParts(d, zone);
+  return `${p.hour}:${p.minute} · ${p.day}.${p.month}.${p.year}`;
+};
+/** Faqat sana: «25.10.2026». «YYYY-MM-DD» (sana-only) qiymat vaqt zonasi bilan siljitilmaydi. */
+export const fmtDate = (iso: string | null | undefined, zone = 'Asia/Tashkent') => {
+  if (!iso) return '—';
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (m) return `${m[3]}.${m[2]}.${m[1]}`;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  const p = dtParts(d, zone);
+  return `${p.day}.${p.month}.${p.year}`;
+};
+/** «DD.MM.YYYY» → «YYYY-MM-DD» (haqiqiy kalendar sanasi bo'lmasa null). */
+export const parseDmy = (text: string): string | null => {
+  const m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(text.trim());
+  if (!m) return null;
+  const [, dd, mm, yyyy] = m;
+  const dt = new Date(Date.UTC(Number(yyyy), Number(mm) - 1, Number(dd)));
+  return dt.getUTCFullYear() === Number(yyyy) && dt.getUTCMonth() === Number(mm) - 1 && dt.getUTCDate() === Number(dd) ? `${yyyy}-${mm}-${dd}` : null;
+};
+export const isoToDmy = (iso: string) => fmtDate(iso);
 
 export const newKey = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
 

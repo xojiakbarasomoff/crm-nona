@@ -15,6 +15,7 @@ export interface Me {
   capabilities: string[];
   mfa: { required: boolean; enrolled: boolean; verified: boolean };
   appMode: 'demo' | 'staging' | 'production';
+  liveStatus?: { instagramDirectInboundVerified: boolean };
 }
 
 const MeContext = createContext<Me | null>(null);
@@ -119,7 +120,7 @@ export function Shell({ children }: { children: ReactNode }) {
         <main className="content">
           {me.appMode === 'demo' && (
             <div className="demo-banner" role="note">
-              DEMO REJIM — tashqi provayderlar soxta adapter bilan ishlaydi, real mijozga xabar yuborilmaydi. Barcha ma’lumotlar sun’iy.
+              <b>Ish holati.</b> Instagram Direct kiruvchi xabarlar: {me.liveStatus?.instagramDirectInboundVerified ? 'jonli sinovdan o‘tgan' : 'jonli sinovdan o‘tmagan'} · amoCRM: demo (sinxronizatsiya soxta) · CRM’dan javob yuborish va Lead Ads: ulanmagan.
             </div>
           )}
           {children}

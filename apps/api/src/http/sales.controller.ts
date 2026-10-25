@@ -31,6 +31,12 @@ export class SalesController {
     send(res, 200, await this.core.dashboard.compute(actor, parse(DashboardQuery, q)));
   }
 
+  /** Dashboard filtrlariga mos lidlar jadvali (yaratilgan sana bo'yicha). */
+  @Get('dashboard/leads')
+  async dashboardLeads(@Actor() actor: UserActor, @Query() q: unknown, @Res() res: Response) {
+    send(res, 200, await this.core.dashboard.listLeads(actor, parse(DashboardQuery, q)));
+  }
+
   @Get('exports/leads.csv')
   async exportCsv(@Actor() actor: UserActor, @Query() q: unknown, @Res() res: Response) {
     const csv = await this.core.dashboard.exportLeadsCsv(actor, parse(DashboardQuery, q));
