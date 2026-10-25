@@ -161,7 +161,7 @@ export default function LeadPage() {
                 <Section title="Mijoz">
                   {d.contact ? (
                     <>
-                      <div>{d.contact.fullName ?? '—'}</div>
+                      <div>{d.contact.fullName && d.contact.fullName !== 'Instagram mijoz' ? d.contact.fullName : d.contact.instagramUsername ? `@${d.contact.instagramUsername}` : d.contact.fullName ?? '—'}</div>
                       <div className="muted">{d.contact.primaryPhone ?? 'Telefon yo‘q'}</div>
                       <Link href={`/contacts/${d.contact.id}`}>Mijoz kartasi va yozishmalar</Link>
                     </>

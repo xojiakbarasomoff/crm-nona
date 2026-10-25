@@ -322,7 +322,7 @@ export class ProcessingService {
         customFields: await this.sourceFields(op.companyId, lead),
         contact: {
           existingId: contact.amoContactId,
-          name: contact.fullName ?? identifiers.find((i) => i.displayUsername)?.displayUsername ?? 'Instagram mijoz',
+          name: contact.fullName ?? (contact.instagramUsername ? `@${contact.instagramUsername}` : (identifiers.find((i) => i.displayUsername)?.displayUsername ?? 'Instagram mijoz')),
           phone: contact.primaryPhone,
           email: contact.primaryEmail,
         },
