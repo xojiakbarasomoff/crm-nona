@@ -279,7 +279,7 @@ export class DemoCleanupService {
    * O'chirish: faqat eksport hash'i mos kelganda; bitta tranzaksiya; har jadvalda o'chirilgan soni oldindan sanalgan songa teng bo'lishi shart.
    * Dashboard keshi (faqat `dash:<kompaniya>:*`) tozalanadi; Redis/navbatlar umumiy tozalanmaydi.
    */
-  async execute(actor: UserActor, input: { manifestHash: string; confirm: string }) {
+  async execute(actor: UserActor, input: { manifestHash: string; confirm: string; allowPaymentDeletion?: string }) {
     this.requireAdmin(actor);
     if (input.confirm !== 'DELETE-DEMO-RECORDS') throw unprocessable('CONFIRM_REQUIRED', 'Tasdiqlash matni noto‘g‘ri');
     const { sets } = await this.buildSets(actor.companyId);
@@ -289,10 +289,13 @@ export class DemoCleanupService {
     const before = await this.keepCounts(actor.companyId);
     const deleted: Record<string, number> = {};
     try {
-      await this.runDelete(actor, input.manifestHash, sets, counts, rx, deleted);
+      await this.runDelete(actor, input.manifestHash, sets, counts, rx, deleted, input.allowPaymentDeletion === 'DELETE-DEMO-PAYMENTS');
     } catch (err) {
       if (/payments cannot be deleted/i.test((err as Error).message ?? '')) {
         throw conflict('PAYMENTS_PROTECTED', 'To‘lov qatorlarini bazaning moliyaviy himoyasi o‘chirishga yo‘l qo‘ymaydi (to‘lov faqat qaytarim/bekor qilish bilan o‘zgaradi). Hech narsa o‘chirilmadi.');
+      }
+      if ((err as { meta?: { code?: string } }).meta?.code === '23503' || /foreign key/i.test((err as Error).message ?? '')) {
+        throw conflict('DELETE_BLOCKED_BY_REFERENCE', 'Boshqa (o‘chirilmaydigan) yozuv o‘chiriladigan yozuvga havola qiladi; hammasi bekor qilindi, trigger o‘zgarmadi.');
       }
       throw err;
     }
@@ -308,11 +311,19 @@ export class DemoCleanupService {
     return { deleted, before, after, cacheKeysDeleted };
   }
 
-  private async runDelete(actor: UserActor, manifestHash: string, sets: Sets, counts: Record<string, number>, rx: { links: string; ids: string }, deleted: Record<string, number>) {
+  private async runDelete(actor: UserActor, manifestHash: string, sets: Sets, counts: Record<string, number>, rx: { links: string; ids: string }, deleted: Record<string, number>, unlockPayments: boolean) {
     await this.d.prisma.$transaction(
       async (tx) => {
         for (const spec of SPECS) {
+          // Moliyaviy himoya (payments_no_delete): faqat aniq so'ralganda va FAQAT shu tranzaksiya ichida o'chiriladi; commit'dan oldin qayta yoqiladi va tekshiriladi.
+          const unlock = spec.table === 'payments' && unlockPayments && (counts.payments ?? 0) > 0;
+          if (unlock) await tx.$executeRawUnsafe('ALTER TABLE "payments" DISABLE TRIGGER payments_no_delete');
           const n = await tx.$executeRawUnsafe(`DELETE FROM "${spec.table}" WHERE ${spec.where}`, ...spec.args(sets, rx));
+          if (unlock) {
+            await tx.$executeRawUnsafe('ALTER TABLE "payments" ENABLE TRIGGER payments_no_delete');
+            const t = await tx.$queryRawUnsafe<Array<{ tgenabled: string }>>(`SELECT tgenabled::text AS tgenabled FROM pg_trigger WHERE tgname = 'payments_no_delete' AND tgrelid = '"payments"'::regclass`);
+            if (t[0]?.tgenabled !== 'O') throw conflict('TRIGGER_NOT_RESTORED', 'payments_no_delete triggeri qayta yoqilmadi; hammasi bekor qilindi');
+          }
           if (n !== counts[spec.table]) throw conflict('DELETE_COUNT_MISMATCH', `${spec.table}: o‘chirilgan ${n}, kutilgan ${counts[spec.table]}; hammasi bekor qilindi`);
           deleted[spec.table] = n;
         }
