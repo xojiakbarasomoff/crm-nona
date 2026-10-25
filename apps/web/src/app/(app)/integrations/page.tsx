@@ -75,7 +75,13 @@ export default function IntegrationsPage() {
                         </td>
                         <td>{c.accountDomain ?? c.accountId}</td>
                         <td>
-                          <Badge tone={c.health === 'ok' ? 'ok' : 'warn'}>{HEALTH_LABEL[c.health] ?? c.health}</Badge> <span className="muted">{c.healthReason ? REASON_LABEL[c.healthReason] ?? c.healthReason : ''}</span>
+                          {c.mode === 'demo' ? (
+                            <Badge tone="warn">Demo — haqiqiy ulanish yo‘q</Badge>
+                          ) : (
+                            <>
+                              <Badge tone={c.health === 'ok' ? 'ok' : 'warn'}>{HEALTH_LABEL[c.health] ?? c.health}</Badge> <span className="muted">{c.healthReason ? REASON_LABEL[c.healthReason] ?? c.healthReason : ''}</span>
+                            </>
+                          )}
                         </td>
                         <td>{fmtDateTime(c.lastWebhookAt)}</td>
                         <td>{fmtDateTime(c.lastSyncAt)}</td>
