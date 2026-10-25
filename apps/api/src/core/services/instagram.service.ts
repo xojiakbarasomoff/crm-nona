@@ -76,7 +76,7 @@ export class InstagramService {
     requireCap(actor, 'integrations.manage');
     const m = this.d.config.meta;
     const conns = await this.d.prisma.integrationConnection.findMany({ where: { companyId: actor.companyId, provider: 'META_DIRECT', mode: 'live', disconnectedAt: null, credentialsEnc: { not: null } } });
-    const out: Array<{ accountId: string; httpStatus: number | null; apps: Array<{ name: string | null; id: string | null; fields: string[] }>; error: string | null; profileIds?: { id: string | null; user_id: string | null } }> = [];
+    const out: Array<{ accountId: string; httpStatus: number | null; apps: Array<{ name: string | null; id: string | null; fields: string[] }>; error: string | null; profileIds?: { id: string | null; user_id: string | null }; messagesApi?: { httpStatus: number | null; returned: number | null; error: string | null } }> = [];
     for (const conn of conns) {
       const creds = JSON.parse(decryptSecret(conn.credentialsEnc!, this.d.encryptionKey)) as StoredInstagramCreds;
       try {
@@ -92,6 +92,13 @@ export class InstagramService {
           apps: (body.data ?? []).map((a) => ({ name: a.name ?? null, id: a.id ?? null, fields: a.subscribed_fields ?? [] })),
           error: body.error ? `code=${body.error.code ?? '?'}` : null,
           profileIds: { id: me.id ?? null, user_id: me.user_id ?? null },
+          // instagram_business_manage_messages uchun faqat o'qish: bitta suhbat so'raladi, faqat HTTP holati va soni qaytariladi (ID, ishtirokchi, matn qaytarilmaydi).
+          messagesApi: await this.fetchImpl(`https://graph.instagram.com/${m.graphVersion}/${conn.accountId}/conversations?platform=instagram&limit=1&access_token=${encodeURIComponent(creds.accessToken)}`, { method: 'GET' })
+            .then(async (cr) => {
+              const cb = (await cr.json().catch(() => ({}))) as { data?: unknown[]; error?: { code?: number } };
+              return { httpStatus: cr.status, returned: Array.isArray(cb.data) ? cb.data.length : null, error: cb.error ? `code=${cb.error.code ?? '?'}` : null };
+            })
+            .catch((e: Error) => ({ httpStatus: null, returned: null, error: e.name })),
         });
       } catch (err) {
         out.push({ accountId: conn.accountId, httpStatus: null, apps: [], error: (err as Error).name });
