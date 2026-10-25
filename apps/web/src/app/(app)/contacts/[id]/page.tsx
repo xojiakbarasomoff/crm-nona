@@ -5,11 +5,11 @@ import { useParams } from 'next/navigation';
 import { api, fmtDateTime, SOURCE_LABELS, STAGE_LABELS, useApi, type ApiError } from '../../../../lib/api';
 import { useState } from 'react';
 import { useMe } from '../../../../components/shell';
-import { Async, Badge, FormError, Section } from '../../../../components/ui';
+import { Async, Badge, FormError, InstagramLink, Section } from '../../../../components/ui';
 import { Attachments } from '../../../../components/attachments';
 
 interface ContactView {
-  contact: { id: string; fullName: string | null; primaryPhone: string | null; primaryEmail: string | null; amoContactId: string | null; piiErasedAt: string | null };
+  contact: { id: string; fullName: string | null; primaryPhone: string | null; primaryEmail: string | null; amoContactId: string | null; piiErasedAt: string | null; instagramUsername: string | null; instagramName: string | null };
   identifiers: Array<{ id: string; type: string; value: string; shared: boolean; verified: boolean; displayUsername: string | null }>;
   leads: Array<{ id: string; name: string; stage: string }>;
   inquiries: Array<{ id: string; channel: string; placement: string; receivedAt: string; enrichmentState: string }>;
@@ -26,7 +26,13 @@ export default function ContactPage() {
     <Async state={state}>
       {(d) => (
         <>
-          <h1>{d.contact.fullName ?? 'Ismsiz mijoz'}</h1>
+          <h1>{d.contact.fullName ?? (d.contact.instagramUsername ? `@${d.contact.instagramUsername}` : 'Ismsiz mijoz')}</h1>
+          {d.contact.instagramUsername && (
+            <p>
+              Instagram: <b>@{d.contact.instagramUsername}</b> <InstagramLink username={d.contact.instagramUsername} withHandle={false} />
+              {d.contact.instagramName ? <span className="muted"> · {d.contact.instagramName}</span> : null}
+            </p>
+          )}
           <p className="muted">
             {d.contact.primaryPhone ?? 'Telefon yo‘q'} · {d.contact.primaryEmail ?? 'Email yo‘q'} · amoCRM kontakt: {d.contact.amoContactId ?? 'hali yaratilmagan'}
           </p>

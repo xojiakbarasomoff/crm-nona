@@ -56,6 +56,16 @@ export function Badge({ tone = 'neutral', children }: { tone?: 'neutral' | 'ok' 
   return <span className={`badge ${tone}`}>{children}</span>;
 }
 
+/** Mijozning Instagram username'i va profiliga havola (username faqat harf/raqam/nuqta/pastki chiziq; boshqa belgi bo'lsa havola berilmaydi). */
+export function InstagramLink({ username, withHandle = true }: { username: string | null | undefined; withHandle?: boolean }) {
+  if (!username || !/^[A-Za-z0-9._]{1,30}$/.test(username)) return null;
+  return (
+    <a className="ig-link" href={`https://www.instagram.com/${encodeURIComponent(username)}/`} target="_blank" rel="noopener noreferrer" title="Instagram profilini ochish">
+      {withHandle ? `@${username}` : 'Instagram'} ↗
+    </a>
+  );
+}
+
 export function Field({ label, error, children, hint }: { label: string; error?: string; children: ReactNode; hint?: string }) {
   return (
     <label className="field">

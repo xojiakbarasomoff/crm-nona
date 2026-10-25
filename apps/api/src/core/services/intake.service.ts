@@ -7,6 +7,7 @@ import { integrationActor, type CoreDeps } from '../context';
 import { headRecipients, notify, publishEvent } from '../events';
 import { enqueueOutbox } from '../queue';
 import { identifyContact } from './identity.service';
+import { IG_PLACEHOLDER_NAME, InstagramProfileService } from './instagram-profile.service';
 import { LeadsService } from './leads.service';
 import { markLiveVerified, SENDABLE_DEGRADED_REASONS } from './live-verification';
 
@@ -73,8 +74,10 @@ export class IntakeService {
     for (const a of this.pending.get(tx) ?? []) await this.leads.assignLead(tx, a.lead, a.args);
     this.pending.delete(tx);
   }
+  private readonly profiles: InstagramProfileService;
   constructor(private readonly d: CoreDeps) {
     this.leads = new LeadsService(d);
+    this.profiles = new InstagramProfileService(d);
   }
 
   private async connection(provider: 'META_LEADS' | 'META_DIRECT' | 'AMOCRM_CHATS', accountId: string) {
@@ -215,6 +218,12 @@ export class IntakeService {
     const companyId = conn.companyId;
     const actor = integrationActor(companyId, 'instagram_direct');
 
+    // Yangi suhbat bo'lsa, mijoz profilini (username/name) tranzaksiyadan TASHQARIDA, qisqa timeout bilan olamiz: xato bo'lsa xabar va lid
+    // baribir yaratiladi («Instagram foydalanuvchisi»), username keyin nazoratli qayta urinish bilan to'ldiriladi.
+    const hadConversation = !!(await this.d.prisma.conversation.findUnique({ where: { connectionId_scopedPeerId: { connectionId: conn.id, scopedPeerId: evt.scopedPeerId } }, select: { id: true } }));
+    const fetched = hadConversation ? null : await this.profiles.fetchBestEffort(conn, evt.scopedPeerId);
+    const fetchedUsername = fetched?.profile?.username ?? null;
+
     const out = await this.d.prisma.$transaction(async (tx) => {
       await this.begin(tx);
       if (evt.mid) {
@@ -225,6 +234,11 @@ export class IntakeService {
       let conversation = await tx.conversation.findUnique({ where: { connectionId_scopedPeerId: { connectionId: conn.id, scopedPeerId: evt.scopedPeerId } } });
       let leadId = conversation?.leadId ?? null;
 
+      const leadTitle = async (contactId: string) => {
+        const c = await tx.contact.findUnique({ where: { id: contactId }, select: { instagramUsername: true } });
+        const u = c?.instagramUsername ?? fetchedUsername;
+        return u ? `@${u}` : IG_PLACEHOLDER_NAME;
+      };
       const needsLead = async (contactId: string, preferredLeadId: string | null) => {
         const inquiry = await tx.inquiry.create({
           data: {
@@ -246,7 +260,7 @@ export class IntakeService {
           inquiryId: inquiry.id,
           channel: 'instagram_direct',
           placement: 'instagram',
-          name: `Instagram Direct — ${evt.scopedPeerId.slice(-6)}`,
+          name: await leadTitle(contactId),
           serviceType: null,
           at: receivedAt,
           actor,
@@ -259,14 +273,27 @@ export class IntakeService {
       if (!conversation) {
         const identity = await identifyContact(tx, {
           companyId,
-          identifiers: [{ type: 'instagram_scoped', value: evt.scopedPeerId, scope: evt.businessAccountId, verified: true }],
+          identifiers: [{ type: 'instagram_scoped', value: evt.scopedPeerId, scope: evt.businessAccountId, verified: true, displayUsername: fetchedUsername }],
           fullName: null,
           primaryPhone: null,
           primaryEmail: null,
         });
+        if (conn.mode === 'live') {
+          // Profil maydonlari kontaktda alohida; mijoz aniqlash bunga emas, scoped ID'ga tayanadi (identifyContact yuqorida).
+          const now = this.d.clock.now();
+          const known = await tx.contact.findUnique({ where: { id: identity.contactId }, select: { instagramUsername: true } });
+          if (!known?.instagramUsername) {
+            await tx.contact.update({
+              where: { id: identity.contactId },
+              data: fetchedUsername
+                ? { instagramUsername: fetchedUsername, instagramName: fetched?.profile?.name ?? null, instagramProfileFetchedAt: now, instagramProfileAttempts: 0, instagramProfileNextAttemptAt: null, instagramProfileError: null }
+                : { instagramProfileAttempts: 1, instagramProfileNextAttemptAt: new Date(now.getTime() + 60_000), instagramProfileError: (fetched?.error ?? 'unknown').slice(0, 120) },
+            });
+          }
+        }
         leadId = await needsLead(identity.contactId, null);
         conversation = await tx.conversation.create({
-          data: { companyId, connectionId: conn.id, businessAccountId: evt.businessAccountId, scopedPeerId: evt.scopedPeerId, contactId: identity.contactId, leadId, historyAvailableFrom: evt.timestamp },
+          data: { companyId, connectionId: conn.id, businessAccountId: evt.businessAccountId, scopedPeerId: evt.scopedPeerId, peerUsername: fetchedUsername, contactId: identity.contactId, leadId, historyAvailableFrom: evt.timestamp },
         });
       } else {
         const current = leadId ? await tx.lead.findUnique({ where: { id: leadId } }) : null;

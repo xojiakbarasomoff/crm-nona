@@ -17,6 +17,8 @@ export interface CoreDeps {
   adapters: Adapters;
   clock: Clock;
   logger: Logger;
+  /** Tashqi so'rovlar uchun (testlarda almashtiriladi); berilmasa global fetch. */
+  fetchImpl?: import('@crm/integrations').FetchLike;
   encryptionKey: Buffer;
 }
 

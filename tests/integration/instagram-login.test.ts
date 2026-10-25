@@ -16,6 +16,8 @@ const IG_SECRET = 'ig-test-secret'; // Instagram app secret: OAuth + `object: in
 const APP_SECRET = 'meta-app-secret'; // META_APP_SECRET: Lead Ads (`page`) webhook imzosi va signed_request
 const calls: Array<{ url: string; method: string; body: string | null }> = [];
 let behavior: 'ok' | 'personal' = 'ok';
+let profileMode: 'ok' | 'fail' = 'ok';
+const profileOverride: Record<string, { username: string; name: string }> = {};
 
 const json = (o: unknown, status = 200) => new Response(JSON.stringify(o), { status, headers: { 'content-type': 'application/json' } });
 async function metaFetch(input: string, init?: RequestInit): Promise<Response> {
@@ -26,6 +28,12 @@ async function metaFetch(input: string, init?: RequestInit): Promise<Response> {
   if (url.startsWith('https://graph.instagram.com/refresh_access_token')) return json({ access_token: 'LONG_TOKEN_2', token_type: 'bearer', expires_in: 5183944 });
   if (/graph\.instagram\.com\/v[\d.]+\/me\?/.test(url)) return json({ id: APP_SCOPED_ID, user_id: IG_ID, username: 'nona_travel', account_type: behavior === 'personal' ? 'PERSONAL' : 'BUSINESS' });
   if (url.includes('/subscribed_apps')) return json({ success: true });
+  const prof = /^https:\/\/graph\.instagram\.com\/v[\d.]+\/(\d+)\?fields=name,username$/.exec(url);
+  if (prof) {
+    if (profileMode === 'fail') return json({ error: { message: 'User consent is required to access user profile.', code: 230 } }, 400);
+    const id = prof[1]!;
+    return json({ ...(profileOverride[id] ?? { username: `user_${id.slice(-4)}`, name: `Mijoz ${id.slice(-4)}` }), id });
+  }
   if (url.endsWith('/me/messages')) return json({ recipient_id: 'x', message_id: `mid.live.${randomUUID()}` });
   return json({ error: { message: `unexpected ${url}` } }, 500);
 }
@@ -221,6 +229,94 @@ describe('Instagram Login: kiruvchi Direct → kontakt/lid → mas’ul → javo
     const after = await p().integrationConnection.findUniqueOrThrow({ where: { id: conn.id } });
     expect(JSON.parse(decryptSecret(after.credentialsEnc!, core.deps.encryptionKey)).accessToken).toBe('LONG_TOKEN_2');
     expect(after.expiresAt!.getTime() - Date.now()).toBeGreaterThan(59 * 86_400_000);
+  });
+
+  describe('mijoz profili: @username (User Profile API)', () => {
+    const postDm = (senderId: string, mid: string, text = 'salom') => {
+      const body = Buffer.from(JSON.stringify({ object: 'instagram', entry: [{ id: IG_ID, time: Date.now(), messaging: [{ sender: { id: senderId }, recipient: { id: IG_ID }, timestamp: Date.now(), message: { mid, text } }] }] }));
+      return request(app.getHttpServer()).post('/webhooks/meta').set('Content-Type', 'application/json').set('X-Hub-Signature-256', signMetaBody(body, IG_SECRET)).send(body.toString());
+    };
+    const contactOf = async (senderId: string) => {
+      const conv = await p().conversation.findFirstOrThrow({ where: { scopedPeerId: senderId } });
+      const contact = await p().contact.findUniqueOrThrow({ where: { id: conv.contactId } });
+      const leads = await p().lead.findMany({ where: { contactId: contact.id } });
+      return { conv, contact, leads };
+    };
+    const tag = () => `${Date.now()}`.slice(-9);
+
+    it('birinchi xabarda mijoz profili olinadi: lid sarlavhasi @username, username kontaktda alohida; kompaniya /me si ishlatilmaydi; takroriy xabar va username o‘zgarishi yangi kontakt/lid ochmaydi', async () => {
+      const sid = `5100${tag()}1`;
+      profileOverride[sid] = { username: 'd1lsh0d_05', name: 'Dilshod' };
+      const before = { contacts: await p().contact.count(), leads: await p().lead.count() };
+      const callsBefore = calls.length;
+      expect((await postDm(sid, `mid.prof.${sid}.1`)).status).toBe(200);
+      await drain(core);
+      const first = await contactOf(sid);
+      expect(first.leads).toHaveLength(1);
+      expect(first.leads[0]!.name).toBe('@d1lsh0d_05');
+      expect(first.contact).toMatchObject({ instagramUsername: 'd1lsh0d_05', instagramName: 'Dilshod', instagramProfileAttempts: 0 });
+      expect(first.conv.peerUsername).toBe('d1lsh0d_05');
+      const ident = await p().contactIdentifier.findFirstOrThrow({ where: { contactId: first.contact.id, type: 'instagram_scoped' } });
+      expect(ident).toMatchObject({ value: sid, scope: IG_ID, displayUsername: 'd1lsh0d_05' });
+      const profCall = calls.slice(callsBefore).find((c) => c.url.includes(`/${sid}?fields=name,username`));
+      expect(profCall?.url).toBe(`https://graph.instagram.com/v23.0/${sid}?fields=name,username`); // mijoz ID si bilan, /me emas
+      expect(await p().contact.count()).toBe(before.contacts + 1);
+      expect(await p().lead.count()).toBe(before.leads + 1);
+
+      // Takroriy xabar + mijoz username'ini o'zgartirgan: yangi kontakt/lid yo'q, ulangan username o'zgarmaydi
+      profileOverride[sid] = { username: 'renamed_user', name: 'Boshqa' };
+      expect((await postDm(sid, `mid.prof.${sid}.2`, 'yana')).status).toBe(200);
+      await drain(core);
+      const again = await contactOf(sid);
+      expect(again.leads).toHaveLength(1);
+      expect(again.leads[0]!.id).toBe(first.leads[0]!.id);
+      expect(again.contact.id).toBe(first.contact.id);
+      expect(again.contact.instagramUsername).toBe('d1lsh0d_05');
+      expect(await p().contact.count()).toBe(before.contacts + 1);
+      expect(await p().lead.count()).toBe(before.leads + 1);
+    });
+
+    it('profil API xato bersa xabar va lid yo‘qolmaydi («Instagram foydalanuvchisi»); nazoratli qayta urinishdan keyin username to‘ldiriladi, mas’ul/yangi lid o‘zgarmaydi; menejer sarlavhasi ustidan yozilmaydi', async () => {
+      const sidA = `5200${tag()}1`;
+      const sidB = `5300${tag()}2`;
+      profileMode = 'fail';
+      expect((await postDm(sidA, `mid.prof.${sidA}`)).status).toBe(200);
+      expect((await postDm(sidB, `mid.prof.${sidB}`)).status).toBe(200);
+      await drain(core);
+      const a0 = await contactOf(sidA);
+      const b0 = await contactOf(sidB);
+      expect(a0.leads).toHaveLength(1);
+      expect(a0.leads[0]!.name).toBe('Instagram foydalanuvchisi');
+      expect(await p().message.count({ where: { conversationId: a0.conv.id } })).toBe(1);
+      expect(a0.contact).toMatchObject({ instagramUsername: null, instagramProfileAttempts: 1 });
+      expect(a0.contact.instagramProfileNextAttemptAt).not.toBeNull();
+      // Menejer sarlavhani qo'lda o'zgartirdi
+      await p().lead.update({ where: { id: b0.leads[0]!.id }, data: { name: 'Maldiv 2 kishi' } });
+      const counts = { contacts: await p().contact.count(), leads: await p().lead.count() };
+
+      // Hali xato: urinish soni oshadi, yangi lid/kontakt yo'q
+      const r1 = await core.instagramProfiles.retryDue({ force: true, limit: 200 });
+      expect(r1.failed).toBeGreaterThanOrEqual(2);
+      expect((await contactOf(sidA)).contact.instagramProfileAttempts).toBe(2);
+
+      // Backoff: muddati kelmagan kontaktlar force'siz tegilmaydi
+      expect((await core.instagramProfiles.retryDue({ limit: 200 })).checked).toBe(0);
+
+      // API tiklandi
+      profileMode = 'ok';
+      const r2 = await core.instagramProfiles.retryDue({ force: true, limit: 200 });
+      expect(r2.filled).toBeGreaterThanOrEqual(2);
+      const a1 = await contactOf(sidA);
+      expect(a1.contact).toMatchObject({ instagramUsername: `user_${sidA.slice(-4)}`, instagramProfileAttempts: 0, instagramProfileError: null });
+      expect(a1.leads[0]!.name).toBe(`@user_${sidA.slice(-4)}`); // avtomatik sarlavha yangilandi
+      expect(a1.leads[0]!.ownerId).toBe(a0.leads[0]!.ownerId); // mas'ul o'zgarmadi
+      expect(a1.leads).toHaveLength(1);
+      const b1 = await contactOf(sidB);
+      expect(b1.contact.instagramUsername).toBe(`user_${sidB.slice(-4)}`);
+      expect(b1.leads[0]!.name).toBe('Maldiv 2 kishi'); // qo'lda o'zgartirilgan sarlavha saqlandi
+      expect(await p().contact.count()).toBe(counts.contacts);
+      expect(await p().lead.count()).toBe(counts.leads);
+    });
   });
 
   it('deauthorize callback: imzolangan so‘rov ulanishni to‘xtatadi (tarix saqlanadi); imzosiz rad etiladi', async () => {

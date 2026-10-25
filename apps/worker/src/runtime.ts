@@ -53,6 +53,7 @@ export class WorkerRuntime {
     this.every('reconcile', config.reconcileIntervalMs, () => this.reconcileAmo());
     this.every('housekeeping', 60_000, () => this.housekeeping());
     this.every('instagram-token', 6 * 3600_000, () => this.refreshInstagramTokens());
+    this.every('instagram-profile', 60_000, () => this.retryInstagramProfiles());
     this.every('daily', 24 * 3600_000, () => this.daily());
     this.core.deps.logger.info({ worker: this.id, mode: config.mode }, 'worker started');
   }
@@ -101,6 +102,13 @@ export class WorkerRuntime {
     const r = await this.core.instagram.refreshDue();
     if (r.refreshed || r.failed) this.core.deps.logger.info(r, 'instagram token refresh');
     await this.beat('instagram-token', r);
+  }
+
+  /** Username'i hali olinmagan Instagram kontaktlari: nazoratli backoff bilan qayta urinish (yangi lid yaratmaydi). */
+  async retryInstagramProfiles() {
+    const r = await this.core.instagramProfiles.retryDue();
+    if (r.checked) this.core.deps.logger.info(r, 'instagram profile retry');
+    await this.beat('instagram-profile', r);
   }
 
   /** SLA, attachment scanning (frequent) and retention + tombstone re-application (daily). */

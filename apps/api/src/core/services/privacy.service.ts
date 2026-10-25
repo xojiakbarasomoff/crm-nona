@@ -114,7 +114,7 @@ export class PrivacyService {
     const orderIds = orders.map((o) => o.id);
     const conversations = await tx.conversation.findMany({ where: { companyId, contactId }, select: { id: true, scopedPeerId: true } });
 
-    await tx.contact.update({ where: { id: contactId }, data: { fullName: ERASED_NAME, primaryPhone: null, primaryEmail: null, piiErasedAt: now } });
+    await tx.contact.update({ where: { id: contactId }, data: { fullName: ERASED_NAME, primaryPhone: null, primaryEmail: null, piiErasedAt: now, instagramUsername: null, instagramName: null, instagramProfileError: null, instagramProfileNextAttemptAt: null } });
     const ids = await tx.contactIdentifier.findMany({ where: { companyId, contactId } });
     for (const i of ids) {
       await tx.contactIdentifier.update({ where: { id: i.id }, data: { value: `erased:${hashId(`${i.type}|${i.scope}|${i.value}`)}`, originalValue: null, displayUsername: null, active: false } });

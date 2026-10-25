@@ -178,7 +178,11 @@ export class LeadsService {
       take: q.limit + 1,
       ...(q.cursor ? { cursor: { id: q.cursor }, skip: 1 } : {}),
     });
-    const items = rows.slice(0, q.limit);
+    const page = rows.slice(0, q.limit);
+    // Instagram username kontaktda alohida; ro'yxat/karta uchun bitta so'rov bilan qo'shiladi.
+    const contacts = await this.d.prisma.contact.findMany({ where: { companyId: actor.companyId, id: { in: [...new Set(page.map((r) => r.contactId))] } }, select: { id: true, instagramUsername: true } });
+    const uname = new Map(contacts.map((c) => [c.id, c.instagramUsername]));
+    const items = page.map((r) => ({ ...r, contactInstagramUsername: uname.get(r.contactId) ?? null }));
     return { items, nextCursor: rows.length > q.limit ? items[items.length - 1]!.id : null };
   }
 
@@ -188,7 +192,7 @@ export class LeadsService {
       this.d.prisma.leadEvent.findMany({ where: { companyId: actor.companyId, leadId: id }, orderBy: { effectiveAt: 'asc' } }),
       this.d.prisma.offer.findMany({ where: { companyId: actor.companyId, leadId: id }, orderBy: { version: 'desc' } }),
       this.d.prisma.order.findMany({ where: { companyId: actor.companyId, leadId: id }, select: { id: true, orderNo: true, fulfillmentState: true, tourOperatorId: true } }),
-      this.d.prisma.contact.findFirst({ where: { companyId: actor.companyId, id: lead.contactId }, select: { id: true, fullName: true, primaryPhone: true } }),
+      this.d.prisma.contact.findFirst({ where: { companyId: actor.companyId, id: lead.contactId }, select: { id: true, fullName: true, primaryPhone: true, instagramUsername: true, instagramName: true } }),
       this.d.prisma.outboxOperation.findMany({
         where: { companyId: actor.companyId, state: { in: ['pending', 'processing', 'failed', 'unknown', 'paused'] }, payload: { path: ['leadId'], equals: id } },
         select: { id: true, action: true, state: true, lastError: true },
