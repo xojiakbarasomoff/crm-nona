@@ -93,15 +93,16 @@ export async function fetchInstagramProfile(cfg: Pick<InstagramLoginConfig, 'gra
 }
 
 /**
- * Enables webhook notifications for the authorizing account ("enable notifications for each app user's professional
- * account"). The exact per-account endpoint is the one used by Meta's setup guide for Instagram Login
- * (`POST /<IG_ID>/subscribed_apps`); it could not be re-read in this session — confirm in the first live test.
+ * Enables webhook notifications for the authorizing account. Documented (Meta "Set up Instagram Webhooks", read
+ * 2026-10-25): `POST https://graph.instagram.com/<ver>/<INSTAGRAM_ACCOUNT_ID>/subscribed_apps` with `subscribed_fields`
+ * and `access_token` (an Instagram User access token); success = `{"success": true}`. The Unified-Login and
+ * Facebook-Login variants use graph.facebook.com and are NOT used here.
  */
 export async function subscribeInstagramWebhooks(cfg: Pick<InstagramLoginConfig, 'graphVersion'>, igUserId: string, token: string, fields: readonly string[] = INSTAGRAM_WEBHOOK_FIELDS, fetchImpl: FetchLike = fetch): Promise<boolean> {
-  const q = new URLSearchParams({ subscribed_fields: fields.join(',') });
+  const q = new URLSearchParams({ subscribed_fields: fields.join(','), access_token: token });
   const raw = await requestJson<Json>(
     `https://graph.instagram.com/${cfg.graphVersion}/${encodeURIComponent(igUserId)}/subscribed_apps?${q.toString()}`,
-    { method: 'POST', mutation: true, headers: { Authorization: `Bearer ${token}` } },
+    { method: 'POST', mutation: true },
     fetchImpl,
   );
   return raw.success === true;

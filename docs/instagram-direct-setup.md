@@ -32,7 +32,7 @@ Web domeni: `https://web-production-e57d0a.up.railway.app` (backend ichki; Meta 
 | **Data deletion request URL** | `https://web-production-e57d0a.up.railway.app/webhooks/meta/data-deletion` (holat sahifasi: `/data-deletion`) |
 | Privacy Policy URL | Kompaniyaning o‘z siyosat sahifasi (kodda yo‘q; Live rejim uchun majburiy) |
 
-Webhook obuna maydonlari: `messages`, `messaging_seen` (kod faqat shularni ishlatadi). Imzo: `X-Hub-Signature-256` (xom tana, HMAC-SHA256). Kod **ikkala** sirni qabul qiladi (`META_APP_SECRET` yoki `INSTAGRAM_APP_SECRET`), chunki Instagram Login’da qaysi biri bilan imzolanishi hujjatda aniq yozilmagan — **birinchi jonli webhook’da qaysi biri mos kelganini tasdiqlang.**
+Webhook obuna maydonlari: `messages`, `messaging_seen` (kod faqat shularni ishlatadi). Imzo: `X-Hub-Signature-256` (xom tana, HMAC-SHA256) — **faqat `META_APP_SECRET`** bilan tekshiriladi, zaxira sir yo‘q (1.1 ga qarang).
 
 ## 4. Railway sozlamalari (backend xizmati) — qiymatlarni chatga yozmang
 
@@ -59,11 +59,25 @@ Webhook obuna maydonlari: `messages`, `messaging_seen` (kod faqat shularni ishla
 - **BLOK (6-band):** CRM’ning o‘zida javob yozish oynasi **yo‘q** — dizayn bo‘yicha javob amoCRM chatidan keladi. Shuning uchun chiquvchi javob uchun **amoCRM akkaunti + OAuth ulanishi (G01/G02) va amoCRM Chats kanali (`AMO_CHAT_CHANNEL_ID`, `AMO_CHAT_SECRET`, G08)** kerak; ular yo‘q. Instagram’ga yuborish kodi mock bilan sinalgan, haqiqiy yuborish sinalmagan. Agar amoCRM keyinga qoldirilsa, CRM ichida javob yozish oynasi qo‘shish alohida vazifa (so‘rasangiz qilaman).
 - **Railway demo rejimi:** ilova `APP_MODE=demo` va boshqa adapterlar (amoCRM, Lead Ads, Chats) mock; faqat Instagram Direct ulanishi `live`. DEMO belgisi saqlanadi — bu «real integratsiyalar tayyor» degani emas.
 
+## 6.1. Hujjat bilan tasdiqlangan qoidalar (Meta hujjatlari, 2026-10-25) va ular kodda qanday qo‘llanadi
+
+| Masala | Hujjatdagi aniq matn | Kodda |
+| --- | --- | --- |
+| Akkauntni webhook’ga obuna qilish | «Set up Instagram Webhooks»: Instagram Login uchun `POST https://graph.instagram.com/v26.0/<INSTAGRAM_ACCOUNT_ID>/subscribed_apps` + `subscribed_fields` + `access_token` (**Instagram User access token**); muvaffaqiyat `{"success": true}`. Unified/Facebook Login variantlari `graph.facebook.com` va boshqa token — ishlatilmaydi. | `subscribeInstagramWebhooks` (`instagram-login.ts`): aynan shu shakl (token query parametrida). Muvaffaqiyatsiz bo‘lsa ulanish `degraded / webhook_subscription_unconfirmed`. |
+| Webhook imzosi | «Generate a SHA256 signature using the payload and your app’s **App Secret**», sarlavha `X-Hub-Signature-256: sha256=…`, tekshiruv xom tana ustida. Hujjat alohida «Instagram app secret» ni imzo uchun **tilga olmaydi**. | **Bitta** sir: `META_APP_SECRET`. Mos kelmasa 401, hodisa **saqlanmaydi va qayta ishlanmaydi**. Instagram app secret imzo uchun ishlatilmaydi (faqat OAuth token almashish uchun). |
+| OAuth account ID ↔ webhook account ID | Instagram Login «Get started»: `/me` dagi `user_id` = «The Instagram professional account ID, `<IG_ID>`… This ID is value of the `id` field received in webhook notifications for this account». Webhook namunasi: `entry.id` = professional akkaunt ID. | Ulanishning `accountId` = `/me → user_id`. Webhook `entry.id` bilan **aniq** mos kelmasa hodisa saqlanmaydi (`metrics:webhook_unknown_account` hisoblagichi), qayta ishlanmaydi. |
+| Tasdiqlash (GET) | `hub.mode=subscribe`, `hub.challenge` (qaytariladi), `hub.verify_token` (App Dashboard’dagi Verify Token bilan mos) | `GET /webhooks/meta` (timing-safe). |
+
+**Ochiq qolgan nuqta (yashirilmaydi):** hujjat «your app’s App Secret» deydi, lekin Instagram Login mahsulotida panelda alohida «Instagram app secret» ham ko‘rinadi va boshqa dasturchilar (rasmiy emas) imzo uning bilan bo‘lganini xabar qilgan. Kod hujjatdagi qoidani qo‘llaydi (`META_APP_SECRET`). Agar haqiqiy sinovda `INVALID_SIGNATURE` (401) chiqsa, **zaxira qabul qilish yoqilmaydi**: `META_APP_SECRET` qiymatini Meta panelidagi to‘g‘ri sirga o‘zgartiring (Settings → Basic → App Secret yoki Instagram bo‘limidagi secret) — qaysi biri ishlaganini birinchi jonli sinov aniqlaydi va shu yerda yozib qo‘yiladi.
+
+## 6.2. «Faol/tayyor» faqat haqiqiy sinovdan keyin
+
+Ulanish credential kiritilgach `degraded / awaiting_live_verification` holatida turadi va Integratsiyalar sahifasida «tayyor emas» deb ko‘rsatiladi. **Tayyor (`ok`)** faqat ikkala haqiqiy sinov o‘tgach: (1) imzosi to‘g‘ri va akkaunt ID mos kelgan haqiqiy kiruvchi Direct xabari qayta ishlandi; (2) Meta haqiqiy javob xabarini qabul qildi («accepted»). Javob sinovi amoCRM chatisiz bajarib bo‘lmaydi (6-band BLOK), shuning uchun u hal bo‘lmaguncha ulanish «kiruvchi tasdiqlangan, tayyor emas» bo‘lib qoladi.
+
 ## 7. Hali tasdiqlanmagan (birinchi jonli sinovda tekshiriladi)
 
-1. `POST /<IG_ID>/subscribed_apps` aniq endpoint/maydonlar (bu sessiyada hujjatdan qayta o‘qib bo‘lmadi; muvaffaqiyatsiz bo‘lsa ulanish `degraded / webhook_subscription_unconfirmed` bo‘ladi, panelda webhook qo‘lda yoqiladi).
-2. Webhook imzosi qaysi sir bilan (Instagram app secret yoki Meta app secret).
-3. `entry.id` (webhook) va `/me` → `user_id` bir xil ekanligi (aks holda xabarlar «ignored»); farq bo‘lsa `accountId` tuzatiladi.
-4. `enable_fb_login=0` parametri qiymati; `/me` maydonlari (`user_id,username,account_type`).
+1. Webhook imzosi aynan `META_APP_SECRET` bilan mos kelishi (6.1 dagi ochiq nuqta). Hujjat endpoint va ID mosligini tasdiqlaydi, lekin ularning haqiqiy akkauntda ishlashi hali ko‘rilmagan.
+2. `subscribed_apps` haqiqiy javobi (`success: true`).
+3. `enable_fb_login=0` parametri qiymati; `/me` maydonlari (`user_id,username,account_type`).
 5. Human Agent tegi, App Review talablari, Meta’ning joriy Graph versiyasi.
 6. `/health` va `/ready` backend ichki marshrutlari: Railway’ning ichki healthcheck’i ishlatadi; ommaviy domen orqali ochiq emas (deploy muvaffaqiyatli bo‘lgani bilan tasdiqlangan, to‘g‘ridan-to‘g‘ri so‘rov yuborilmagan).

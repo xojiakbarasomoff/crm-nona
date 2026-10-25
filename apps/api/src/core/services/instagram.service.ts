@@ -16,6 +16,7 @@ import { audit } from '../audit';
 import type { CoreDeps, UserActor } from '../context';
 import { unprocessable } from '../errors';
 import { requireCap } from '../scope';
+import { AWAITING_LIVE_VERIFICATION, liveState, WEBHOOK_UNCONFIRMED } from './live-verification';
 
 interface StoredInstagramCreds {
   accessToken: string;
@@ -48,14 +49,20 @@ export class InstagramService {
   }
 
   /** Public, secret-free summary for the settings screen and the setup runbook. */
-  status() {
+  async status(companyId: string) {
     const m = this.d.config.meta;
+    const conns = await this.d.prisma.integrationConnection.findMany({ where: { companyId, provider: 'META_DIRECT', mode: 'live' }, orderBy: { createdAt: 'asc' } });
     return {
+      connections: conns.map((c) => {
+        const s = (c.settings ?? {}) as Record<string, unknown>;
+        return { id: c.id, accountId: c.accountId, username: (s.username as string | null) ?? null, disconnected: !!c.disconnectedAt, health: c.health, healthReason: c.healthReason, state: c.disconnectedAt ? 'disconnected' : liveState(s, c.health, c.healthReason), verifiedInboundAt: (s.verifiedInboundAt as string | null) ?? null, verifiedOutboundAt: (s.verifiedOutboundAt as string | null) ?? null, expiresAt: c.expiresAt };
+      }),
       configured: !!(m.instagram.appId && m.instagram.appSecret && m.graphVersion),
       oauthRedirectUri: m.instagram.redirectUri,
       webhookCallbackPath: '/webhooks/meta',
       verifyTokenConfigured: !!m.verifyToken,
-      signatureSecretConfigured: !!(m.appSecret || m.instagram.appSecret),
+      /** Webhook imzosi: faqat META_APP_SECRET (Meta hujjati: «your app's App Secret»). */
+      signatureSecretConfigured: !!m.appSecret,
       graphVersion: m.graphVersion || null,
     };
   }
@@ -96,16 +103,18 @@ export class InstagramService {
     const subscribed = await subscribeInstagramWebhooks(cfg, profile.userId, long.accessToken, undefined, this.fetchImpl).catch(() => false);
 
     const credentialsEnc = encryptSecret(JSON.stringify({ accessToken: long.accessToken, igUserId: profile.userId, username: profile.username, issuedAt: now.toISOString() } satisfies StoredInstagramCreds), this.d.encryptionKey);
-    const settings = { username: profile.username, accountType: profile.accountType, login: 'instagram_login', webhookSubscribed: subscribed, permissions: short.permissions };
+    // Credential kiritilgani «tayyor» degani emas: haqiqiy kiruvchi va chiquvchi sinov o'tmaguncha degraded.
+    const settings = { username: profile.username, accountType: profile.accountType, login: 'instagram_login', webhookSubscribed: subscribed, permissions: short.permissions, verifiedInboundAt: null, verifiedOutboundAt: null };
+    const reason = subscribed ? AWAITING_LIVE_VERIFICATION : WEBHOOK_UNCONFIRMED;
     const conn = await this.d.prisma.$transaction(async (tx) => {
       const existing = await tx.integrationConnection.findFirst({ where: { companyId: actor.companyId, provider: 'META_DIRECT', accountId: profile.userId } });
       const saved = existing
         ? await tx.integrationConnection.update({
             where: { id: existing.id },
-            data: { mode: 'live', credentialsEnc, expiresAt: long.expiresAt, health: subscribed ? 'ok' : 'degraded', healthReason: subscribed ? null : 'webhook_subscription_unconfirmed', disconnectedAt: null, settings, version: { increment: 1 } },
+            data: { mode: 'live', credentialsEnc, expiresAt: long.expiresAt, health: 'degraded', healthReason: reason, disconnectedAt: null, settings, version: { increment: 1 } },
           })
         : await tx.integrationConnection.create({
-            data: { companyId: actor.companyId, provider: 'META_DIRECT', mode: 'live', accountId: profile.userId, routeToken: randomBytes(24).toString('base64url'), credentialsEnc, expiresAt: long.expiresAt, health: subscribed ? 'ok' : 'degraded', healthReason: subscribed ? null : 'webhook_subscription_unconfirmed', settings },
+            data: { companyId: actor.companyId, provider: 'META_DIRECT', mode: 'live', accountId: profile.userId, routeToken: randomBytes(24).toString('base64url'), credentialsEnc, expiresAt: long.expiresAt, health: 'degraded', healthReason: reason, settings },
           });
       await audit(tx, actor, { entityType: 'integration', entityId: saved.id, action: 'connected', newValue: { provider: 'META_DIRECT', login: 'instagram_login', accountId: profile.userId, username: profile.username, webhookSubscribed: subscribed } });
       return saved;
@@ -131,7 +140,7 @@ export class InstagramService {
         const t = await refreshLongLivedToken(creds.accessToken, now, this.fetchImpl);
         await this.d.prisma.integrationConnection.update({
           where: { id: conn.id },
-          data: { credentialsEnc: encryptSecret(JSON.stringify({ ...creds, accessToken: t.accessToken, issuedAt: now.toISOString() } satisfies StoredInstagramCreds), this.d.encryptionKey), expiresAt: t.expiresAt, health: 'ok', healthReason: null, lastError: null, version: { increment: 1 } },
+          data: { credentialsEnc: encryptSecret(JSON.stringify({ ...creds, accessToken: t.accessToken, issuedAt: now.toISOString() } satisfies StoredInstagramCreds), this.d.encryptionKey), expiresAt: t.expiresAt, lastError: null, version: { increment: 1 }, ...(conn.healthReason === 'token_refresh_failed' ? { health: 'degraded' as const, healthReason: AWAITING_LIVE_VERIFICATION } : {}) },
         });
         refreshed++;
       } catch (err) {

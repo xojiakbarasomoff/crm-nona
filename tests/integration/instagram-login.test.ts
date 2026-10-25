@@ -11,7 +11,8 @@ import { alwaysOnDuty, drain, login, makeApp, makeCore, sendChatReply, type Sess
  * fetch'i bilan almashtirilgan (Meta javoblari hujjatdagi shaklda). Bu haqiqiy akkauntda tasdiqlash EMAS.
  */
 const IG_ID = '17841400000000001';
-const IG_SECRET = 'ig-test-secret';
+const IG_SECRET = 'ig-test-secret'; // faqat OAuth (token almashish) uchun
+const APP_SECRET = 'meta-app-secret'; // webhook imzosi: hujjatdagi «your app's App Secret» (META_APP_SECRET)
 const calls: Array<{ url: string; method: string; body: string | null }> = [];
 let behavior: 'ok' | 'personal' = 'ok';
 
@@ -37,7 +38,7 @@ const p = () => core.deps.prisma;
 beforeAll(async () => {
   core = makeCore({
     fetchImpl: metaFetch,
-    env: { INSTAGRAM_APP_ID: 'ig-app-id', INSTAGRAM_APP_SECRET: IG_SECRET, META_GRAPH_VERSION: 'v23.0', INSTAGRAM_REDIRECT_URI: 'https://crm.example.test/api/v1/integrations/instagram/oauth/callback', META_APP_SECRET: 'another-meta-secret' },
+    env: { INSTAGRAM_APP_ID: 'ig-app-id', INSTAGRAM_APP_SECRET: IG_SECRET, META_GRAPH_VERSION: 'v23.0', INSTAGRAM_REDIRECT_URI: 'https://crm.example.test/api/v1/integrations/instagram/oauth/callback', META_APP_SECRET: APP_SECRET },
   });
   await alwaysOnDuty(core);
   app = await makeApp(core);
@@ -77,7 +78,7 @@ describe('Instagram Login: ulash (OAuth)', () => {
     expect(cb.status).toBe(302);
     expect(cb.headers.location).toContain('connected=instagram');
     const conn = await p().integrationConnection.findFirstOrThrow({ where: { provider: 'META_DIRECT', accountId: IG_ID } });
-    expect(conn).toMatchObject({ mode: 'live', health: 'ok', disconnectedAt: null });
+    expect(conn).toMatchObject({ mode: 'live', health: 'degraded', disconnectedAt: null });
     expect(conn.credentialsEnc).not.toContain('LONG_TOKEN');
     expect(conn.expiresAt!.getTime() - Date.now()).toBeGreaterThan(59 * 86_400_000);
     expect(conn.settings).toMatchObject({ username: 'nona_travel', accountType: 'BUSINESS', login: 'instagram_login', webhookSubscribed: true });
@@ -86,7 +87,13 @@ describe('Instagram Login: ulash (OAuth)', () => {
     expect(exchange.body).toContain('code=AUTH_CODE'); // "#_" qo'shimchasi olib tashlangan
     expect(exchange.body).not.toContain('%23_');
     const sub = calls.find((c) => c.url.includes('/subscribed_apps'))!;
-    expect(sub.url).toContain(`/v23.0/${IG_ID}/subscribed_apps?subscribed_fields=messages%2Cmessaging_seen`);
+    // Hujjatdagi shakl: POST graph.instagram.com/<ver>/<IG_ID>/subscribed_apps, subscribed_fields + access_token (Instagram User token)
+    expect(sub.url).toContain(`https://graph.instagram.com/v23.0/${IG_ID}/subscribed_apps?subscribed_fields=messages%2Cmessaging_seen&access_token=LONG_TOKEN_1`);
+    expect(sub.method).toBe('POST');
+    // Credential kiritildi, lekin haqiqiy sinov o'tmagan: «faol/tayyor» emas
+    expect(conn).toMatchObject({ health: 'degraded', healthReason: 'awaiting_live_verification' });
+    const st = (await admin.get('/api/v1/integrations/instagram/status')).body;
+    expect(st.connections.find((x: { accountId: string }) => x.accountId === IG_ID)).toMatchObject({ state: 'not_ready', verifiedInboundAt: null, verifiedOutboundAt: null });
     expect(await p().auditLog.count({ where: { entityId: conn.id, action: 'connected' } })).toBeGreaterThan(0);
   });
 
@@ -113,15 +120,29 @@ describe('Instagram Login: ulash (OAuth)', () => {
 
 describe('Instagram Login: kiruvchi Direct → kontakt/lid → mas’ul → javob', () => {
   const sender = `ig_${Date.now()}`;
-  const hook = (mid: string, text: string, secret = IG_SECRET) => {
-    const body = Buffer.from(JSON.stringify({ object: 'instagram', entry: [{ id: IG_ID, time: Date.now(), messaging: [{ sender: { id: sender }, recipient: { id: IG_ID }, timestamp: Date.now(), message: { mid, text } }] }] }));
+  const hook = (mid: string, text: string, secret = APP_SECRET, accountId = IG_ID) => {
+    const body = Buffer.from(JSON.stringify({ object: 'instagram', entry: [{ id: accountId, time: Date.now(), messaging: [{ sender: { id: sender }, recipient: { id: accountId }, timestamp: Date.now(), message: { mid, text } }] }] }));
     return request(app.getHttpServer()).post('/webhooks/meta').set('Content-Type', 'application/json').set('X-Hub-Signature-256', signMetaBody(body, secret)).send(body.toString());
   };
   const subscribe = (q: Record<string, string>) => request(app.getHttpServer()).get('/webhooks/meta').query(q);
 
-  it('webhook: noto‘g‘ri imzo 401; Instagram app siri va Meta app siri ikkalasi ham qabul qilinadi', async () => {
+  it('webhook imzosi: faqat hujjatlashtirilgan App Secret (META_APP_SECRET); boshqa sir (jumladan Instagram app secret) rad etiladi va hodisa saqlanmaydi', async () => {
+    const before = await p().webhookInbox.count();
     expect((await hook('m0', 'x', 'wrong-secret')).status).toBe(401);
-    expect((await hook(`mid.sig.${sender}`, 'imzo', 'another-meta-secret')).status).toBe(200);
+    expect((await hook('m0b', 'x', IG_SECRET)).status).toBe(401); // zaxira sir yo'q
+    expect(await p().webhookInbox.count()).toBe(before);
+    expect((await hook(`mid.sig.${sender}`, 'imzo', APP_SECRET)).status).toBe(200);
+  });
+
+  it('akkaunt ID mos kelmasa (entry.id ≠ ulangan IG user_id) hodisa saqlanmaydi va qayta ishlanmaydi', async () => {
+    const before = await p().webhookInbox.count();
+    const r = await hook(`mid.foreign.${sender}`, 'begona akkaunt', APP_SECRET, '17841499999999999');
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ received: 1, stored: 0 });
+    await drain(core);
+    expect(await p().webhookInbox.count()).toBe(before);
+    expect(await p().message.count({ where: { providerMessageId: `mid.foreign.${sender}` } })).toBe(0);
+    expect(Number(await core.deps.redis.get('metrics:webhook_unknown_account'))).toBeGreaterThanOrEqual(1);
   });
 
   it('birinchi xabar kontakt, lid va mas’ul menejer yaratadi; keyingi xabarlar va qayta yetkazish takroriy lid yaratmaydi', async () => {
@@ -141,6 +162,10 @@ describe('Instagram Login: kiruvchi Direct → kontakt/lid → mas’ul → javo
     await drain(core);
     const leads = await p().lead.count({ where: { contactId: lead.contactId, deletedAt: null } });
     expect(leads).toBe(1);
+    // Haqiqiy imzolangan va akkaunti mos kiruvchi xabar qayta ishlandi: kiruvchi tasdiqlandi, lekin chiquvchi sinovsiz «tayyor» emas
+    const afterIn = await p().integrationConnection.findUniqueOrThrow({ where: { id: conn.id } });
+    expect(afterIn).toMatchObject({ health: 'degraded', healthReason: 'awaiting_live_verification' });
+    expect((await admin.get('/api/v1/integrations/instagram/status')).body.connections[0].state).toBe('inbound_verified');
     expect(await p().message.count({ where: { conversationId: conv.id, direction: 'inbound' } })).toBe(3); // mid.sig (oldingi test) + mid.1 + mid.2; qayta yetkazilgan mid.1 sanalmagan
     expect(await p().conversation.count({ where: { connectionId: conn.id, scopedPeerId: sender } })).toBe(1);
   });
@@ -160,6 +185,10 @@ describe('Instagram Login: kiruvchi Direct → kontakt/lid → mas’ul → javo
     const out = await p().message.findFirstOrThrow({ where: { conversationId: conv.id, direction: 'outbound' } });
     expect(out.state).toBe('accepted');
     expect(out.providerMessageId).toMatch(/^mid\.live\./);
+    // Ikkala yo'nalish ham haqiqiy sinovdan o'tdi: endi (va faqat endi) tayyor
+    const ready = await p().integrationConnection.findUniqueOrThrow({ where: { id: conn.id } });
+    expect(ready).toMatchObject({ health: 'ok', healthReason: null });
+    expect((await admin.get('/api/v1/integrations/instagram/status')).body.connections[0].state).toBe('ready');
   });
 
   it('token yangilash: 14 kun ichida tugaydigan uzun token yangilanadi; muvaffaqiyatsiz bo‘lsa ulanish ko‘rinadigan sabab bilan degraded', async () => {
@@ -178,7 +207,9 @@ describe('Instagram Login: kiruvchi Direct → kontakt/lid → mas’ul → javo
   it('deauthorize callback: imzolangan so‘rov ulanishni to‘xtatadi (tarix saqlanadi); imzosiz rad etiladi', async () => {
     const { createHmac } = await import('node:crypto');
     const payload = Buffer.from(JSON.stringify({ user_id: IG_ID, algorithm: 'HMAC-SHA256' })).toString('base64url');
-    const sig = createHmac('sha256', IG_SECRET).update(payload).digest('base64url');
+    const sig = createHmac('sha256', APP_SECRET).update(payload).digest('base64url');
+    const igSig = createHmac('sha256', IG_SECRET).update(payload).digest('base64url');
+    expect((await request(app.getHttpServer()).post('/webhooks/meta/deauthorize').type('form').send({ signed_request: `${igSig}.${payload}` })).status).toBe(401);
     const bad = await request(app.getHttpServer()).post('/webhooks/meta/deauthorize').type('form').send({ signed_request: `${sig}.${payload}x` });
     expect(bad.status).toBe(401);
     const ok = await request(app.getHttpServer()).post('/webhooks/meta/deauthorize').type('form').send({ signed_request: `${sig}.${payload}` });

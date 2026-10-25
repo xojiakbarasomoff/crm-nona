@@ -87,7 +87,7 @@ export class PlatformController {
   @Get('api/v1/integrations/instagram/status')
   async igStatus(@Actor() actor: UserActor, @Res() res: Response) {
     requireCapOrThrow(actor, 'integrations.manage');
-    send(res, 200, this.core.instagram.status());
+    send(res, 200, await this.core.instagram.status(actor.companyId));
   }
 
   @Post('api/v1/integrations/instagram/oauth/start')
@@ -117,8 +117,7 @@ export class PlatformController {
   @Post('webhooks/meta/deauthorize')
   async igDeauthorize(@Req() req: AuthedRequest, @Res() res: Response) {
     const sr = new URLSearchParams((req.rawBody ?? Buffer.alloc(0)).toString('utf8')).get('signed_request') ?? '';
-    const secrets = [this.core.deps.config.meta.appSecret, this.core.deps.config.meta.instagram.appSecret];
-    const payload = parseSignedRequest(sr, secrets);
+    const payload = parseSignedRequest(sr, [this.core.deps.config.meta.appSecret]);
     if (!payload) throw new AppError(401, 'INVALID_SIGNATURE', 'Invalid signed_request');
     const userId = String(payload.user_id ?? '');
     const n = userId ? await this.core.instagram.handleDeauthorize(userId) : 0;
@@ -133,8 +132,7 @@ export class PlatformController {
   @Post('webhooks/meta/data-deletion')
   async igDataDeletion(@Req() req: AuthedRequest, @Res() res: Response) {
     const sr = new URLSearchParams((req.rawBody ?? Buffer.alloc(0)).toString('utf8')).get('signed_request') ?? '';
-    const secrets = [this.core.deps.config.meta.appSecret, this.core.deps.config.meta.instagram.appSecret];
-    const payload = parseSignedRequest(sr, secrets);
+    const payload = parseSignedRequest(sr, [this.core.deps.config.meta.appSecret]);
     if (!payload) throw new AppError(401, 'INVALID_SIGNATURE', 'Invalid signed_request');
     const code = randomUUID();
     await this.core.deps.redis.set(`ig_data_deletion:${code}`, JSON.stringify({ userId: String(payload.user_id ?? ''), at: new Date().toISOString() }), 'EX', 90 * 86400);

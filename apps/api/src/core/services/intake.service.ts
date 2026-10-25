@@ -8,6 +8,7 @@ import { headRecipients, notify, publishEvent } from '../events';
 import { enqueueOutbox } from '../queue';
 import { identifyContact } from './identity.service';
 import { LeadsService } from './leads.service';
+import { markLiveVerified, SENDABLE_DEGRADED_REASONS } from './live-verification';
 
 export class ConnectionPausedError extends Error {
   constructor(readonly connectionId: string) {
@@ -309,6 +310,7 @@ export class IntakeService {
     }, INTAKE_TX);
     if (out.state === 'processed') {
       await publishEvent(this.d.redis, { companyId, entityType: 'conversation', entityId: out.conversationId, kind: 'message' });
+      if (conn.mode === 'live') await markLiveVerified(this.d.prisma, conn.id, 'inbound', this.d.clock.now());
     }
     return out.state;
   }
@@ -388,7 +390,8 @@ export class IntakeService {
           now: this.d.clock.now(),
           lastCustomerMessageAt: conversation.lastInboundAt,
           purpose: 'human_reply',
-          connectionHealthy: !directConn.disconnectedAt && directConn.health === 'ok',
+          // Haqiqiy sinovdan oldingi (awaiting_live_verification) ulanishdan ham javob yuborishga urinish mumkin, aks holda chiquvchi sinov o'tolmaydi.
+          connectionHealthy: !directConn.disconnectedAt && (directConn.health === 'ok' || (directConn.health === 'degraded' && !!directConn.healthReason && SENDABLE_DEGRADED_REASONS.includes(directConn.healthReason))),
           senderMayReply,
           recipientScopedIdVerified: reply.receiverId === conversation.scopedPeerId,
         },

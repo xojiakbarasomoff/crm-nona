@@ -8,6 +8,7 @@ import { headRecipients, notify, publishEvent } from '../events';
 import { ConnectionPausedError, IntakeService, connectionToken } from './intake.service';
 import { LeadsService } from './leads.service';
 import { orderFinance } from './orders.service';
+import { markLiveVerified, SENDABLE_DEGRADED_REASONS } from './live-verification';
 
 type HandlerResult = { kind: 'done'; result?: Record<string, unknown> } | { kind: 'retry_later'; delayMs: number; reason: string };
 
@@ -558,7 +559,8 @@ export class ProcessingService {
     }
     const conv = await this.d.prisma.conversation.findUniqueOrThrow({ where: { id: msg.conversationId } });
     const conn = await this.d.prisma.integrationConnection.findUniqueOrThrow({ where: { id: conv.connectionId } });
-    if (conn.disconnectedAt || conn.health !== 'ok') throw Object.assign(new Error('Direct connection paused'), { errorClass: 'forbidden' as ErrorClass });
+    const sendable = conn.health === 'ok' || (conn.health === 'degraded' && !!conn.healthReason && SENDABLE_DEGRADED_REASONS.includes(conn.healthReason));
+    if (conn.disconnectedAt || !sendable) throw Object.assign(new Error('Direct connection paused'), { errorClass: 'forbidden' as ErrorClass });
     await this.d.prisma.message.update({ where: { id: msg.id }, data: { state: 'sending' } });
     try {
       // Haqiqiy (live) ulanish — haqiqiy Instagram mijozi; demo ulanish — demo adapter. Aralashtirilmaydi.
@@ -571,6 +573,7 @@ export class ProcessingService {
         await tx.conversation.update({ where: { id: conv.id }, data: { lastHumanReplyAt: now, ...(conv.firstHumanReplyAt ? {} : { firstHumanReplyAt: now }) } });
         if (conv.leadId) await tx.lead.updateMany({ where: { id: conv.leadId, firstHumanActionAt: null }, data: { firstHumanActionAt: now } });
       });
+      if (conn.mode === 'live') await markLiveVerified(this.d.prisma, conn.id, 'outbound', this.d.clock.now());
       return { kind: 'done', result: { providerMessageId: r.messageId } };
     } catch (err) {
       if (err instanceof ProviderError && err.errorClass !== 'unknown_outcome' && err.errorClass !== 'transient' && err.errorClass !== 'rate_limited') {

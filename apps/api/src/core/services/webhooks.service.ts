@@ -19,8 +19,8 @@ export class WebhooksService {
   }
 
   async metaReceive(rawBody: Buffer, signature: string | undefined) {
-    const secrets = [this.d.config.meta.appSecret, this.d.config.meta.instagram.appSecret].filter(Boolean);
-    if (!secrets.some((s) => verifyMetaSignature(rawBody, signature, s))) {
+    // Hujjat (Meta, Set up Instagram Webhooks): imzo ilovaning App Secret'i bilan; bitta, sozlangan qiymat. Zaxira sir yo'q.
+    if (!verifyMetaSignature(rawBody, signature, this.d.config.meta.appSecret)) {
       await this.d.redis.incr('metrics:signature_failures').catch(() => undefined);
       throw new AppError(401, 'INVALID_SIGNATURE', 'Invalid signature');
     }
@@ -36,7 +36,12 @@ export class WebhooksService {
     for (const e of events) {
       const accountKey = e.kind === 'leadgen' ? e.pageId : e.kind === 'ig_message' || e.kind === 'ig_read' ? e.businessAccountId : 'unknown';
       const provider = e.kind === 'leadgen' ? 'META_LEADS' : 'META_DIRECT';
-      const conn = accountKey !== 'unknown' ? await this.d.prisma.integrationConnection.findFirst({ where: { provider, accountId: accountKey }, select: { id: true, companyId: true } }) : null;
+      const conn = accountKey !== 'unknown' ? await this.d.prisma.integrationConnection.findFirst({ where: { provider, accountId: accountKey, disconnectedAt: null }, select: { id: true, companyId: true } }) : null;
+      // Direct hodisasi faqat ulangan akkauntning ID'siga (entry.id = OAuth /me user_id) mos kelsa saqlanadi; aks holda qayta ishlanmaydi.
+      if (provider === 'META_DIRECT' && !conn) {
+        await this.d.redis.incr('metrics:webhook_unknown_account').catch(() => undefined);
+        continue;
+      }
       if (await storeInboxEvent(this.d.prisma, this.d.encryptionKey, { provider: 'meta', connectionKey: accountKey, companyId: conn?.companyId ?? null, externalEventId: e.key, eventType: e.kind, payload: e, correlationId })) stored++;
       if (conn) await this.d.prisma.integrationConnection.update({ where: { id: conn.id }, data: { lastWebhookAt: this.d.clock.now() } }).catch(() => undefined);
     }
