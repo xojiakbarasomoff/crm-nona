@@ -1,6 +1,8 @@
 'use client';
 
+import Link from 'next/link';
 import { useState } from 'react';
+import { Icon, type IconName } from '../../../components/icons';
 import { api, useApi, type ApiError } from '../../../lib/api';
 import { Async, FormError, Section } from '../../../components/ui';
 
@@ -28,8 +30,25 @@ export default function SettingsPage() {
   return (
     <>
       <h1>Настройки</h1>
+      <div className="settings-hub">
+        {(
+          [
+            ['/suppliers', 'suppliers', 'Туроператоры', 'Список туроператоров для блока «Продажа»'],
+            ['/users', 'users', 'Пользователи', 'Сотрудники, роли, доступ к себестоимости'],
+            ['/integrations', 'integrations', 'Интеграции', 'Instagram Direct и рекламные формы'],
+          ] as Array<[string, IconName, string, string]>
+        ).map(([href, icon, title, text]) => (
+          <Link key={href} href={href} className="settings-card">
+            <Icon name={icon} size={22} />
+            <span>
+              <strong>{title}</strong>
+              <span className="muted">{text}</span>
+            </span>
+          </Link>
+        ))}
+      </div>
       <FormError error={error} />
-      <Section title="Правила напоминаний о рейсах (с версиями; пересчитываются только будущие напоминания)">
+      <Section title="Дополнительно: правила напоминаний для заказов с сегментами рейсов (напоминание из блока «Продажа» — за 3 дня до вылета или в своё время)">
         <Async state={state}>
           {(d) => (
             <table>

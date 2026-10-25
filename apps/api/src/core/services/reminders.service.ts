@@ -64,7 +64,7 @@ export class RemindersService {
         dueAt: new Date(now.getTime() + 3600_000),
       });
       if (assigneeId) {
-        await notify(tx, { companyId, userId: assigneeId, kind: 'missing_departure', dedupeKey: `missing_departure:${segment.id}:${segment.scheduleRevision}`, title: `Не указано время рейса: ${order.orderNo}`, link: `/orders/${order.id}` });
+        await notify(tx, { companyId, userId: assigneeId, kind: 'missing_departure', dedupeKey: `missing_departure:${segment.id}:${segment.scheduleRevision}`, title: `Не указано время рейса: ${order.orderNo}`, link: `/leads/${order.leadId}` });
       }
       return { planned: 0 };
     }
@@ -189,7 +189,8 @@ export class RemindersService {
       if (segment && ['pending', 'checked'].includes(segment.checkState)) {
         await tx.flightSegment.update({ where: { id: segment.id }, data: { checkState: 'due' } });
       }
-      const link = order ? `/orders/${order.id}` : null;
+      // Ссылка ведёт в карточку лида: вся работа с клиентом и продажей — там.
+      const link = order ? `/leads/${order.leadId}` : null;
       if (occ.assigneeId) {
         await notify(tx, { companyId: occ.companyId, userId: occ.assigneeId, kind: 'reminder_due', dedupeKey: `occ:${occ.id}:due`, title: occ.title, body: occ.body, link, occurrenceId: occ.id });
       }
@@ -230,8 +231,9 @@ export class RemindersService {
         const upd = await tx.reminderOccurrence.updateMany({ where: { id, escalatedAt: null, state: 'due' }, data: { escalatedAt: now } });
         if (upd.count !== 1) return;
         const occ = await tx.reminderOccurrence.findUniqueOrThrow({ where: { id } });
+        const order = occ.orderId ? await tx.order.findUnique({ where: { id: occ.orderId }, select: { leadId: true } }) : null;
         for (const uid of await headRecipients(tx, occ.companyId)) {
-          await notify(tx, { companyId: occ.companyId, userId: uid, kind: 'reminder_escalated', dedupeKey: `occ:${id}:escalated:${uid}`, title: `Эскалация: ${occ.title}`, body: occ.body, link: occ.orderId ? `/orders/${occ.orderId}` : null, occurrenceId: id });
+          await notify(tx, { companyId: occ.companyId, userId: uid, kind: 'reminder_escalated', dedupeKey: `occ:${id}:escalated:${uid}`, title: `Эскалация: ${occ.title}`, body: occ.body, link: order ? `/leads/${order.leadId}` : null, occurrenceId: id });
         }
         await audit(tx, systemActor(occ.companyId, 'scheduler'), { entityType: 'reminder', entityId: id, action: 'escalated', newValue: { milestone: occ.milestone } });
       });

@@ -17,7 +17,7 @@ const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const localDateTime = z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/, 'Введите местное время, например 2026-10-25T10:30');
 const isoDateTime = z.string().datetime({ offset: true });
 
-export const STAGE = z.enum(['NEW', 'CONTACTED', 'QUALIFIED', 'PREPARING_OFFER', 'OFFER_SENT', 'AWAITING_PAYMENT', 'WON', 'LOST', 'FOLLOW_UP']);
+export const STAGE = z.enum(['NEW', 'CONTACTED', 'QUALIFIED', 'PREPARING_OFFER', 'OFFER_SENT', 'AWAITING_PAYMENT', 'WON', 'LOST', 'FOLLOW_UP', 'NO_ANSWER']);
 export const CHANNEL = z.enum(['instagram_lead_ads', 'meta_lead_ads', 'instagram_direct', 'amocrm', 'manual', 'other']);
 export const LeadAdsConnectSchema = z.object({ pageId: z.string().regex(/^\d+$/), formIds: z.array(z.string().regex(/^\d+$/)).min(1).max(100) }).strict();
 export const SERVICE_TYPE = z.enum(['avia', 'tour_package', 'hotel', 'transfer', 'visa', 'other']);
@@ -42,7 +42,7 @@ export const ChangeRoleSchema = z.object({ role: z.enum(['ADMIN', 'MANAGER', 'US
 export const BlockUserSchema = z.object({ successorId: id.nullable() }).strict();
 
 export const PaginationQuery = z.object({ cursor: id.optional(), limit: z.coerce.number().int().min(1).max(200).default(50) });
-export const LeadListQuery = PaginationQuery.extend({ stage: STAGE.optional(), ownerId: id.optional(), source: CHANNEL.optional(), search: z.string().max(100).optional() }).strict();
+export const LeadListQuery = PaginationQuery.extend({ stage: STAGE.optional(), status: z.enum(['NEW', 'IN_PROGRESS', 'SOLD', 'CANCELLED', 'NO_ANSWER']).optional(), sourceGroup: z.enum(['DIRECT', 'ADS', 'MANUAL']).optional(), leadType: z.enum(['NEW', 'REFERRAL', 'REPEAT']).optional(), ownerId: id.optional(), source: CHANNEL.optional(), search: z.string().max(100).optional() }).strict();
 
 export const RequirementsSchema = z
   .object({
@@ -86,20 +86,52 @@ export const ManualLeadCreateSchema = z
     lastName: optText(100),
     phone: optText(40),
     telegram: optText(120),
+    instagram: optText(200),
     name: optText(200),
     ownerId: id.nullable().optional(),
     note: optText(2000),
     existingContactId: id.nullable().optional(),
     forceNewContact: z.boolean().optional(),
+    leadType: z.enum(['NEW', 'REFERRAL', 'REPEAT']).optional(),
   })
   .strict()
   .openapi('ManualLeadCreate');
 export const ContactEditSchema = z
-  .object({ firstName: optText(100), lastName: optText(100), phone: optText(40), telegram: optText(120), allowDuplicatePhone: z.boolean().optional() })
+  .object({ firstName: optText(100), lastName: optText(100), phone: optText(40), telegram: optText(120), instagram: optText(200), allowDuplicatePhone: z.boolean().optional() })
   .strict()
   .openapi('ContactEdit');
 
 export const StageChangeSchema = z.object({ version: z.number().int(), stage: STAGE, reason: z.string().max(1000).optional() }).strict().openapi('StageChange');
+export const LEAD_STATUS = z.enum(['NEW', 'IN_PROGRESS', 'SOLD', 'CANCELLED', 'NO_ANSWER']);
+/** Упрощённый статус лида (Новый / В работе / Продано / Отменён / Нет ответа). */
+export const LeadStatusSchema = z.object({ version: z.number().int(), status: LEAD_STATUS }).strict().openapi('LeadStatusChange');
+/** Основные данные лида: тип и заметка (имя/телефон/Telegram — через /contact). */
+export const LeadBasicsSchema = z.object({ leadType: z.enum(['NEW', 'REFERRAL', 'REPEAT']).optional(), note: z.string().max(4000).nullable().optional() }).strict().openapi('LeadBasics');
+/** Блок «Продажа» в карточке лида. Суммы — в одной валюте; пустая себестоимость = неизвестна (не 0). */
+export const LeadSaleSchema = z
+  .object({
+    serviceType: z.enum(['avia', 'tour_package', 'other']),
+    soldWhat: z.string().trim().max(500).nullable().optional(),
+    tourOperatorId: id.nullable().optional(),
+    amount: decimal.nullable().optional(),
+    netAmount: decimal.nullable().optional(),
+    currency: currency.nullable().optional(),
+    departureAt: isoDateTime.nullable().optional(),
+    departureNote: z.string().max(1000).nullable().optional(),
+    remindEnabled: z.boolean().default(false),
+    /** Своё время напоминания; null — по умолчанию за 3 дня до вылета. */
+    remindAt: isoDateTime.nullable().optional(),
+    timezone: z.string().max(64).default('Asia/Tashkent'),
+  })
+  .strict()
+  .superRefine((v, ctx) => {
+    if (v.serviceType === 'other' && !v.soldWhat?.trim()) ctx.addIssue({ code: 'custom', path: ['soldWhat'], message: 'Укажите, что продано' });
+    if ((v.amount || v.netAmount) && !v.currency) ctx.addIssue({ code: 'custom', path: ['currency'], message: 'При указании цены валюта обязательна' });
+    if (v.remindEnabled && !v.departureAt) ctx.addIssue({ code: 'custom', path: ['departureAt'], message: 'Для напоминания укажите дату и время вылета' });
+  })
+  .openapi('LeadSale');
+/** Ответ клиенту в Instagram Direct из карточки лида. */
+export const DirectReplySchema = z.object({ text: z.string().trim().min(1).max(1000) }).strict().openapi('DirectReply');
 export const AssigneeSchema = z.object({ userId: id, reason: z.string().min(1).max(1000) }).strict();
 export const ReopenSchema = z.object({ reason: z.string().min(1).max(1000), stage: STAGE.default('CONTACTED') }).strict();
 

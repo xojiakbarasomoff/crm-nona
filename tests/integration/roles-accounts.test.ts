@@ -27,6 +27,7 @@ async function loginByName(loginName: string, password: string): Promise<Session
     get: (path) => request(srv).get(path).set('Cookie', cookie),
     post: (path, b, h = {}) => request(srv).post(path).set('Cookie', cookie).set('X-CSRF-Token', csrf).set(h).send(b as object),
     patch: (path, b) => request(srv).patch(path).set('Cookie', cookie).set('X-CSRF-Token', csrf).send(b as object),
+    put: (path, b) => request(srv).put(path).set('Cookie', cookie).set('X-CSRF-Token', csrf).send(b as object),
     delete: (path) => request(srv).delete(path).set('Cookie', cookie).set('X-CSRF-Token', csrf),
   };
 }
@@ -89,7 +90,7 @@ describe('учётные записи: вход по логину, пароль 
 });
 
 describe('роли на сервере', () => {
-  it('Пользователь: видит только своё, но любое изменение отклоняется сервером (даже с корректным CSRF)', async () => {
+  it('Пользователь: создаёт лид только на себя, ведёт свои лиды; чужие не видит; статус, продажа, переназначение и настройки закрыты на сервере', async () => {
     const own = await newLead(app, core);
     await p().lead.update({ where: { id: own.id }, data: { ownerId: usrId } });
     const other = await newLead(app, core);
@@ -98,14 +99,31 @@ describe('роли на сервере', () => {
     expect(list.map((l) => l.id)).not.toContain(other.id);
     expect((await usr.get(`/api/v1/leads/${other.id}`)).status).toBe(404);
     expect((await usr.get(`/api/v1/leads/${own.id}`)).status).toBe(200);
+    // создание: автор и ответственный — сам пользователь; на чужое имя нельзя
+    const created = await usr.post('/api/v1/leads', { firstName: 'Lid', lastName: 'Userdan', leadType: 'REFERRAL' });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    expect(created.body.ownerId).toBe(usrId);
+    expect(created.body.leadType).toBe('REFERRAL');
+    expect((await usr.post('/api/v1/leads', { firstName: 'Begona', ownerId: mgrId })).status).toBe(403);
+    // свои основные данные и заметки
+    expect((await usr.patch(`/api/v1/leads/${created.body.id}/contact`, { firstName: 'Lidiya' })).status).toBe(200);
+    const basics = await usr.patch(`/api/v1/leads/${created.body.id}/basics`, { note: 'Qo‘ng‘iroq qilish kerak', leadType: 'REPEAT' });
+    expect(basics.status).toBe(200);
+    expect(basics.body).toMatchObject({ note: 'Qo‘ng‘iroq qilish kerak', leadType: 'REPEAT' });
+    // чужой лид — не найден (без раскрытия)
+    expect((await usr.patch(`/api/v1/leads/${other.id}/basics`, { note: 'x' })).status).toBe(404);
+    expect((await usr.patch(`/api/v1/leads/${other.id}/contact`, { firstName: 'X' })).status).toBe(404);
     for (const [method, path, body] of [
-      ['post', '/api/v1/leads', { firstName: 'X' }],
       ['patch', `/api/v1/leads/${own.id}`, { version: 1, contactOutcome: 'x' }],
       ['patch', `/api/v1/leads/${own.id}/stage`, { version: 1, stage: 'LOST' }],
+      ['patch', `/api/v1/leads/${own.id}/status`, { version: 1, status: 'SOLD' }],
+      ['put', `/api/v1/leads/${own.id}/sale`, { serviceType: 'avia' }],
+      ['post', `/api/v1/leads/${own.id}/messages`, { text: 'x' }],
+      ['patch', `/api/v1/leads/${own.id}/assignee`, { userId: usrId, reason: 'x' }],
       ['post', '/api/v1/orders', { leadId: own.id }],
-      ['patch', `/api/v1/leads/${own.id}/contact`, { firstName: 'X' }],
       ['post', '/api/v1/reminders', { title: 'x' }],
       ['post', `/api/v1/users/${mgrId}/block`, { successorId: null }],
+      ['post', '/api/v1/suppliers', { name: 'x', kind: 'tour_operator' }],
     ] as const) {
       const r = await usr[method](path, body);
       expect(r.status, `${method} ${path}`).toBe(403);

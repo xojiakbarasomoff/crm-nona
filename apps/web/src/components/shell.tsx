@@ -22,7 +22,7 @@ export interface Me {
 const MeContext = createContext<Me | null>(null);
 export const useMe = () => useContext(MeContext)!;
 export const canDo = (me: Me, cap: string) => me.capabilities.includes(cap);
-/** Роль «Пользователь» — только просмотр; сервер всё равно отклоняет изменения. */
+/** Работа с клиентом (статус, продажа, ответ в Instagram): Администратор и Менеджер. Сервер проверяет то же самое. */
 export const canWrite = (me: Me) => me.role !== 'USER';
 
 
@@ -62,17 +62,13 @@ export function Shell({ children }: { children: ReactNode }) {
 
   if (!me) return error && error.status !== 401 ? <div className="state error">{error.message}</div> : <Loading label="Проверка сеанса…" />;
 
-  const nav: Array<[string, string, boolean]> = [
-    ['/dashboard', 'Панель управления', true],
-    ['/leads', 'Лиды', true],
-    ['/orders', 'Заказы', true],
-    ['/suppliers', 'Туроператоры', true],
-    ['/flights', 'Рейсы', true],
-    ['/reminders', 'Напоминания', true],
-    ['/integrations', 'Интеграции', canDo(me, 'integrations.manage') || canDo(me, 'dashboard.company')],
-    ['/users', 'Пользователи', canDo(me, 'users.manage')],
-    ['/settings', 'Настройки', canDo(me, 'integrations.manage')],
+  // Основное меню — две вкладки; туроператоры, сотрудники и интеграции администратор открывает из «Настроек».
+  const nav: Array<[string, string, boolean, string[]]> = [
+    ['/dashboard', 'Панель управления', true, []],
+    ['/leads', 'Лиды', true, ['/orders', '/contacts']],
+    ['/settings', 'Настройки', canDo(me, 'integrations.manage'), ['/suppliers', '/users', '/integrations', '/reminders', '/flights']],
   ];
+  const isActive = (href: string, also: string[]) => [href, ...also].some((h) => pathname.startsWith(h));
   const unread = notifications.data?.items.filter((n) => !n.readAt).length ?? 0;
 
   return (
@@ -86,8 +82,8 @@ export function Shell({ children }: { children: ReactNode }) {
           <nav aria-label="Основные разделы">
             {nav
               .filter(([, , show]) => show)
-              .map(([href, label]) => (
-                <Link key={href} href={href} className={pathname.startsWith(href) ? 'active' : ''} aria-current={pathname.startsWith(href) ? 'page' : undefined}>
+              .map(([href, label, , also]) => (
+                <Link key={href} href={href} className={isActive(href, also) ? 'active' : ''} aria-current={isActive(href, also) ? 'page' : undefined}>
                   <Icon name={href.slice(1) as IconName} />
                   {label}
                 </Link>

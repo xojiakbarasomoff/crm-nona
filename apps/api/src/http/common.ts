@@ -15,7 +15,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import type { NextFunction, Request, Response } from 'express';
 import type { ZodTypeAny, z } from 'zod';
-import { CurrencyMismatchError, InvalidMoneyError, isReadOnlyRole, sha256Hex, stableStringify } from '@crm/domain';
+import { CurrencyMismatchError, InvalidMoneyError, isReadOnlyRole, sha256Hex, userWriteAllowed, stableStringify } from '@crm/domain';
 import { AppError, conflict, forbidden, notFound, unauthorized, unprocessable, type Core, type UserActor } from '../core';
 import type { SessionInfo } from '../core/services/auth.service';
 
@@ -73,8 +73,10 @@ export class AuthGuard implements CanActivate {
       const cookie = req.cookies?.[CSRF_COOKIE];
       const header = req.header('x-csrf-token');
       if (!cookie || !header || cookie !== header) throw new AppError(403, 'CSRF_FAILED', 'Ошибка проверки безопасности (CSRF). Обновите страницу.');
-      // Роль «Пользователь» — только чтение: любой изменяющий запрос отклоняется на сервере (выход из системы разрешён).
-      if (isReadOnlyRole(info.actor.role) && !req.path.endsWith('/auth/logout')) throw new AppError(403, 'READ_ONLY_ROLE', 'Роль «Пользователь» доступна только для просмотра');
+      // Роль «Пользователь»: только создание своих лидов, основные данные и заметки своих лидов; остальное отклоняется на сервере.
+      if (isReadOnlyRole(info.actor.role) && !userWriteAllowed(req.method, req.path.replace(/^\/api\/v1/, ''))) {
+        throw new AppError(403, 'READ_ONLY_ROLE', 'Для роли «Пользователь» это действие недоступно');
+      }
     }
     const allowWithoutMfa = this.reflector.getAllAndOverride<boolean>(ALLOW_WITHOUT_MFA, [ctx.getHandler(), ctx.getClass()]);
     if (info.mfaRequired && !info.mfaVerified && !allowWithoutMfa) {

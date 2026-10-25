@@ -3,8 +3,15 @@ import type { Channel, Lead, Prisma, Stage, Tx } from '@crm/database';
 import {
   addWorkingMinutes,
   can,
+  channelsOfSourceGroup,
   checkTransition,
   isClosed,
+  stageOfStatus,
+  stagesOfStatus,
+  statusOfStage,
+  type LeadSourceGroup,
+  type LeadStatus,
+  type LeadType,
   resumeFromFollowUp,
   stateHash,
   STAGE_LABELS_RU,
@@ -91,6 +98,8 @@ export class LeadsService {
   ): Promise<Lead> {
     const company = await tx.company.findUniqueOrThrow({ where: { id: p.companyId } });
     const firstResponseDueAt = addWorkingMinutes(company.workSchedule as unknown as WeeklySchedule, p.at, company.slaFirstResponseMinutes);
+    // Тот же клиент уже обращался раньше → «Повторный» (менеджер может поменять тип вручную).
+    const priorLeads = await tx.lead.count({ where: { companyId: p.companyId, contactId: p.contactId, deletedAt: null } });
     const lead = await tx.lead.create({
       data: {
         companyId: p.companyId,
@@ -105,6 +114,7 @@ export class LeadsService {
         firstResponseDueAt,
         syncState: 'local_only',
         note: p.note ?? null,
+        leadType: priorLeads > 0 ? 'REPEAT' : 'NEW',
       },
     });
     if (p.deferAssignment) return lead;
@@ -160,7 +170,7 @@ export class LeadsService {
 
   // ---------------- Web actions ----------------
 
-  async list(actor: UserActor, q: { stage?: Stage; ownerId?: string; source?: Channel; search?: string; cursor?: string; limit: number }) {
+  async list(actor: UserActor, q: { stage?: Stage; status?: LeadStatus; sourceGroup?: LeadSourceGroup; leadType?: LeadType; ownerId?: string; source?: Channel; search?: string; cursor?: string; limit: number }) {
     const search = q.search?.trim() ?? '';
     // Qidiruv: lid nomi, mijoz ismi/familiyasi, telefon, Instagram va Telegram username (@ bilan yoki usiz). Foydalanuvchi ko'ra oladigan
     // BARCHA lidlar bo'yicha (leadWhere ko'rinish doirasini beradi) — faqat yuklangan sahifa emas.
@@ -182,15 +192,16 @@ export class LeadsService {
       if (contacts.length) searchOr.push({ contactId: { in: contacts.map((c) => c.id) } });
     }
     const where: Prisma.LeadWhereInput = leadWhere(actor, {
-      ...(q.stage ? { stage: q.stage } : {}),
-      ...(q.source ? { firstSource: q.source } : {}),
+      ...(q.stage ? { stage: q.stage } : q.status ? { stage: { in: stagesOfStatus(q.status) } } : {}),
+      ...(q.source ? { firstSource: q.source } : q.sourceGroup ? { firstSource: { in: channelsOfSourceGroup(q.sourceGroup) } } : {}),
+      ...(q.leadType ? { leadType: q.leadType } : {}),
       ...(q.ownerId && actor.role !== 'MANAGER' ? { ownerId: q.ownerId } : {}),
       ...(searchOr.length ? { OR: searchOr } : {}),
     });
     // List view: only the columns the table needs (less mapping work per row).
     const rows = await this.d.prisma.lead.findMany({
       where,
-      select: { id: true, name: true, stage: true, firstSource: true, createdAt: true, ownerId: true, anomaly: true, slaBreachedAt: true, firstHumanActionAt: true, contactId: true, version: true },
+      select: { id: true, name: true, stage: true, leadType: true, firstSource: true, createdAt: true, ownerId: true, anomaly: true, slaBreachedAt: true, firstHumanActionAt: true, contactId: true, version: true },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: q.limit + 1,
       ...(q.cursor ? { cursor: { id: q.cursor }, skip: 1 } : {}),
@@ -199,7 +210,7 @@ export class LeadsService {
     // Instagram username kontaktda alohida; ro'yxat/karta uchun bitta so'rov bilan qo'shiladi.
     const contacts = await this.d.prisma.contact.findMany({ where: { companyId: actor.companyId, id: { in: [...new Set(page.map((r) => r.contactId))] } }, select: { id: true, instagramUsername: true } });
     const uname = new Map(contacts.map((c) => [c.id, c.instagramUsername]));
-    const items = page.map((r) => ({ ...r, contactInstagramUsername: uname.get(r.contactId) ?? null }));
+    const items = page.map((r) => ({ ...r, status: statusOfStage(r.stage), contactInstagramUsername: uname.get(r.contactId) ?? null }));
     return { items, nextCursor: rows.length > q.limit ? items[items.length - 1]!.id : null };
   }
 
@@ -216,7 +227,75 @@ export class LeadsService {
     const activeOrder = orders.find((o) => o.fulfillmentState !== 'cancelled') ?? null;
     const operatorId = activeOrder ? activeOrder.tourOperatorId : lead.tourOperatorId;
     const op = operatorId ? await this.d.prisma.supplier.findFirst({ where: { id: operatorId, companyId: actor.companyId } }) : null;
-    return { lead, events, offers, orders, contact, inquiries, tourOperator: op ? serializeSupplier(op, can(actor.role, 'reference.view_full')) : null, operatorOwnedByOrder: activeOrder ? { id: activeOrder.id, orderNo: activeOrder.orderNo } : null };
+    const { SaleService } = await import('./sale.service');
+    const [sale, conversations] = await Promise.all([new SaleService(this.d).view(actor, lead), this.conversationsFor(actor, lead)]);
+    return {
+      lead,
+      status: statusOfStage(lead.stage),
+      events,
+      offers,
+      orders,
+      contact,
+      inquiries,
+      sale,
+      conversations,
+      tourOperator: op ? serializeSupplier(op, can(actor.role, 'reference.view_full')) : null,
+      operatorOwnedByOrder: activeOrder ? { id: activeOrder.id, orderNo: activeOrder.orderNo } : null,
+    };
+  }
+
+  /** Переписка Instagram только этого клиента (по контакту лида), последние 200 сообщений каждой беседы. */
+  private async conversationsFor(actor: UserActor, lead: Lead) {
+    const convs = await this.d.prisma.conversation.findMany({ where: { companyId: actor.companyId, contactId: lead.contactId }, orderBy: { createdAt: 'asc' } });
+    return Promise.all(
+      convs.map(async (c) => {
+        const rows = await this.d.prisma.message.findMany({
+          where: { companyId: actor.companyId, conversationId: c.id, isInternalNote: false },
+          orderBy: { createdAt: 'desc' },
+          take: 200,
+          select: { id: true, direction: true, type: true, content: true, attachments: true, state: true, error: true, actorUserId: true, isEcho: true, providerAt: true, createdAt: true, contentPurgedAt: true },
+        });
+        const { replyDecision } = await import('./direct-reply.service');
+        const reply = await replyDecision(this.d, actor, lead, c);
+        return { id: c.id, peerUsername: c.peerUsername, lastInboundAt: c.lastInboundAt, lastHumanReplyAt: c.lastHumanReplyAt, messages: rows.reverse(), reply };
+      }),
+    );
+  }
+
+  /**
+   * Упрощённая смена статуса (Новый / В работе / Продано / Отменён / Нет ответа). Хранится в прежнем поле stage,
+   * поэтому история и продажи не теряются. Повторное сохранение того же статуса ничего не меняет.
+   */
+  async changeStatus(actor: UserActor, id: string, version: number, status: LeadStatus) {
+    requireCap(actor, 'leads.work');
+    const result = await this.d.prisma.$transaction(async (tx) => {
+      const lead = assertFound(await tx.lead.findFirst({ where: leadWhere(actor, { id }) }), 'Лид');
+      if (!canEditRecord(actor, lead.ownerId)) throw forbidden();
+      if (lead.version !== version) throw conflict('VERSION_CONFLICT', 'Лид был изменён другим пользователем. Обновите страницу.');
+      if (statusOfStage(lead.stage) === status) return { lead, ownerId: lead.ownerId };
+      const target = stageOfStatus(status);
+      const now = this.d.clock.now();
+      await this.moveStage(tx, actor, lead, target, now, { reason: null, returnStage: null, firstAction: !lead.firstHumanActionAt });
+      return { lead: await tx.lead.findUniqueOrThrow({ where: { id } }), ownerId: lead.ownerId };
+    });
+    await publishEvent(this.d.redis, { companyId: actor.companyId, entityType: 'lead', entityId: id, ownerId: result.ownerId, kind: 'updated' });
+    return result.lead;
+  }
+
+  /** Тип лида и примечание. Пользователь может менять это только в своих лидах. */
+  async updateBasics(actor: UserActor, id: string, patch: { leadType?: LeadType; note?: string | null }) {
+    return this.d.prisma.$transaction(async (tx) => {
+      const lead = assertFound(await tx.lead.findFirst({ where: leadWhere(actor, { id }) }), 'Лид');
+      if (!canEditRecord(actor, lead.ownerId)) throw forbidden();
+      const data: Prisma.LeadUpdateInput = {};
+      if (patch.leadType !== undefined && patch.leadType !== lead.leadType) data.leadType = patch.leadType;
+      if (patch.note !== undefined && (patch.note?.trim() || null) !== lead.note) data.note = patch.note?.trim() || null;
+      if (!Object.keys(data).length) return lead;
+      data.version = { increment: 1 };
+      const updated = await tx.lead.update({ where: { id }, data });
+      await audit(tx, actor, { entityType: 'lead', entityId: id, action: 'basics_updated', oldValue: { leadType: lead.leadType, note: lead.note }, newValue: { leadType: updated.leadType, note: updated.note } });
+      return updated;
+    });
   }
 
   /** Local tourism fields are owned by PostgreSQL and change immediately (optimistic lock). */
@@ -319,7 +398,8 @@ export class LeadsService {
     });
     await audit(tx, actor, { entityType: 'lead', entityId: lead.id, action: o.reopen ? 'reopened' : 'stage_changed', oldValue: { stage: lead.stage }, newValue: { stage: target, reason: o.reason } });
     if (target === 'LOST') await this.cancelOpenSalesTasks(tx, lead.companyId, lead.id);
-    if (target === 'WON') await this.ensureOrderForWon(tx, lead.companyId, lead, now);
+    if (target === 'WON') await this.ensureOrderForWon(tx, lead.companyId, lead, now, actor);
+    if (lead.stage === 'WON' && target !== 'WON') await this.cancelOrderForUnsold(tx, actor, lead, now);
     if (target === 'FOLLOW_UP') {
       await this.createCrmTask(tx, {
         companyId: lead.companyId,
@@ -370,12 +450,38 @@ export class LeadsService {
     await tx.crmTask.updateMany({ where: { companyId, entityId: leadId, state: { in: ['pending', 'open'] }, kind: { in: ['first_contact', 'follow_up', 'offer_prep'] } }, data: { state: 'cancelled' } });
   }
 
-  /** WON without a local order → idempotent draft order (TZ §12.3, AC15). */
-  async ensureOrderForWon(tx: Tx, companyId: string, lead: Lead, now: Date) {
+  /**
+   * WON without a local order → idempotent draft order (TZ §12.3, AC15). If the lead was «Продано» before and
+   * the sale was cancelled by a status change, the same order is reactivated — no duplicate sale.
+   */
+  async ensureOrderForWon(tx: Tx, companyId: string, lead: Lead, now: Date, actor?: Actor) {
     const existing = await tx.order.findFirst({ where: { companyId, leadId: lead.id, fulfillmentState: { not: 'cancelled' } } });
     if (existing) return existing;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`order:${lead.id}`}, 0))`;
+    const again = await tx.order.findFirst({ where: { companyId, leadId: lead.id, fulfillmentState: { not: 'cancelled' } } });
+    if (again) return again;
+    const previous = await tx.order.findFirst({ where: { companyId, leadId: lead.id, fulfillmentState: 'cancelled' }, orderBy: { cancelledAt: { sort: 'desc', nulls: 'last' } } });
+    if (previous) {
+      const revived = await tx.order.update({ where: { id: previous.id }, data: { fulfillmentState: previous.confirmedAt ? 'confirmed' : 'draft', cancelledAt: null, version: { increment: 1 } } });
+      if (actor) await audit(tx, actor, { entityType: 'order', entityId: previous.id, action: 'reactivated', oldValue: { fulfillmentState: 'cancelled' }, newValue: { fulfillmentState: revived.fulfillmentState, reason: 'lead_sold_again' } });
+      return revived;
+    }
     const { createOrderRow } = await import('./orders.service');
     return createOrderRow(tx, { companyId, leadId: lead.id, contactId: lead.contactId, ownerId: lead.ownerId, now, fulfillmentState: 'draft', tourOperatorId: lead.tourOperatorId });
+  }
+
+  /** Статус ушёл с «Продано»: продажа (заказ) отменяется вместе с напоминаниями; цены и история сохраняются. */
+  private async cancelOrderForUnsold(tx: Tx, actor: Actor, lead: Lead, now: Date) {
+    const order = await tx.order.findFirst({ where: { companyId: lead.companyId, leadId: lead.id, fulfillmentState: { not: 'cancelled' } } });
+    if (!order) return;
+    await tx.order.update({ where: { id: order.id }, data: { fulfillmentState: 'cancelled', cancelledAt: now, version: { increment: 1 } } });
+    const occ = await tx.reminderOccurrence.findMany({ where: { companyId: lead.companyId, orderId: order.id, state: { in: ['scheduled', 'dispatching', 'due', 'snoozed'] } }, select: { id: true } });
+    if (occ.length) {
+      const ids = occ.map((o) => o.id);
+      await tx.reminderOccurrence.updateMany({ where: { id: { in: ids } }, data: { state: 'cancelled', cancelledAt: now, cancelReason: 'lead_not_sold', leaseUntil: null } });
+      await tx.crmTask.updateMany({ where: { companyId: lead.companyId, entityType: 'occurrence', entityId: { in: ids }, state: { in: ['pending', 'open'] } }, data: { state: 'cancelled' } });
+    }
+    await audit(tx, actor, { entityType: 'order', entityId: order.id, action: 'cancelled_by_status', oldValue: { fulfillmentState: order.fulfillmentState }, newValue: { fulfillmentState: 'cancelled', remindersCancelled: occ.length } });
   }
 
   async createCrmTask(tx: Tx, t: { companyId: string; key: string; entityId: string; kind: string; text: string; responsibleUserId: string | null; dueAt: Date; entityType?: string }) {

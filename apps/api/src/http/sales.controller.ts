@@ -1,9 +1,13 @@
-import { Body, Controller, Get, Inject, Param, Patch, Post, Query, Req, Res } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Patch, Post, Put, Query, Req, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import {
   AssigneeSchema,
   DashboardQuery,
   ContactEditSchema,
+  DirectReplySchema,
+  LeadBasicsSchema,
+  LeadSaleSchema,
+  LeadStatusSchema,
   LeadDetailsSchema,
   ManualLeadCreateSchema,
   LeadListQuery,
@@ -34,6 +38,12 @@ export class SalesController {
   @Get('dashboard/leads')
   async dashboardLeads(@Actor() actor: UserActor, @Query() q: unknown, @Res() res: Response) {
     send(res, 200, await this.core.dashboard.listLeads(actor, parse(DashboardQuery, q)));
+  }
+
+  /** «Ближайшие вылеты»: 15 будущих вылетов по продажам, ближайшие первыми. */
+  @Get('dashboard/departures')
+  async departures(@Actor() actor: UserActor, @Res() res: Response) {
+    send(res, 200, await this.core.sales.upcoming(actor));
   }
 
   @Get('exports/leads.csv')
@@ -86,6 +96,33 @@ export class SalesController {
   async stage(@Actor() actor: UserActor, @Param('id', uuid) id: string, @Body() body: unknown, @Res() res: Response) {
     const input = parse(StageChangeSchema, body);
     send(res, 200, await this.core.leads.requestStageChange(actor, id, input.version, input.stage, { reason: input.reason ?? null }));
+  }
+
+  /** Упрощённый статус: Новый / В работе / Продано / Отменён / Нет ответа. */
+  @Patch('leads/:id/status')
+  async status(@Actor() actor: UserActor, @Param('id', uuid) id: string, @Body() body: unknown, @Res() res: Response) {
+    const input = parse(LeadStatusSchema, body);
+    send(res, 200, await this.core.leads.changeStatus(actor, id, input.version, input.status));
+  }
+
+  /** Тип лида и заметка (доступно и Пользователю в своих лидах). */
+  @Patch('leads/:id/basics')
+  async basics(@Actor() actor: UserActor, @Param('id', uuid) id: string, @Body() body: unknown, @Res() res: Response) {
+    send(res, 200, await this.core.leads.updateBasics(actor, id, parse(LeadBasicsSchema, body)));
+  }
+
+  /** Блок «Продажа»: тип услуги, туроператор, цены, вылет и напоминание. */
+  @Put('leads/:id/sale')
+  async sale(@Actor() actor: UserActor, @Param('id', uuid) id: string, @Body() body: unknown, @Res() res: Response) {
+    send(res, 200, await this.core.sales.save(actor, id, parse(LeadSaleSchema, body)));
+  }
+
+  /** Ответ клиенту в Instagram Direct (обязателен Idempotency-Key: повтор не отправит второй раз). */
+  @Post('leads/:id/messages')
+  async reply(@Actor() actor: UserActor, @Param('id', uuid) id: string, @Body() body: unknown, @Req() req: AuthedRequest, @Res() res: Response) {
+    const input = parse(DirectReplySchema, body);
+    const r = await withIdempotency(this.core, actor, req, true, async () => ({ status: 201, body: await this.core.directReply.send(actor, id, input, req.header('idempotency-key')!) }));
+    send(res, r.status, r.body);
   }
 
   @Patch('leads/:id/assignee')

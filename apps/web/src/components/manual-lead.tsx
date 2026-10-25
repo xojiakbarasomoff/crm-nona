@@ -51,7 +51,7 @@ export function NewLeadForm({ onClose }: { onClose: () => void }) {
   const me = useMe();
   const router = useRouter();
   const [team, setTeam] = useState<Array<{ id: string; fullName: string; role: string }> | null>(null);
-  const [f, setF] = useState({ firstName: '', lastName: '', phone: '', telegram: '', name: '', ownerId: '', note: '' });
+  const [f, setF] = useState({ firstName: '', lastName: '', phone: '', telegram: '', instagram: '', leadType: 'NEW', name: '', ownerId: '', note: '' });
   const [error, setError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
   const canPick = canDo(me, 'leads.reassign');
@@ -100,6 +100,16 @@ export function NewLeadForm({ onClose }: { onClose: () => void }) {
           <Field label="Telegram username" error={error?.fieldErrors.telegram} hint="С @ или без">
             <input value={f.telegram} onChange={set('telegram')} maxLength={120} />
           </Field>
+          <Field label="Instagram username" error={error?.fieldErrors.instagram} hint="@username или ссылка на профиль">
+            <input value={f.instagram} onChange={set('instagram')} maxLength={200} />
+          </Field>
+          <Field label="Тип лида">
+            <select value={f.leadType} onChange={set('leadType')}>
+              <option value="NEW">Новый</option>
+              <option value="REFERRAL">По рекомендации</option>
+              <option value="REPEAT">Повторный</option>
+            </select>
+          </Field>
         </div>
         <div className="row">
           <Field label="Название лида (необязательно)">
@@ -118,6 +128,7 @@ export function NewLeadForm({ onClose }: { onClose: () => void }) {
             </Field>
           )}
         </div>
+        {!canPick && <p className="muted">Ответственный — вы ({me.fullName}). Источник — «Вручную».</p>}
         <Field label="Заметка">
           <textarea value={f.note} onChange={set('note')} maxLength={2000} rows={3} />
         </Field>
@@ -142,13 +153,16 @@ export function ContactEditForm({
   contact,
   onSaved,
   onCancel,
+  instagramEditable = false,
 }: {
   leadId: string;
-  contact: { fullName: string | null; firstName: string | null; lastName: string | null; primaryPhone: string | null; telegramUsername: string | null };
+  contact: { fullName: string | null; firstName: string | null; lastName: string | null; primaryPhone: string | null; telegramUsername: string | null; instagramUsername?: string | null };
   onSaved: () => void;
   onCancel: () => void;
+  /** Клиент без переписки в Direct: Instagram username можно ввести вручную. */
+  instagramEditable?: boolean;
 }) {
-  const [f, setF] = useState({ firstName: contact.firstName ?? '', lastName: contact.lastName ?? '', phone: contact.primaryPhone ?? '', telegram: contact.telegramUsername ? `@${contact.telegramUsername}` : '' });
+  const [f, setF] = useState({ firstName: contact.firstName ?? '', lastName: contact.lastName ?? '', phone: contact.primaryPhone ?? '', telegram: contact.telegramUsername ? `@${contact.telegramUsername}` : '', instagram: contact.instagramUsername ? `@${contact.instagramUsername}` : '' });
   const [error, setError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF((s) => ({ ...s, [k]: e.target.value }));
@@ -156,7 +170,7 @@ export function ContactEditForm({
     setBusy(true);
     setError(null);
     try {
-      await api(`/api/v1/leads/${leadId}/contact`, { method: 'PATCH', body: { firstName: f.firstName.trim() || null, lastName: f.lastName.trim() || null, phone: f.phone.trim() || null, telegram: f.telegram.trim() || null, ...(allowDuplicatePhone ? { allowDuplicatePhone: true } : {}) } });
+      await api(`/api/v1/leads/${leadId}/contact`, { method: 'PATCH', body: { firstName: f.firstName.trim() || null, lastName: f.lastName.trim() || null, phone: f.phone.trim() || null, telegram: f.telegram.trim() || null, ...(instagramEditable ? { instagram: f.instagram.trim() || null } : {}), ...(allowDuplicatePhone ? { allowDuplicatePhone: true } : {}) } });
       onSaved();
     } catch (e) {
       setError(e as ApiError);
@@ -183,6 +197,11 @@ export function ContactEditForm({
       <Field label="Telegram username" error={error?.fieldErrors.telegram}>
         <input value={f.telegram} onChange={set('telegram')} maxLength={120} />
       </Field>
+      {instagramEditable && (
+        <Field label="Instagram username" error={error?.fieldErrors.instagram} hint="@username или ссылка на профиль">
+          <input value={f.instagram} onChange={set('instagram')} maxLength={200} />
+        </Field>
+      )}
       {error && error.code !== 'PHONE_EXISTS' && <FormError error={error} />}
       {error?.code === 'PHONE_EXISTS' && <Candidates error={error} onForce={() => void save(true)} forceLabel="Всё равно сохранить (контакты не объединяются)" />}
       <div className="row">

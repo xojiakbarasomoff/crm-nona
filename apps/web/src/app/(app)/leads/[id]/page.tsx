@@ -1,67 +1,92 @@
 'use client';
 
 import Link from 'next/link';
-import { useParams, useRouter } from 'next/navigation';
-import { useState } from 'react';
-import { api, fmtDateTime, isoToTashkentLocal, newKey, SOURCE_LABELS, STAGE_LABELS, tashkentLocalToIso, useApi, type ApiError } from '../../../../lib/api';
-import { FULFILLMENT_LABELS } from '../../../../lib/format';
-import { Async, Badge, Field, FormError, InstagramLink, IsoDateField, LocalDateTimeField, Section } from '../../../../components/ui';
+import { useParams } from 'next/navigation';
+import { useEffect, useRef, useState } from 'react';
+import {
+  api,
+  fmtDateTime,
+  isoToTashkentLocal,
+  LEAD_STATUS_LABELS,
+  LEAD_STATUS_TONE,
+  LEAD_TYPE_LABELS,
+  newKey,
+  SALE_SERVICE_LABELS,
+  SOURCE_GROUP_LABELS,
+  SOURCE_LABELS,
+  sourceGroupOf,
+  STAGE_LABELS,
+  tashkentLocalToIso,
+  useApi,
+  type ApiError,
+} from '../../../../lib/api';
+import { CURRENCIES, fmtMoney, profitPreview } from '../../../../lib/format';
+import { Async, Badge, Field, FormError, InstagramLink, LocalDateTimeField, Section } from '../../../../components/ui';
 import { canDo, canWrite, useMe } from '../../../../components/shell';
 import { Attachments } from '../../../../components/attachments';
 import { ContactEditForm } from '../../../../components/manual-lead';
 import { LeadFormAnswers, type FormInquiry } from '../../../../components/lead-form-answers';
 
-interface LeadDetail {
-  inquiries: FormInquiry[];
-  lead: {
-    id: string;
-    name: string;
-    stage: string;
-    version: number;
-    ownerId: string | null;
-    firstSource: string;
-    firstPlacement: string;
-    contactId: string;
-    tourOperatorId: string | null;
-    requirements: Record<string, unknown>;
-    serviceType: string | null;
-    contactOutcome: string | null;
-    offerPrepDueAt: string | null;
-    lostReasonCode: string | null;
-    nextContactAt: string | null;
-    followUpNote: string | null;
-    anomaly: { stage: string; missing: string[] } | null;
-    firstResponseDueAt: string | null;
-    firstHumanActionAt: string | null;
-    slaBreachedAt: string | null;
-    createdAt: string;
-    note: string | null;
-  };
-  events: Array<{ id: string; kind: string; oldStage: string | null; newStage: string | null; oldOwnerId: string | null; newOwnerId: string | null; origin: string; reason: string | null; effectiveAt: string }>;
-  offers: Array<{ id: string; version: number; content: string; amount: string; currency: string; sentAt: string | null; acceptedAt: string | null; validUntil: string | null }>;
-  orders: Array<{ id: string; orderNo: string; fulfillmentState: string }>;
-  contact: { id: string; fullName: string | null; firstName: string | null; lastName: string | null; primaryPhone: string | null; telegramUsername: string | null; instagramUsername: string | null; instagramName: string | null } | null;
-  tourOperator: { id: string; name: string; status: string } | null;
-  /** Если есть активный заказ, туроператор принадлежит заказу (историческая связь): в карточке лида не меняется. */
-  operatorOwnedByOrder: { id: string; orderNo: string } | null;
+interface Sale {
+  orderId: string;
+  orderNo: string;
+  serviceType: 'avia' | 'tour_package' | 'other' | null;
+  soldWhat: string | null;
+  tourOperator: { id: string; name: string } | null;
+  currency: string | null;
+  amount: string | null;
+  netAmount: string | null;
+  profit: string | null;
+  costHidden: boolean;
+  departureAt: string | null;
+  departureNote: string | null;
+  remindEnabled: boolean;
+  remindAt: string | null;
+  reminder: { state: 'off' | 'scheduled' | 'due' | 'done' | 'departed'; dueAt: string | null; timezone: string };
 }
 
-const EVENT_LABELS: Record<string, string> = {
-  created: 'Лид создан',
-  stage_change: 'Смена этапа',
-  reopened: 'Повторно открыт',
-  owner_change: 'Смена ответственного',
-};
+interface ChatMessage {
+  id: string;
+  direction: 'inbound' | 'outbound';
+  type: string;
+  content: string | null;
+  state: string;
+  error: string | null;
+  isEcho: boolean;
+  providerAt: string | null;
+  createdAt: string;
+  contentPurgedAt: string | null;
+}
+
+interface Conversation {
+  id: string;
+  peerUsername: string | null;
+  lastInboundAt: string | null;
+  messages: ChatMessage[];
+  reply: { allowed: boolean; reason: string | null; message: string | null; mode: string | null };
+}
+
+interface LeadDetail {
+  inquiries: FormInquiry[];
+  status: string;
+  lead: { id: string; name: string; stage: string; leadType: string; version: number; ownerId: string | null; firstSource: string; contactId: string; createdAt: string; note: string | null };
+  events: Array<{ id: string; kind: string; oldStage: string | null; newStage: string | null; oldOwnerId: string | null; newOwnerId: string | null; reason: string | null; effectiveAt: string }>;
+  contact: { id: string; fullName: string | null; firstName: string | null; lastName: string | null; primaryPhone: string | null; telegramUsername: string | null; instagramUsername: string | null; instagramName: string | null } | null;
+  sale: Sale | null;
+  conversations: Conversation[];
+}
+
+const EVENT_LABELS: Record<string, string> = { created: 'Лид создан', stage_change: 'Смена статуса', reopened: 'Статус изменён', owner_change: 'Смена ответственного' };
+const statusOf = (stage: string) => (stage === 'NEW' ? 'Новый' : stage === 'WON' ? 'Продано' : stage === 'LOST' ? 'Отменён' : stage === 'NO_ANSWER' ? 'Нет ответа' : 'В работе');
 
 export default function LeadPage() {
   const { id } = useParams<{ id: string }>();
   const me = useMe();
-  const router = useRouter();
-  const state = useApi<LeadDetail>(`/api/v1/leads/${id}`);
+  const state = useApi<LeadDetail>(`/api/v1/leads/${id}`, { pollMs: 15_000 });
   const team = useApi<{ items: Array<{ id: string; fullName: string; role: string }> }>('/api/v1/team');
   const [error, setError] = useState<ApiError | null>(null);
   const [editingContact, setEditingContact] = useState(false);
-  const writable = canWrite(me);
+  const works = canWrite(me); // статус, продажа, ответ клиенту — Администратор и Менеджер
   const run = async (fn: () => Promise<unknown>) => {
     setError(null);
     try {
@@ -71,146 +96,126 @@ export default function LeadPage() {
       setError(e as ApiError);
     }
   };
-  const userName = (uid: string | null) => team.data?.items.find((u) => u.id === uid)?.fullName ?? '—';
+  const userName = (uid: string | null) => (uid === me.id ? me.fullName : (team.data?.items.find((u) => u.id === uid)?.fullName ?? (uid ? 'Сотрудник' : 'Не назначен')));
 
   return (
     <Async state={state}>
       {(d) => {
         const l = d.lead;
-        const req = l.requirements as Record<string, string | number | null>;
+        const c = d.contact;
+        const editable = me.role === 'ADMIN' || l.ownerId === me.id;
+        const displayName = c?.fullName && c.fullName !== 'Instagram mijoz' ? c.fullName : c?.instagramUsername ? `@${c.instagramUsername}` : l.name;
         return (
           <>
-            <h1>{l.name}</h1>
-            {d.contact?.instagramUsername && (
-              <p>
-                Instagram: <b>@{d.contact.instagramUsername}</b> <InstagramLink username={d.contact.instagramUsername} withHandle={false} />
-                {d.contact.instagramName ? <span className="muted"> · {d.contact.instagramName}</span> : null}
-              </p>
-            )}
             <p className="muted">
-              Этап: <b>{STAGE_LABELS[l.stage]}</b> · Ответственный: {userName(l.ownerId)} · Источник: {SOURCE_LABELS[l.firstSource] ?? l.firstSource} · Срок первого ответа: {fmtDateTime(l.firstResponseDueAt)}
+              <Link href="/leads">← Лиды</Link>
             </p>
-            {l.slaBreachedAt && !l.firstHumanActionAt && <div className="state error">Срок ответа нарушен: первый ответ сотрудника не зафиксирован до {fmtDateTime(l.firstResponseDueAt)}.</div>}
-            {l.anomaly && (
-              <div className="state stale">
-                Аномалия: для этапа «{STAGE_LABELS[l.anomaly.stage]}» не хватает данных — {l.anomaly.missing.join(', ')}. Создана задача на исправление.
-              </div>
-            )}
+            <div className="lead-head">
+              <h1>{displayName}</h1>
+              <Badge tone={LEAD_STATUS_TONE[d.status]}>{LEAD_STATUS_LABELS[d.status]}</Badge>
+              <Badge>{SOURCE_GROUP_LABELS[sourceGroupOf(l.firstSource)]}</Badge>
+              <Badge tone="info">{LEAD_TYPE_LABELS[l.leadType] ?? l.leadType}</Badge>
+            </div>
             <FormError error={error} />
-            <LeadFormAnswers inquiries={d.inquiries ?? []} />
-            <div className="split">
+            <div className="split even">
               <div>
-                <RequirementsForm lead={l} req={req} readOnly={!writable} onSave={(body) => run(() => api(`/api/v1/leads/${id}`, { method: 'PATCH', body: { version: l.version, ...body } }))} />
-                <OffersSection
-                  offers={d.offers}
-                  readOnly={!writable}
-                  onCreate={(body) => run(() => api(`/api/v1/leads/${id}/offers`, { method: 'POST', body, idempotencyKey: newKey() }))}
-                  onSent={(oid) => run(() => api(`/api/v1/offers/${oid}/sent`, { method: 'POST', body: { channel: 'instagram_direct' } }))}
-                  onAccept={(oid) => run(() => api(`/api/v1/offers/${oid}/accept`, { method: 'POST' }))}
-                />
-                <Attachments ownerType="lead" ownerId={id} />
-                <Section title="История">
-                  <ul>
-                    {d.events.map((e) => (
-                      <li key={e.id}>
-                        {fmtDateTime(e.effectiveAt)} — {EVENT_LABELS[e.kind] ?? e.kind}
-                        {e.newStage ? `: ${e.oldStage ? STAGE_LABELS[e.oldStage] : '∅'} → ${STAGE_LABELS[e.newStage]}` : ''}
-                        {e.newOwnerId ? ` · ответственный: ${userName(e.oldOwnerId)} → ${userName(e.newOwnerId)}` : ''}
-                        {e.reason ? <span className="muted"> ({e.reason})</span> : null}
-                      </li>
-                    ))}
-                  </ul>
-                </Section>
-              </div>
-              <div>
-                {writable && (
-                  <Section title="Изменить этап">
-                    <StageChanger current={l.stage} onChange={(stage) => run(() => api(`/api/v1/leads/${id}/stage`, { method: 'PATCH', body: { version: l.version, stage } }))} />
-                    {canDo(me, 'leads.reopen') && (l.stage === 'WON' || l.stage === 'LOST') && (
-                      <button
-                        className="btn secondary"
-                        type="button"
-                        onClick={() => {
-                          const reason = window.prompt('Причина повторного открытия');
-                          if (reason) void run(() => api(`/api/v1/leads/${id}/reopen`, { method: 'POST', body: { reason } }));
-                        }}
-                      >
-                        Открыть заново
+                <Section
+                  title="Клиент"
+                  actions={
+                    editable && c && !editingContact ? (
+                      <button className="btn secondary small" type="button" onClick={() => setEditingContact(true)}>
+                        Редактировать
                       </button>
-                    )}
-                  </Section>
-                )}
-                {canDo(me, 'leads.reassign') && (
-                  <Section title="Сменить ответственного">
-                    <select
-                      aria-label="Новый ответственный"
-                      defaultValue=""
-                      onChange={(e) => {
-                        if (e.target.value) void run(() => api(`/api/v1/leads/${id}/assignee`, { method: 'PATCH', body: { userId: e.target.value, reason: 'Решение администратора' } }));
-                      }}
-                    >
-                      <option value="">Выберите…</option>
-                      {team.data?.items.map((u) => (
-                        <option key={u.id} value={u.id}>
-                          {u.fullName}
-                        </option>
-                      ))}
-                    </select>
-                  </Section>
-                )}
-                <TourOperatorPicker current={d.tourOperator} ownedBy={d.operatorOwnedByOrder} readOnly={!writable} onSave={(tourOperatorId) => run(() => api(`/api/v1/leads/${id}`, { method: 'PATCH', body: { version: l.version, tourOperatorId } }))} />
-                <Section title="Клиент">
-                  {d.contact && editingContact ? (
+                    ) : null
+                  }
+                >
+                  {c && editingContact ? (
                     <ContactEditForm
                       leadId={l.id}
-                      contact={d.contact}
+                      contact={c}
+                      instagramEditable={d.conversations.length === 0}
                       onCancel={() => setEditingContact(false)}
                       onSaved={() => {
                         setEditingContact(false);
                         void state.reload();
                       }}
                     />
-                  ) : d.contact ? (
-                    <>
-                      <div>{d.contact.fullName && d.contact.fullName !== 'Instagram mijoz' ? d.contact.fullName : d.contact.instagramUsername ? `@${d.contact.instagramUsername}` : d.contact.fullName ?? '—'}</div>
-                      <div className="muted">{d.contact.primaryPhone ?? 'Телефон не указан'}</div>
-                      {d.contact.telegramUsername && (
-                        <div className="muted">
-                          Telegram:{' '}
-                          <a href={`https://t.me/${encodeURIComponent(d.contact.telegramUsername)}`} target="_blank" rel="noopener noreferrer">
-                            @{d.contact.telegramUsername}
+                  ) : c ? (
+                    <dl className="kv2">
+                      <dt>Имя</dt>
+                      <dd>{c.firstName ?? '—'}</dd>
+                      <dt>Фамилия</dt>
+                      <dd>{c.lastName ?? '—'}</dd>
+                      <dt>Телефон</dt>
+                      <dd>{c.primaryPhone ? <a href={`tel:${c.primaryPhone}`}>{c.primaryPhone}</a> : '—'}</dd>
+                      <dt>Instagram</dt>
+                      <dd>
+                        {c.instagramUsername ? (
+                          <>
+                            @{c.instagramUsername} <InstagramLink username={c.instagramUsername} withHandle={false} />
+                            {c.instagramName ? <span className="muted"> · {c.instagramName}</span> : null}
+                          </>
+                        ) : (
+                          '—'
+                        )}
+                      </dd>
+                      <dt>Telegram</dt>
+                      <dd>
+                        {c.telegramUsername ? (
+                          <a href={`https://t.me/${encodeURIComponent(c.telegramUsername)}`} target="_blank" rel="noopener noreferrer">
+                            @{c.telegramUsername}
                           </a>
-                        </div>
-                      )}
-                      {l.note && <div className="muted">Заметка: {l.note}</div>}
-                      {writable && (me.role === 'ADMIN' || l.ownerId === me.id) && (
-                        <button className="btn secondary" type="button" onClick={() => setEditingContact(true)}>
-                          Редактировать
-                        </button>
-                      )}
-                      <Link href={`/contacts/${d.contact.id}`}>Карточка клиента и переписка</Link>
-                    </>
+                        ) : (
+                          '—'
+                        )}
+                      </dd>
+                    </dl>
                   ) : (
                     '—'
                   )}
                 </Section>
-                <Section title="Заказ">
-                  {d.orders.length ? (
-                    d.orders.map((o) => (
-                      <div key={o.id}>
-                        <Link href={`/orders/${o.id}`}>{o.orderNo}</Link> <Badge>{FULFILLMENT_LABELS[o.fulfillmentState] ?? o.fulfillmentState}</Badge>
-                      </div>
-                    ))
-                  ) : writable ? (
-                    <button className="btn" type="button" onClick={() => run(async () => router.push(`/orders/${(await api<{ id: string }>('/api/v1/orders', { method: 'POST', body: { leadId: id } })).id}`))}>
-                      Создать заказ
-                    </button>
-                  ) : (
-                    <span className="muted">Заказа пока нет</span>
-                  )}
-                </Section>
+                <LeadForm
+                  key={`${l.id}:${l.version}`}
+                  d={d}
+                  canStatus={works && editable}
+                  canBasics={editable}
+                  canReassign={canDo(me, 'leads.reassign')}
+                  team={team.data?.items ?? []}
+                  ownerName={userName(l.ownerId)}
+                  onStatus={(status) => run(() => api(`/api/v1/leads/${id}/status`, { method: 'PATCH', body: { version: l.version, status } }))}
+                  onBasics={(body) => run(() => api(`/api/v1/leads/${id}/basics`, { method: 'PATCH', body }))}
+                  onReassign={(userId) => run(() => api(`/api/v1/leads/${id}/assignee`, { method: 'PATCH', body: { userId, reason: 'Решение администратора' } }))}
+                />
+              </div>
+              <div>
+                {d.status === 'SOLD' ? (
+                  <SaleBlock key={d.sale ? `${d.sale.orderId}:${JSON.stringify(d.sale)}` : 'new'} leadId={l.id} sale={d.sale} readOnly={!(works && editable)} onSaved={() => void state.reload()} />
+                ) : (
+                  <Section title="Продажа">
+                    <p className="muted">Блок «Продажа» открывается, когда статус лида — «Продано».</p>
+                  </Section>
+                )}
+                <LeadFormAnswers inquiries={d.inquiries ?? []} />
               </div>
             </div>
+            <DirectChat leadId={l.id} conversations={d.conversations} canReply={works && editable} onSent={() => void state.reload()} />
+            <details className="lead-more">
+              <summary>История и файлы</summary>
+              <Section title="История">
+                <ul>
+                  {d.events.map((e) => (
+                    <li key={e.id}>
+                      {fmtDateTime(e.effectiveAt)} — {EVENT_LABELS[e.kind] ?? e.kind}
+                      {e.newStage ? `: ${e.oldStage ? statusOf(e.oldStage) : '∅'} → ${statusOf(e.newStage)}` : ''}
+                      {e.newStage && e.oldStage && statusOf(e.oldStage) === statusOf(e.newStage) ? <span className="muted"> ({STAGE_LABELS[e.oldStage]} → {STAGE_LABELS[e.newStage]})</span> : null}
+                      {e.newOwnerId ? ` · ответственный: ${userName(e.oldOwnerId)} → ${userName(e.newOwnerId)}` : ''}
+                      {e.reason ? <span className="muted"> ({e.reason})</span> : null}
+                    </li>
+                  ))}
+                </ul>
+              </Section>
+              <Attachments ownerType="lead" ownerId={id} />
+            </details>
           </>
         );
       }}
@@ -218,188 +223,238 @@ export default function LeadPage() {
   );
 }
 
-/** Туроператор (поставщик услуги). Это не рекламный источник: источник указан выше в поле «Источник». */
-function TourOperatorPicker({ current, ownedBy, readOnly, onSave }: { current: LeadDetail['tourOperator']; ownedBy: LeadDetail['operatorOwnedByOrder']; readOnly: boolean; onSave: (id: string | null) => void }) {
-  const list = useApi<{ items: Array<{ id: string; name: string; status: string }> }>('/api/v1/suppliers?status=active&kind=tour_operator');
-  const options = list.data?.items ?? [];
-  const all = current && !options.some((o) => o.id === current.id) ? [...options, current] : options;
+function LeadForm({
+  d,
+  canStatus,
+  canBasics,
+  canReassign,
+  team,
+  ownerName,
+  onStatus,
+  onBasics,
+  onReassign,
+}: {
+  d: LeadDetail;
+  canStatus: boolean;
+  canBasics: boolean;
+  canReassign: boolean;
+  team: Array<{ id: string; fullName: string; role: string }>;
+  ownerName: string;
+  onStatus: (s: string) => void;
+  onBasics: (b: { leadType?: string; note?: string | null }) => void;
+  onReassign: (userId: string) => void;
+}) {
+  const l = d.lead;
+  const [note, setNote] = useState(l.note ?? '');
   return (
-    <Section title="Туроператор">
-      <Field label="Туроператор-поставщик" hint="Не путайте с источником обращения клиента">
-        <select value={current?.id ?? ''} onChange={(e) => onSave(e.target.value || null)} aria-label="Туроператор" disabled={!!ownedBy || readOnly}>
-          <option value="">Не выбран</option>
-          {all.map((o) => (
-            <option key={o.id} value={o.id}>
-              {o.name}
-              {o.status === 'archived' ? ' (архив)' : ''}
-            </option>
-          ))}
-        </select>
+    <Section title="Лид">
+      <div className="row">
+        <Field label="Источник">
+          <input value={`${SOURCE_GROUP_LABELS[sourceGroupOf(l.firstSource)]}${sourceGroupOf(l.firstSource) === 'ADS' ? ` (${SOURCE_LABELS[l.firstSource] ?? l.firstSource})` : ''}`} readOnly aria-readonly="true" />
+        </Field>
+        <Field label="Тип лида">
+          <select value={l.leadType} disabled={!canBasics} onChange={(e) => onBasics({ leadType: e.target.value })}>
+            {Object.entries(LEAD_TYPE_LABELS).map(([k, v]) => (
+              <option key={k} value={k}>
+                {v}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Статус" hint={d.status === 'NO_ANSWER' ? 'Клиент не отвечает' : undefined}>
+          <select value={d.status} disabled={!canStatus} onChange={(e) => onStatus(e.target.value)} aria-label="Статус">
+            {Object.entries(LEAD_STATUS_LABELS).map(([k, v]) => (
+              <option key={k} value={k}>
+                {v}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      <div className="row">
+        <Field label="Ответственный">
+          {canReassign ? (
+            <select value={l.ownerId ?? ''} onChange={(e) => e.target.value && e.target.value !== l.ownerId && onReassign(e.target.value)}>
+              {!l.ownerId && <option value="">Не назначен</option>}
+              {team.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.fullName}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input value={ownerName} readOnly aria-readonly="true" />
+          )}
+        </Field>
+        <Field label="Создан">
+          <input value={fmtDateTime(l.createdAt)} readOnly aria-readonly="true" />
+        </Field>
+      </div>
+      <Field label="Заметки">
+        <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={4} maxLength={4000} disabled={!canBasics} placeholder="Пожелания клиента, договорённости…" />
       </Field>
-      {ownedBy && (
-        <p className="hint">
-          Есть заказ <Link href={`/orders/${ownedBy.id}`}>{ownedBy.orderNo}</Link>: туроператор — историческая связь заказа. Меняйте его в карточке заказа (с причиной и записью в журнале); статистика прошлых продаж от изменений лида не зависит.
-        </p>
+      {canBasics && (
+        <button className="btn" type="button" disabled={note === (l.note ?? '')} onClick={() => onBasics({ note: note.trim() || null })}>
+          Сохранить заметки
+        </button>
       )}
     </Section>
   );
 }
 
-function StageChanger({ current, onChange }: { current: string; onChange: (s: string) => void }) {
-  const [stage, setStage] = useState('');
-  return (
-    <div className="row">
-      <select aria-label="Новый этап" value={stage} onChange={(e) => setStage(e.target.value)}>
-        <option value="">Выберите…</option>
-        {Object.entries(STAGE_LABELS)
-          .filter(([k]) => k !== current)
-          .map(([k, v]) => (
-            <option key={k} value={k}>
-              {v}
-            </option>
-          ))}
-      </select>
-      <button className="btn" type="button" disabled={!stage} onClick={() => onChange(stage)}>
-        Применить
-      </button>
-    </div>
-  );
-}
+const REMINDER_LABELS: Record<Sale['reminder']['state'], string> = { off: 'Выключено', scheduled: 'Запланировано', due: 'Пора напомнить', done: 'Выполнено', departed: 'Вылет прошёл' };
 
-function RequirementsForm({ lead, req, readOnly, onSave }: { lead: LeadDetail['lead']; req: Record<string, string | number | null>; readOnly: boolean; onSave: (body: Record<string, unknown>) => void }) {
+/** Блок «Продажа»: тип услуги, туроператор, цены (одна валюта), вылет и напоминание. */
+function SaleBlock({ leadId, sale, readOnly, onSaved }: { leadId: string; sale: Sale | null; readOnly: boolean; onSaved: () => void }) {
+  const ops = useApi<{ items: Array<{ id: string; name: string; status: string }> }>('/api/v1/suppliers?status=active&kind=tour_operator');
+  const costHidden = sale?.costHidden ?? false;
   const [f, setF] = useState({
-    serviceType: lead.serviceType ?? '',
-    origin: String(req.origin ?? ''),
-    destination: String(req.destination ?? ''),
-    dateFrom: String(req.dateFrom ?? ''),
-    dateTo: String(req.dateTo ?? ''),
-    adults: String(req.adults ?? ''),
-    children: String(req.children ?? ''),
-    infants: String(req.infants ?? ''),
-    budgetState: String(req.budgetState ?? ''),
-    budgetAmount: String(req.budgetAmount ?? ''),
-    budgetCurrency: String(req.budgetCurrency ?? 'USD'),
-    contactOutcome: lead.contactOutcome ?? '',
-    offerPrepDueAt: isoToTashkentLocal(lead.offerPrepDueAt),
-    lostReasonCode: lead.lostReasonCode ?? '',
-    nextContactAt: isoToTashkentLocal(lead.nextContactAt),
-    followUpNote: lead.followUpNote ?? '',
-    paymentDueAt: String(req.paymentDueAt ?? ''),
+    serviceType: sale?.serviceType ?? 'avia',
+    soldWhat: sale?.soldWhat ?? '',
+    tourOperatorId: sale?.tourOperator?.id ?? '',
+    amount: sale?.amount ?? '',
+    netAmount: sale?.netAmount ?? '',
+    currency: sale?.currency ?? 'USD',
+    departureAt: isoToTashkentLocal(sale?.departureAt),
+    departureNote: sale?.departureNote ?? '',
+    remindEnabled: sale?.remindEnabled ?? false,
+    customRemind: !!sale?.remindAt,
+    remindAt: isoToTashkentLocal(sale?.remindAt),
   });
-  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
-  const num = (v: string) => (v === '' ? null : Number(v));
-  const str = (v: string) => (v === '' ? null : v);
+  const [error, setError] = useState<ApiError | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => {
+    setSaved(false);
+    setF((s) => ({ ...s, [k]: v }));
+  };
+  const options = ops.data?.items ?? [];
+  const allOps = sale?.tourOperator && !options.some((o) => o.id === sale.tourOperator!.id) ? [...options, { ...sale.tourOperator, status: 'archived' }] : options;
+  const profit = !costHidden && f.amount && f.netAmount ? profitPreview(f.amount, f.netAmount) : null;
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/api/v1/leads/${leadId}/sale`, {
+        method: 'PUT',
+        body: {
+          serviceType: f.serviceType,
+          soldWhat: f.serviceType === 'other' ? f.soldWhat.trim() || null : null,
+          tourOperatorId: f.tourOperatorId || null,
+          amount: f.amount.trim() || null,
+          ...(costHidden ? {} : { netAmount: f.netAmount.trim() || null }),
+          currency: f.currency,
+          departureAt: f.departureAt ? tashkentLocalToIso(f.departureAt) : null,
+          departureNote: f.departureNote.trim() || null,
+          remindEnabled: f.remindEnabled,
+          remindAt: f.remindEnabled && f.customRemind && f.remindAt ? tashkentLocalToIso(f.remindAt) : null,
+          timezone: 'Asia/Tashkent',
+        },
+      });
+      setSaved(true);
+      onSaved();
+    } catch (e) {
+      setError(e as ApiError);
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
-    <Section title="Пожелания клиента и рабочие поля">
+    <Section title="Продажа" actions={sale ? <span className="muted">Заказ {sale.orderNo}</span> : null}>
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          onSave({
-            serviceType: str(f.serviceType),
-            contactOutcome: str(f.contactOutcome),
-            offerPrepDueAt: f.offerPrepDueAt ? tashkentLocalToIso(f.offerPrepDueAt) : null,
-            lostReasonCode: str(f.lostReasonCode),
-            nextContactAt: f.nextContactAt ? tashkentLocalToIso(f.nextContactAt) : null,
-            followUpNote: str(f.followUpNote),
-            requirements: {
-              serviceType: str(f.serviceType),
-              origin: str(f.origin),
-              destination: str(f.destination),
-              dateFrom: str(f.dateFrom),
-              dateTo: str(f.dateTo),
-              adults: num(f.adults),
-              children: num(f.children),
-              infants: num(f.infants),
-              budgetState: str(f.budgetState),
-              budgetAmount: str(f.budgetAmount),
-              budgetCurrency: str(f.budgetCurrency),
-              paymentDueAt: str(f.paymentDueAt),
-            },
-          });
+          void save();
         }}
       >
-        <fieldset disabled={readOnly} style={{ border: 0, padding: 0, margin: 0 }}>
+        <fieldset disabled={readOnly || busy} className="plain">
+          <div className="seg" role="radiogroup" aria-label="Тип услуги">
+            {(['avia', 'tour_package', 'other'] as const).map((t) => (
+              <label key={t} className={f.serviceType === t ? 'on' : ''}>
+                <input type="radio" name="serviceType" value={t} checked={f.serviceType === t} onChange={() => set('serviceType', t)} />
+                {SALE_SERVICE_LABELS[t]}
+              </label>
+            ))}
+          </div>
+          {f.serviceType === 'other' && (
+            <Field label="Что продано?" error={error?.fieldErrors.soldWhat}>
+              <input value={f.soldWhat} onChange={(e) => set('soldWhat', e.target.value)} maxLength={500} required />
+            </Field>
+          )}
+          <Field label="Туроператор">
+            <select value={f.tourOperatorId} onChange={(e) => set('tourOperatorId', e.target.value)}>
+              <option value="">Не выбран</option>
+              {allOps.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.name}
+                  {o.status === 'archived' ? ' (архив)' : ''}
+                </option>
+              ))}
+            </select>
+          </Field>
           <div className="row">
-            <Field label="Тип услуги">
-              <select value={f.serviceType} onChange={set('serviceType')}>
-                <option value="">—</option>
-                <option value="avia">Авиабилеты</option>
-                <option value="tour_package">Турпакет</option>
-                <option value="hotel">Отель</option>
-                <option value="transfer">Трансфер</option>
-                <option value="visa">Виза</option>
-                <option value="other">Другое</option>
+            <Field label="Цена продажи" error={error?.fieldErrors.amount}>
+              <input value={f.amount} onChange={(e) => set('amount', e.target.value)} inputMode="decimal" pattern="\d+(\.\d{1,2})?" placeholder="Не указана" />
+            </Field>
+            {!costHidden && (
+              <Field label="Себестоимость" error={error?.fieldErrors.netAmount}>
+                <input value={f.netAmount} onChange={(e) => set('netAmount', e.target.value)} inputMode="decimal" pattern="\d+(\.\d{1,2})?" placeholder="Не указана" />
+              </Field>
+            )}
+            <Field label="Валюта" error={error?.fieldErrors.currency}>
+              <select value={f.currency} onChange={(e) => set('currency', e.target.value)}>
+                {CURRENCIES.map((cur) => (
+                  <option key={cur}>{cur}</option>
+                ))}
               </select>
             </Field>
-            <Field label="Откуда">
-              <input value={f.origin} onChange={set('origin')} />
-            </Field>
-            <Field label="Куда">
-              <input value={f.destination} onChange={set('destination')} />
-            </Field>
+            {!costHidden && (
+              <Field label="Прибыль (цена − себестоимость)">
+                <input value={profit !== null ? fmtMoney(profit, f.currency) : 'Неизвестна'} readOnly aria-readonly="true" className={profit?.startsWith('-') ? 'neg' : ''} />
+              </Field>
+            )}
           </div>
+          {costHidden && <p className="hint">Себестоимость и прибыль видит администратор (или сотрудник с отдельным разрешением).</p>}
           <div className="row">
-            <Field label="Вылет (с)">
-              <IsoDateField value={f.dateFrom} onValue={(v) => set('dateFrom')({ target: { value: v } } as never)} />
-            </Field>
-            <Field label="Возвращение (по)">
-              <IsoDateField value={f.dateTo} onValue={(v) => set('dateTo')({ target: { value: v } } as never)} />
-            </Field>
-            <Field label="Взрослые">
-              <input type="number" min={0} value={f.adults} onChange={set('adults')} />
-            </Field>
-            <Field label="Дети">
-              <input type="number" min={0} value={f.children} onChange={set('children')} />
-            </Field>
-            <Field label="Младенцы">
-              <input type="number" min={0} value={f.infants} onChange={set('infants')} />
+            <Field label="Дата и время вылета" hint="Время Ташкента (UTC+5)" error={error?.fieldErrors.departureAt}>
+              <LocalDateTimeField value={f.departureAt} onValue={(v) => set('departureAt', v)} />
             </Field>
           </div>
-          <div className="row">
-            <Field label="Бюджет: статус">
-              <select value={f.budgetState} onChange={set('budgetState')}>
-                <option value="">—</option>
-                <option value="known">Известен</option>
-                <option value="undetermined">Не определён</option>
-              </select>
-            </Field>
-            <Field label="Бюджет">
-              <input value={f.budgetAmount} onChange={set('budgetAmount')} inputMode="decimal" />
-            </Field>
-            <Field label="Валюта">
-              <select value={f.budgetCurrency} onChange={set('budgetCurrency')}>
-                <option>USD</option>
-                <option>UZS</option>
-                <option>EUR</option>
-              </select>
-            </Field>
-          </div>
-          <div className="row">
-            <Field label="Итог контакта">
-              <input value={f.contactOutcome} onChange={set('contactOutcome')} />
-            </Field>
-            <Field label="Срок подготовки предложения">
-              <LocalDateTimeField value={f.offerPrepDueAt} onValue={(v) => set('offerPrepDueAt')({ target: { value: v } } as never)} />
-            </Field>
-            <Field label="Срок оплаты">
-              <IsoDateField value={f.paymentDueAt} onValue={(v) => set('paymentDueAt')({ target: { value: v } } as never)} />
-            </Field>
-          </div>
-          <div className="row">
-            <Field label="Время повторного контакта">
-              <LocalDateTimeField value={f.nextContactAt} onValue={(v) => set('nextContactAt')({ target: { value: v } } as never)} />
-            </Field>
-            <Field label="Заметка к повторному контакту">
-              <input value={f.followUpNote} onChange={set('followUpNote')} />
-            </Field>
-            <Field label="Причина отмены">
-              <input value={f.lostReasonCode} onChange={set('lostReasonCode')} />
-            </Field>
-          </div>
+          <Field label="Примечание" hint="Номер рейса, маршрут, что продано — вручную">
+            <textarea value={f.departureNote} onChange={(e) => set('departureNote', e.target.value)} rows={2} maxLength={1000} placeholder="Например: HY-601 Ташкент → Стамбул" />
+          </Field>
+          <label className="check">
+            <input type="checkbox" checked={f.remindEnabled} onChange={(e) => set('remindEnabled', e.target.checked)} />
+            Напомнить о вылете
+          </label>
+          {f.remindEnabled && (
+            <div className="remind-box">
+              <label className="check">
+                <input type="checkbox" checked={!f.customRemind} onChange={(e) => set('customRemind', !e.target.checked)} />
+                За 3 дня до вылета
+              </label>
+              {f.customRemind && (
+                <Field label="Своё время напоминания" hint="Время Ташкента (UTC+5)" error={error?.fieldErrors.remindAt}>
+                  <LocalDateTimeField value={f.remindAt} onValue={(v) => set('remindAt', v)} required />
+                </Field>
+              )}
+              <p className="hint">Напоминание придёт ответственному сотруднику в CRM (уведомления) со ссылкой на этот лид. Часовой пояс: Asia/Tashkent.</p>
+            </div>
+          )}
+          {sale && (
+            <p className="muted">
+              Напоминание: <Badge tone={sale.reminder.state === 'due' ? 'bad' : sale.reminder.state === 'scheduled' ? 'info' : 'neutral'}>{REMINDER_LABELS[sale.reminder.state]}</Badge>
+              {sale.reminder.dueAt ? ` · ${fmtDateTime(sale.reminder.dueAt, sale.reminder.timezone)} (${sale.reminder.timezone})` : ''}
+            </p>
+          )}
+          <FormError error={error} />
           {!readOnly && (
-            <button className="btn" type="submit">
-              Сохранить
-            </button>
+            <div className="row">
+              <button className="btn" type="submit" disabled={busy}>
+                Сохранить продажу
+              </button>
+              {saved && <span className="ok-text">Сохранено</span>}
+            </div>
           )}
         </fieldset>
       </form>
@@ -407,55 +462,107 @@ function RequirementsForm({ lead, req, readOnly, onSave }: { lead: LeadDetail['l
   );
 }
 
-function OffersSection({ offers, readOnly, onCreate, onSent, onAccept }: { offers: LeadDetail['offers']; readOnly: boolean; onCreate: (b: Record<string, unknown>) => void; onSent: (id: string) => void; onAccept: (id: string) => void }) {
-  const [content, setContent] = useState('');
-  const [amount, setAmount] = useState('');
-  const [currency, setCurrency] = useState('USD');
+const OUT_STATE: Record<string, [string, 'neutral' | 'ok' | 'warn' | 'bad' | 'info']> = {
+  queued: ['Отправляется…', 'warn'],
+  sending: ['Отправляется…', 'warn'],
+  accepted: ['Отправлено (принято Instagram)', 'ok'],
+  delivered: ['Доставлено', 'ok'],
+  read: ['Прочитано', 'ok'],
+  failed: ['Не отправлено', 'bad'],
+  unknown: ['Результат неизвестен — проверьте в Instagram, повторно не отправляется', 'bad'],
+};
+
+/** «Переписка Instagram»: только сообщения этого клиента; ответ уходит через официальный API Instagram. */
+function DirectChat({ leadId, conversations, canReply, onSent }: { leadId: string; conversations: Conversation[]; canReply: boolean; onSent: () => void }) {
+  const [text, setText] = useState('');
+  const [error, setError] = useState<ApiError | null>(null);
+  const [busy, setBusy] = useState(false);
+  const keyRef = useRef<string | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const conv = conversations[0] ?? null;
+  const messages = conversations.flatMap((c) => c.messages).sort((a, b) => (a.providerAt ?? a.createdAt).localeCompare(b.providerAt ?? b.createdAt));
+  const pending = messages.some((m) => m.direction === 'outbound' && (m.state === 'queued' || m.state === 'sending'));
+  useEffect(() => {
+    listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
+  }, [messages.length]);
+  useEffect(() => {
+    if (!pending) return;
+    const t = setInterval(onSent, 3000);
+    return () => clearInterval(t);
+  }, [pending, onSent]);
+  const send = async () => {
+    if (!text.trim()) return;
+    setBusy(true);
+    setError(null);
+    keyRef.current ??= newKey(); // повтор после сбоя сети — тот же ключ, второй раз не отправится
+    try {
+      await api(`/api/v1/leads/${leadId}/messages`, { method: 'POST', body: { text: text.trim() }, idempotencyKey: keyRef.current });
+      keyRef.current = null;
+      setText('');
+      onSent();
+    } catch (e) {
+      setError(e as ApiError);
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
-    <Section title="Предложения (версии не изменяются)">
-      {offers.map((o) => (
-        <div key={o.id} className="card">
-          <b>v{o.version}</b> — {o.amount} {o.currency} {o.sentAt ? <Badge tone="info">Отправлено {fmtDateTime(o.sentAt)}</Badge> : <Badge>Черновик</Badge>} {o.acceptedAt && <Badge tone="ok">Принято клиентом</Badge>}
-          <p>{o.content}</p>
-          {!readOnly && !o.sentAt && (
-            <button className="btn small" type="button" onClick={() => onSent(o.id)}>
-              Отметить как отправленное
-            </button>
-          )}
-          {!readOnly && o.sentAt && !o.acceptedAt && (
-            <button className="btn small" type="button" onClick={() => onAccept(o.id)}>
-              Клиент подтвердил
-            </button>
-          )}
-        </div>
-      ))}
-      {!readOnly && (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            onCreate({ content, amount, currency });
-            setContent('');
-          }}
-        >
-          <Field label="Текст новой версии">
-            <textarea value={content} onChange={(e) => setContent(e.target.value)} required />
-          </Field>
-          <div className="row">
-            <Field label="Сумма">
-              <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" required pattern="\d+(\.\d{1,2})?" />
-            </Field>
-            <Field label="Валюта">
-              <select value={currency} onChange={(e) => setCurrency(e.target.value)}>
-                <option>USD</option>
-                <option>UZS</option>
-                <option>EUR</option>
-              </select>
-            </Field>
-            <button className="btn" type="submit">
-              Создать версию предложения
-            </button>
+    <Section title="Переписка Instagram" actions={conv?.peerUsername ? <InstagramLink username={conv.peerUsername} /> : null}>
+      {!conv ? (
+        <p className="muted">Клиент не писал в Instagram Direct. Переписка появится автоматически, когда он напишет @nonatravel.uz.</p>
+      ) : (
+        <>
+          <div className="chat" ref={listRef} aria-live="polite">
+            {messages.length === 0 && <p className="muted">Сообщений пока нет.</p>}
+            {messages.map((m) => {
+              const out = m.direction === 'outbound';
+              const st = out ? OUT_STATE[m.state] : null;
+              return (
+                <div key={m.id} className={`msg ${out ? 'out' : 'in'}`}>
+                  <div className="msg-meta">
+                    {out ? (m.isEcho ? 'NONA (из Instagram)' : 'NONA') : 'Клиент'} · {fmtDateTime(m.providerAt ?? m.createdAt)}
+                  </div>
+                  <div>{m.contentPurgedAt ? <i className="muted">Текст удалён по сроку хранения</i> : m.content ?? <i className="muted">[{m.type}]</i>}</div>
+                  {st && !m.isEcho && (
+                    <div className="msg-state">
+                      <Badge tone={st[1]}>{st[0]}</Badge>
+                      {m.state === 'failed' && m.error ? <span className="err-text"> {m.error}</span> : null}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
-        </form>
+          {canReply &&
+            (conv.reply.allowed ? (
+              <form
+                className="reply"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void send();
+                }}
+              >
+                <textarea
+                  value={text}
+                  onChange={(e) => {
+                    setText(e.target.value);
+                    keyRef.current = null;
+                  }}
+                  rows={2}
+                  maxLength={1000}
+                  placeholder="Ответ клиенту в Instagram…"
+                  aria-label="Текст ответа"
+                />
+                <button className="btn" type="submit" disabled={busy || !text.trim()}>
+                  Отправить
+                </button>
+              </form>
+            ) : (
+              <div className="state stale">Ответить сейчас нельзя: {conv.reply.message}</div>
+            ))}
+          {conv.reply.mode && conv.reply.mode !== 'live' && <p className="hint">Это демонстрационное подключение: сообщения не уходят в настоящий Instagram.</p>}
+          <FormError error={error} />
+        </>
       )}
     </Section>
   );

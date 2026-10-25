@@ -21,6 +21,8 @@ export type Capability =
   | 'integrations.replay'
   | 'reference.view_full'
   | 'suppliers.manage'
+  /** Работа с клиентом: статус, продажа, напоминание о вылете, ответ в Instagram. */
+  | 'leads.work'
   /** Tannarx (net price), foyda va yetkazib beruvchi qaytarimlarini ko‘rish/kiritish. Administratorda standart; menejerga administrator shaxsiy yoqadi. */
   | 'finance.cost.view';
 
@@ -40,15 +42,32 @@ const MATRIX: Record<Role, ReadonlySet<Capability>> = {
     'reference.view_full',
     'suppliers.manage',
     'finance.cost.view',
+    'leads.work',
   ]),
-  MANAGER: new Set<Capability>(['audit.read_own']),
-  /** Faqat o‘qish: o‘ziga biriktirilgan ma’lumotlar. Server har qanday yozuvchi so‘rovni rad etadi (`isReadOnlyRole`). */
+  MANAGER: new Set<Capability>(['audit.read_own', 'leads.work']),
+  /**
+   * Пользователь: создаёт лиды на себя и ведёт основные данные и заметки своих лидов. Остальные изменения
+   * сервер отклоняет по списку разрешённых запросов (`USER_WRITE_ALLOWLIST`).
+   */
   USER: new Set<Capability>([]),
 };
 
-/** Faqat o‘qish roli: GET/HEAD dan boshqa so‘rovlar server tomonida rad etiladi. */
+/** Роль с ограниченной записью: разрешены только запросы из `USER_WRITE_ALLOWLIST`. */
 export function isReadOnlyRole(role: Role): boolean {
   return role === 'USER';
+}
+
+/** Изменяющие запросы, доступные Пользователю (метод + путь без /api/v1). Объектный доступ проверяют сервисы. */
+export const USER_WRITE_ALLOWLIST: ReadonlyArray<{ method: string; path: RegExp }> = [
+  { method: 'POST', path: /^\/auth\/logout$/ },
+  { method: 'POST', path: /^\/leads$/ },
+  { method: 'PATCH', path: /^\/leads\/[0-9a-f-]{36}\/contact$/ },
+  { method: 'PATCH', path: /^\/leads\/[0-9a-f-]{36}\/basics$/ },
+  { method: 'POST', path: /^\/notifications\/[0-9a-f-]{36}\/read$/ },
+];
+
+export function userWriteAllowed(method: string, path: string): boolean {
+  return USER_WRITE_ALLOWLIST.some((r) => r.method === method.toUpperCase() && r.path.test(path));
 }
 
 export function can(role: Role, cap: Capability): boolean {

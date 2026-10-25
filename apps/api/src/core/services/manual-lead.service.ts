@@ -12,6 +12,7 @@ export interface ManualLeadInput {
   lastName?: string | null;
   phone?: string | null;
   telegram?: string | null;
+  instagram?: string | null;
   /** Lid sarlavhasi (ixtiyoriy). */
   name?: string | null;
   ownerId?: string | null;
@@ -20,6 +21,7 @@ export interface ManualLeadInput {
   existingContactId?: string | null;
   /** Telefon boshqa kontaktda bo'lsa ham yangi kontakt yaratish (identifikator «umumiy» deb belgilanadi va dublikat tekshiruviga tushadi). */
   forceNewContact?: boolean;
+  leadType?: 'NEW' | 'REFERRAL' | 'REPEAT';
 }
 
 export interface ContactEditInput {
@@ -27,6 +29,7 @@ export interface ContactEditInput {
   lastName?: string | null;
   phone?: string | null;
   telegram?: string | null;
+  instagram?: string | null;
   /** Telefon boshqa kontaktda bo'lsa ham saqlash (umumiy deb belgilanadi, dublikat tekshiruviga tushadi; birlashtirilmaydi). */
   allowDuplicatePhone?: boolean;
 }
@@ -43,6 +46,15 @@ export function normalizeTelegram(raw: string | null | undefined): string | null
   const v = t.replace(/^https?:\/\/(?:www\.)?(?:t|telegram)\.me\//i, '').replace(/^@+/, '').replace(/[/?#].*$/, '');
   return /^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(v) ? v : 'invalid';
 }
+
+/** Instagram username: «@name», «name» или ссылка instagram.com/name; 1–30 символов (буквы, цифры, «.», «_»). */
+export function normalizeInstagram(raw: string | null | undefined): string | null | 'invalid' {
+  const t = (raw ?? '').trim();
+  if (!t) return null;
+  const v = t.replace(/^https?:\/\/(?:www\.)?instagram\.com\//i, '').replace(/^@+/, '').replace(/[/?#].*$/, '').toLowerCase();
+  return /^[a-z0-9._]{1,30}$/.test(v) ? v : 'invalid';
+}
+const IG_INVALID = 'Неверный Instagram username (до 30 символов: буквы, цифры, «.», «_»)';
 
 const fullNameOf = (first: string | null, last: string | null) => [first, last].filter(Boolean).join(' ') || null;
 
@@ -93,15 +105,17 @@ export class ManualLeadService {
     const last = clean(input.lastName);
     const tg = normalizeTelegram(input.telegram);
     if (tg === 'invalid') throw unprocessable('TELEGRAM_INVALID', 'Неверный Telegram username (5–32 символа: буквы, цифры, подчёркивание)', { telegram: 'invalid' });
+    const ig = normalizeInstagram(input.instagram);
+    if (ig === 'invalid') throw unprocessable('INSTAGRAM_INVALID', IG_INVALID, { instagram: 'invalid' });
     if (!input.existingContactId && !first && !last) throw unprocessable('NAME_REQUIRED', 'Укажите хотя бы имя или фамилию', { firstName: 'required', lastName: 'required' });
     const phone = input.existingContactId ? null : await this.parsePhone(actor.companyId, input.phone);
     const note = clean(input.note);
     const leadTitle = clean(input.name);
 
-    // Mas'ul: menejer — faqat o'zi; rahbar/admin — tanlagan xodim yoki mavjud tayinlash qoidalari.
+    // Ответственный: менеджер и пользователь — всегда сам автор (по сессии); администратор — выбранный сотрудник или правила распределения.
     let explicitOwner: string | null = null;
-    if (actor.role === 'MANAGER') {
-      if (input.ownerId && input.ownerId !== actor.id) throw forbidden('Менеджер может назначить лид только себе');
+    if (!can(actor.role, 'leads.reassign')) {
+      if (input.ownerId && input.ownerId !== actor.id) throw forbidden('Лид можно назначить только себе');
       explicitOwner = actor.id;
     } else if (input.ownerId) {
       const u = await this.d.prisma.user.findFirst({ where: { id: input.ownerId, companyId: actor.companyId, status: 'active' }, select: { id: true } });
@@ -125,7 +139,7 @@ export class ManualLeadService {
         contactId = c.id;
       } else {
         const c = await tx.contact.create({
-          data: { companyId: actor.companyId, fullName: fullNameOf(first, last), firstName: first, lastName: last, primaryPhone: phone?.normalized ?? null, telegramUsername: tg, syncState: 'pending_create' },
+          data: { companyId: actor.companyId, fullName: fullNameOf(first, last), firstName: first, lastName: last, primaryPhone: phone?.normalized ?? null, telegramUsername: tg, instagramUsername: ig, syncState: 'pending_create' },
         });
         contactId = c.id;
         createdContact = true;
@@ -144,6 +158,7 @@ export class ManualLeadService {
       const title = leadTitle ?? (existingContact ? existingContact.fullName ?? (existingContact.instagramUsername ? `@${existingContact.instagramUsername}` : 'Новый лид') : fullNameOf(first, last) ?? 'Новый лид');
       // createLead(deferAssignment) — mas'ul pastda: tayinlash qoidalari tranzaksiyaning OXIRGI qadami bo'lishi kerak.
       const lead = await this.leads.createLead(tx, { companyId: actor.companyId, contactId, name: title, channel: 'manual', placement: 'manual', inquiryId: null, serviceType: null, at: now, actor, deferAssignment: true, note });
+      if (input.leadType) await tx.lead.update({ where: { id: lead.id }, data: { leadType: input.leadType } });
       let result;
       if (explicitOwner) {
         result = await tx.lead.update({ where: { id: lead.id }, data: { ownerId: explicitOwner, assignmentReason: 'manual_selection' } });
@@ -186,6 +201,17 @@ export class ManualLeadService {
         data.telegramUsername = tg;
         before.telegram = c.telegramUsername;
         after.telegram = tg;
+      }
+      if (input.instagram !== undefined) {
+        const ig = normalizeInstagram(input.instagram);
+        if (ig === 'invalid') throw unprocessable('INSTAGRAM_INVALID', IG_INVALID, { instagram: 'invalid' });
+        if (ig !== c.instagramUsername) {
+          // Клиент из Instagram Direct: username приходит из Instagram и вручную не меняется.
+          if (await tx.conversation.count({ where: { companyId: actor.companyId, contactId: c.id } })) throw unprocessable('INSTAGRAM_FROM_DIRECT', 'Instagram username этого клиента получен из Instagram и не редактируется', { instagram: 'readonly' });
+          data.instagramUsername = ig;
+          before.instagram = c.instagramUsername;
+          after.instagram = ig;
+        }
       }
       if (input.phone !== undefined) {
         const phone = await this.parsePhone(actor.companyId, input.phone);

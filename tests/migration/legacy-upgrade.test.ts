@@ -215,6 +215,9 @@ describe('eski sxemadan yangisiga migratsiya (vaqtinchalik baza)', () => {
   });
 
   it('9. yangi dastur eski buyurtmani o‘qiydi: sotuv summasi saqlangan, foyda «aniqlanmagan» (0 emas), tannarx yo‘q', async () => {
+    // Yangi dastur har doim barcha migratsiyalar qo'llangandan keyin ishga tushadi (backend-start: migrate deploy → start).
+    deploy(all);
+    expect((await q<{ n: bigint }>(`SELECT count(*)::bigint AS n FROM orders`))[0]!.n).toBe(3n);
     const config = loadConfig({
       ...process.env,
       APP_MODE: 'demo',

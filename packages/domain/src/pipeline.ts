@@ -12,6 +12,7 @@ export const STAGES = [
   'WON',
   'LOST',
   'FOLLOW_UP',
+  'NO_ANSWER',
 ] as const;
 export type Stage = (typeof STAGES)[number];
 
@@ -25,7 +26,47 @@ export const STAGE_LABELS_RU: Record<Stage, string> = {
   WON: 'Продажа завершена',
   LOST: 'Отменён',
   FOLLOW_UP: 'Требуется повторный контакт',
+  NO_ANSWER: 'Нет ответа',
 };
+
+/**
+ * Упрощённый статус лида (интерфейс). Хранится в том же поле `stage`, поэтому история и продажи не теряются:
+ * прежние промежуточные этапы показываются как «В работе».
+ */
+export const LEAD_STATUSES = ['NEW', 'IN_PROGRESS', 'SOLD', 'CANCELLED', 'NO_ANSWER'] as const;
+export type LeadStatus = (typeof LEAD_STATUSES)[number];
+export const LEAD_STATUS_LABELS_RU: Record<LeadStatus, string> = { NEW: 'Новый', IN_PROGRESS: 'В работе', SOLD: 'Продано', CANCELLED: 'Отменён', NO_ANSWER: 'Нет ответа' };
+export function statusOfStage(stage: Stage): LeadStatus {
+  if (stage === 'NEW') return 'NEW';
+  if (stage === 'WON') return 'SOLD';
+  if (stage === 'LOST') return 'CANCELLED';
+  if (stage === 'NO_ANSWER') return 'NO_ANSWER';
+  return 'IN_PROGRESS';
+}
+/** Этап, в который записывается выбранный статус. */
+export function stageOfStatus(status: LeadStatus): Stage {
+  return ({ NEW: 'NEW', IN_PROGRESS: 'CONTACTED', SOLD: 'WON', CANCELLED: 'LOST', NO_ANSWER: 'NO_ANSWER' } as const)[status];
+}
+/** Все этапы, которые показываются как данный статус (для фильтров). */
+export function stagesOfStatus(status: LeadStatus): Stage[] {
+  return STAGES.filter((s) => statusOfStage(s) === status);
+}
+
+export const LEAD_TYPES = ['NEW', 'REFERRAL', 'REPEAT'] as const;
+export type LeadType = (typeof LEAD_TYPES)[number];
+export const LEAD_TYPE_LABELS_RU: Record<LeadType, string> = { NEW: 'Новый', REFERRAL: 'По рекомендации', REPEAT: 'Повторный' };
+
+/** «Источник» в интерфейсе: три значения поверх технического канала. */
+export type LeadSourceGroup = 'DIRECT' | 'ADS' | 'MANUAL';
+export const LEAD_SOURCE_LABELS_RU: Record<LeadSourceGroup, string> = { DIRECT: 'Instagram Direct', ADS: 'Реклама', MANUAL: 'Вручную' };
+export function sourceGroupOf(channel: string): LeadSourceGroup {
+  if (channel === 'instagram_direct') return 'DIRECT';
+  if (channel === 'instagram_lead_ads' || channel === 'meta_lead_ads') return 'ADS';
+  return 'MANUAL';
+}
+export function channelsOfSourceGroup(g: LeadSourceGroup): string[] {
+  return g === 'DIRECT' ? ['instagram_direct'] : g === 'ADS' ? ['instagram_lead_ads', 'meta_lead_ads'] : ['manual', 'amocrm', 'other'];
+}
 
 export const CLOSED_STAGES: ReadonlySet<Stage> = new Set(['WON', 'LOST']);
 export const isClosed = (s: Stage) => CLOSED_STAGES.has(s);
