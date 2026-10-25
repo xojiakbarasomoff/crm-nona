@@ -52,6 +52,7 @@ export class WorkerRuntime {
     this.every('heartbeat', 15_000, () => this.heartbeat());
     this.every('reconcile', config.reconcileIntervalMs, () => this.reconcileAmo());
     this.every('housekeeping', 60_000, () => this.housekeeping());
+    this.every('instagram-token', 6 * 3600_000, () => this.refreshInstagramTokens());
     this.every('daily', 24 * 3600_000, () => this.daily());
     this.core.deps.logger.info({ worker: this.id, mode: config.mode }, 'worker started');
   }
@@ -93,6 +94,13 @@ export class WorkerRuntime {
       await this.core.amoSync.reconcile(conn);
       await this.core.amoSync.dailyAuditIfDue(conn);
     }
+  }
+
+  /** Instagram long-lived tokens (~60 days): refresh those expiring within 14 days. */
+  async refreshInstagramTokens() {
+    const r = await this.core.instagram.refreshDue();
+    if (r.refreshed || r.failed) this.core.deps.logger.info(r, 'instagram token refresh');
+    await this.beat('instagram-token', r);
   }
 
   /** SLA, attachment scanning (frequent) and retention + tombstone re-application (daily). */

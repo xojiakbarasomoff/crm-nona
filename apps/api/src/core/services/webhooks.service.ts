@@ -19,7 +19,8 @@ export class WebhooksService {
   }
 
   async metaReceive(rawBody: Buffer, signature: string | undefined) {
-    if (!verifyMetaSignature(rawBody, signature, this.d.config.meta.appSecret)) {
+    const secrets = [this.d.config.meta.appSecret, this.d.config.meta.instagram.appSecret].filter(Boolean);
+    if (!secrets.some((s) => verifyMetaSignature(rawBody, signature, s))) {
       await this.d.redis.incr('metrics:signature_failures').catch(() => undefined);
       throw new AppError(401, 'INVALID_SIGNATURE', 'Invalid signature');
     }

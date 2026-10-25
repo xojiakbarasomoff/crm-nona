@@ -561,7 +561,10 @@ export class ProcessingService {
     if (conn.disconnectedAt || conn.health !== 'ok') throw Object.assign(new Error('Direct connection paused'), { errorClass: 'forbidden' as ErrorClass });
     await this.d.prisma.message.update({ where: { id: msg.id }, data: { state: 'sending' } });
     try {
-      const r = await this.d.adapters.metaDirect.sendText({ businessAccountId: conv.businessAccountId, recipientScopedId: conv.scopedPeerId, text: msg.content ?? '', tag, accessToken: connectionToken(conn, this.d.encryptionKey) });
+      // Haqiqiy (live) ulanish — haqiqiy Instagram mijozi; demo ulanish — demo adapter. Aralashtirilmaydi.
+      const direct = conn.mode === 'live' ? this.d.adapters.metaDirectLive : this.d.adapters.metaDirect;
+      if (!direct) throw Object.assign(new Error('META_GRAPH_VERSION is not configured: live Instagram client unavailable'), { errorClass: 'forbidden' as ErrorClass });
+      const r = await direct.sendText({ businessAccountId: conv.businessAccountId, recipientScopedId: conv.scopedPeerId, text: msg.content ?? '', tag, accessToken: connectionToken(conn, this.d.encryptionKey) });
       const now = this.d.clock.now();
       await this.d.prisma.$transaction(async (tx) => {
         await tx.message.update({ where: { id: msg.id }, data: { state: 'accepted', providerMessageId: r.messageId, error: null } });

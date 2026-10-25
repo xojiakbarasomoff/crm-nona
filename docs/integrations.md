@@ -10,7 +10,7 @@ Hujjat holati: 2026-10-24. Provider hujjatlari TZ §27 [S01]–[S11] ro‘yxatid
 | amoCRM OAuth | `amocrm/oauth.ts`, `apps/api/src/core/services/oauth.service.ts` | state (bir martalik, 10 daq, sessiyaga bog‘langan), domen allowlist | — | `/oauth2/access_token` | ⛔ G02 |
 | amoCRM Chats (amojo) | `amocrm/chats.ts` | Kanal secret: HMAC-SHA1 so‘rov imzosi (Meta’dan farqli) | `AMO_CHAT_CHANNEL_ID`, `AMO_CHAT_SECRET` | `/v2/origin/custom/...` | ⛔ G08 |
 | Meta Lead Ads | `meta/clients.ts` (`GraphMetaLeadsClient`) | Page access token (connection credentials) | `META_GRAPH_VERSION` | konfiguratsiyada, hozir bo‘sh | ⛔ G04 |
-| Meta Direct | `meta/clients.ts` (`GraphMetaDirectClient`) | Instagram Login **yoki** Facebook Login (`META_DIRECT_LOGIN`) | `META_GRAPH_VERSION` | konfiguratsiyada | ⛔ G05/G06 |
+| Meta Direct | `meta/clients.ts` (`GraphMetaDirectClient`), `meta/instagram-login.ts`, `services/instagram.service.ts` | **Instagram API with Instagram Login** (OAuth + uzun token yangilash); Facebook Login ishlatilmaydi | `INSTAGRAM_APP_ID/SECRET`, `META_VERIFY_TOKEN`, `META_GRAPH_VERSION` | konfiguratsiyada | ⛔ G05/G06 (mock bilan sinalgan; qarang `docs/instagram-direct-setup.md`) |
 | Meta webhook | `meta/signature.ts`, `meta/webhook-parse.ts` | `X-Hub-Signature-256` raw body; GET verify token alohida | `META_APP_SECRET`, `META_VERIFY_TOKEN` | — | ⛔ |
 | Flight provider | `flight.ts` | — | — | ManualProvider | ✅ (qo‘lda) |
 

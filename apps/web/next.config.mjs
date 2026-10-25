@@ -11,7 +11,12 @@ export default {
   eslint: { ignoreDuringBuilds: true },
   transpilePackages: ['@crm/contracts'],
   async rewrites() {
-    return [{ source: '/api/:path*', destination: `${api}/api/:path*` }];
+    return [
+      { source: '/api/:path*', destination: `${api}/api/:path*` },
+      // Meta webhook'lari (GET verify, POST hodisa, deauthorize, data-deletion): backend ichki, web domeni orqali ochiladi.
+      { source: '/webhooks/meta', destination: `${api}/webhooks/meta` },
+      { source: '/webhooks/meta/:path*', destination: `${api}/webhooks/meta/:path*` },
+    ];
   },
   async headers() {
     return [

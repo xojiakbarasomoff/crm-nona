@@ -5,6 +5,7 @@ export * from './flight';
 export * from './meta/signature';
 export * from './meta/webhook-parse';
 export * from './meta/clients';
+export * from './meta/instagram-login';
 export * from './amocrm/types';
 export * from './amocrm/oauth';
 export * from './amocrm/rest-client';
