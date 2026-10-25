@@ -223,4 +223,17 @@ describe('Instagram Login: kiruvchi Direct → kontakt/lid → mas’ul → javo
     expect(await p().conversation.count({ where: { connectionId: conn.id } })).toBeGreaterThan(0); // tarix saqlangan
     expect((await subscribe({ 'hub.mode': 'subscribe', 'hub.verify_token': 'nope', 'hub.challenge': 'abc' })).status).toBe(403);
   });
+
+  it('data-deletion callback: imzosiz 401; imzolangani administratorga bildirishnoma qoldiradi (avtomatik o‘chirish yo‘q)', async () => {
+    const { createHmac } = await import('node:crypto');
+    const payload = Buffer.from(JSON.stringify({ user_id: '17841400000000999', algorithm: 'HMAC-SHA256' })).toString('base64url');
+    const sig = createHmac('sha256', APP_SECRET).update(payload).digest('base64url');
+    expect((await request(app.getHttpServer()).post('/webhooks/meta/data-deletion').type('form').send({ signed_request: `bad.${payload}` })).status).toBe(401);
+    const ok = await request(app.getHttpServer()).post('/webhooks/meta/data-deletion').type('form').send({ signed_request: `${sig}.${payload}` });
+    expect(ok.status).toBe(200);
+    expect(ok.body.confirmation_code).toBeTruthy();
+    const n = await p().notification.findMany({ where: { dedupeKey: `ig_data_deletion:${ok.body.confirmation_code}` } });
+    expect(n.length).toBeGreaterThan(0);
+    expect(n[0]).toMatchObject({ kind: 'ig_data_deletion_request' });
+  });
 });

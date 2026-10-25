@@ -141,7 +141,9 @@ export class PlatformController {
     const payload = parseSignedRequest(sr, [this.core.deps.config.meta.appSecret]);
     if (!payload) throw new AppError(401, 'INVALID_SIGNATURE', 'Invalid signed_request');
     const code = randomUUID();
-    await this.core.deps.redis.set(`ig_data_deletion:${code}`, JSON.stringify({ userId: String(payload.user_id ?? ''), at: new Date().toISOString() }), 'EX', 90 * 86400);
+    const userId = String(payload.user_id ?? '');
+    await this.core.deps.redis.set(`ig_data_deletion:${code}`, JSON.stringify({ userId, at: new Date().toISOString() }), 'EX', 90 * 86400);
+    await this.core.instagram.handleDataDeletionRequest(userId, code);
     res.status(200).json({ url: `${this.core.deps.config.appPublicUrl}/data-deletion?code=${code}`, confirmation_code: code });
   }
 

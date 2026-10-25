@@ -13,6 +13,7 @@ import {
   type InstagramLoginConfig,
 } from '@crm/integrations';
 import { audit } from '../audit';
+import { notify } from '../events';
 import type { CoreDeps, UserActor } from '../context';
 import { unprocessable } from '../errors';
 import { requireCap } from '../scope';
@@ -193,5 +194,34 @@ export class InstagramService {
       });
     }
     return conns.length;
+  }
+
+  /**
+   * Meta "Data deletion request" callback. Avtomatik o'chirish YO'Q: ulanish uziladi (token o'chiriladi) va barcha faol administratorlarga
+   * ilova ichidagi bildirishnoma ketadi — mijoz yozishmalarini «Mijoz kartasi → Shaxsiy ma'lumotlarni o'chirish» orqali administrator bajaradi.
+   */
+  async handleDataDeletionRequest(igUserId: string, code: string) {
+    const conns = igUserId ? await this.d.prisma.integrationConnection.findMany({ where: { provider: 'META_DIRECT', accountId: igUserId, disconnectedAt: null } }) : [];
+    const company = conns[0] ? { id: conns[0].companyId } : await this.d.prisma.company.findFirst({ orderBy: { createdAt: 'asc' }, select: { id: true } });
+    if (!company) return { disconnected: 0, notified: 0 };
+    const admins = await this.d.prisma.user.findMany({ where: { companyId: company.id, role: 'ADMIN', status: 'active' }, select: { id: true } });
+    await this.d.prisma.$transaction(async (tx) => {
+      for (const conn of conns) {
+        await tx.integrationConnection.update({ where: { id: conn.id }, data: { health: 'disconnected', healthReason: 'data_deletion_requested', disconnectedAt: this.d.clock.now(), credentialsEnc: null, version: { increment: 1 } } });
+      }
+      for (const a of admins) {
+        await notify(tx, {
+          companyId: company.id,
+          userId: a.id,
+          kind: 'ig_data_deletion_request',
+          dedupeKey: `ig_data_deletion:${code}`,
+          title: 'Meta: ma’lumotni o‘chirish so‘rovi',
+          body: `Tasdiqlash kodi: ${code}. Instagram bilan bog‘liq mijoz yozishmalarini «Mijoz kartasi → Shaxsiy ma’lumotlarni o‘chirish» orqali ko‘rib chiqing. Ulanish uzildi: ${conns.length}.`,
+          link: '/integrations',
+        });
+      }
+      await tx.auditLog.create({ data: { companyId: company.id, actorType: 'integration', entityType: 'integration', entityId: conns[0]?.id ?? company.id, action: 'meta_data_deletion_requested', correlationId: code, newValue: { provider: 'META_DIRECT', matchedConnections: conns.length } } });
+    });
+    return { disconnected: conns.length, notified: admins.length };
   }
 }
