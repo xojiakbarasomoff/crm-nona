@@ -120,7 +120,7 @@ export function Shell({ children }: { children: ReactNode }) {
           </div>
         </aside>
         <main className="content">
-          {me.appMode === 'demo' && (
+          {me.appMode === 'demo' && pathname !== '/dashboard' && (
             <div className="demo-banner" role="note">
               Instagram kiruvchi xabarlar — {me.liveStatus?.instagramDirectInboundVerified ? 'ulangan' : 'sinovdan o‘tmagan'}. amoCRM, CRM’dan javob va reklama formalari — ulanmagan.
               {canDo(me, 'integrations.manage') && (
