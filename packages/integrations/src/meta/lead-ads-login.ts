@@ -5,6 +5,8 @@ export interface LeadAdsLoginConfig {
   appSecret: string;
   graphVersion: string;
   redirectUri: string;
+  /** «Вход через Facebook для компаний»: вместо scope передаётся ID конфигурации (разрешения заданы в ней). */
+  configId?: string;
 }
 
 // Lead Ads uses Facebook Login and Page tokens, independently of Instagram Login for Direct.
@@ -20,7 +22,13 @@ type Json = Record<string, unknown>;
 
 export function buildLeadAdsAuthorizeUrl(c: LeadAdsLoginConfig, state: string): string {
   const u = new URL(`https://www.facebook.com/${c.graphVersion}/dialog/oauth`);
-  u.search = new URLSearchParams({ client_id: c.appId, redirect_uri: c.redirectUri, state, response_type: 'code', scope: LEAD_ADS_SCOPES.join(','), auth_type: 'rerequest' }).toString();
+  u.search = new URLSearchParams({
+    client_id: c.appId,
+    redirect_uri: c.redirectUri,
+    state,
+    response_type: 'code',
+    ...(c.configId ? { config_id: c.configId } : { scope: LEAD_ADS_SCOPES.join(','), auth_type: 'rerequest' }),
+  }).toString();
   return u.toString();
 }
 

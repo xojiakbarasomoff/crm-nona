@@ -25,6 +25,8 @@ const schema = z.object({
   META_VERIFY_TOKEN: z.string().default(''),
   META_GRAPH_VERSION: z.string().default(''),
   META_LEADS_REDIRECT_URI: z.string().default(''),
+  /** ID конфигурации «Вход через Facebook для компаний» (Meta App Dashboard → Конфигурации). Не секрет. */
+  META_LEADS_CONFIG_ID: z.string().default(''),
   META_DIRECT_LOGIN: z.enum(['instagram_login', 'facebook_login']).default('instagram_login'),
   /** Instagram API with Instagram Login: Instagram app id/secret (App Dashboard → Instagram → API setup with Instagram login). */
   INSTAGRAM_APP_ID: z.string().default(''),
@@ -77,6 +79,7 @@ export interface AppConfig {
     verifyToken: string;
     graphVersion: string;
     leadsRedirectUri: string;
+    leadsConfigId: string;
     directLogin: 'instagram_login' | 'facebook_login';
     instagram: { appId: string; appSecret: string; redirectUri: string };
     standardWindowHours: number;
@@ -121,6 +124,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       appSecret: e.META_APP_SECRET,
       verifyToken: e.META_VERIFY_TOKEN,
       graphVersion: e.META_GRAPH_VERSION,
+      leadsConfigId: e.META_LEADS_CONFIG_ID,
       leadsRedirectUri: e.META_LEADS_REDIRECT_URI || `${e.APP_PUBLIC_URL.replace(/\/$/, '')}/api/v1/integrations/lead-ads/oauth/callback`,
       directLogin: e.META_DIRECT_LOGIN,
       instagram: { appId: e.INSTAGRAM_APP_ID, appSecret: e.INSTAGRAM_APP_SECRET, redirectUri: e.INSTAGRAM_REDIRECT_URI || `${e.APP_PUBLIC_URL.replace(/\/$/, '')}/api/v1/integrations/instagram/oauth/callback` },

@@ -17,6 +17,13 @@ describe('Facebook Login for Lead Ads (contract, not live-account verification)'
     expect(u.toString()).not.toContain(cfg.appSecret);
   });
 
+  it('Facebook Login for Business: config_id replaces scope', () => {
+    const u = new URL(buildLeadAdsAuthorizeUrl({ ...cfg, configId: '1446647680762146' }, 's'));
+    expect(u.searchParams.get('config_id')).toBe('1446647680762146');
+    expect(u.searchParams.has('scope')).toBe(false);
+    expect(u.searchParams.get('response_type')).toBe('code');
+  });
+
   it('exchanges the code for a long-lived user token', async () => {
     const calls: URL[] = [];
     const client = new LeadAdsLoginClient(cfg, async input => {

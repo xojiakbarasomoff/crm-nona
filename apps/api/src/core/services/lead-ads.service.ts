@@ -16,7 +16,7 @@ export class LeadAdsService {
   private config() {
     const m = this.d.config.meta;
     if (!m.appId || !m.appSecret || !/^v\d+\.\d+$/.test(m.graphVersion) || !m.verifyToken) throw unprocessable('LEAD_ADS_NOT_CONFIGURED', 'Подключение рекламных форм не настроено. Администратору нужно указать параметры Meta и вебхука.');
-    return { appId: m.appId, appSecret: m.appSecret, graphVersion: m.graphVersion, redirectUri: m.leadsRedirectUri };
+    return { appId: m.appId, appSecret: m.appSecret, graphVersion: m.graphVersion, redirectUri: m.leadsRedirectUri, ...(m.leadsConfigId ? { configId: m.leadsConfigId } : {}) };
   }
 
   private client() { return new LeadAdsLoginClient(this.config(), this.fetchImpl); }
