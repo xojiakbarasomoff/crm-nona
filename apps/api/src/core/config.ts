@@ -38,6 +38,11 @@ const schema = z.object({
   META_VERIFY_TOKEN: z.string().default(''),
   META_GRAPH_VERSION: z.string().default(''),
   META_DIRECT_LOGIN: z.enum(['instagram_login', 'facebook_login']).default('instagram_login'),
+  /** Instagram API with Instagram Login: Instagram app id/secret (App Dashboard → Instagram → API setup with Instagram login). */
+  INSTAGRAM_APP_ID: z.string().default(''),
+  INSTAGRAM_APP_SECRET: z.string().default(''),
+  /** Default: <APP_PUBLIC_URL>/api/v1/integrations/instagram/oauth/callback */
+  INSTAGRAM_REDIRECT_URI: z.string().default(''),
   META_STANDARD_WINDOW_HOURS: z.coerce.number().default(24),
   META_HUMAN_AGENT_WINDOW_HOURS: optionalNumber,
   META_HUMAN_AGENT_GRANTED: z.string().default('false'),
@@ -88,6 +93,7 @@ export interface AppConfig {
     verifyToken: string;
     graphVersion: string;
     directLogin: 'instagram_login' | 'facebook_login';
+    instagram: { appId: string; appSecret: string; redirectUri: string };
     standardWindowHours: number;
     humanAgentWindowHours: number | null;
     humanAgentGranted: boolean;
@@ -135,6 +141,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       verifyToken: e.META_VERIFY_TOKEN,
       graphVersion: e.META_GRAPH_VERSION,
       directLogin: e.META_DIRECT_LOGIN,
+      instagram: { appId: e.INSTAGRAM_APP_ID, appSecret: e.INSTAGRAM_APP_SECRET, redirectUri: e.INSTAGRAM_REDIRECT_URI || `${e.APP_PUBLIC_URL.replace(/\/$/, '')}/api/v1/integrations/instagram/oauth/callback` },
       standardWindowHours: e.META_STANDARD_WINDOW_HOURS,
       humanAgentWindowHours: e.META_HUMAN_AGENT_WINDOW_HOURS,
       humanAgentGranted: e.META_HUMAN_AGENT_GRANTED === 'true',

@@ -40,6 +40,8 @@ export interface Adapters {
   readonly limiter: RedisRateLimiter;
   readonly metaLeads: MetaLeadsClient;
   readonly metaDirect: MetaDirectClient;
+  /** Real Instagram Direct client; used for connections whose mode is `live` (also while the rest of the app is in demo mode). */
+  readonly metaDirectLive: MetaDirectClient | null;
   /** null when Direct is handled by a native amoCRM connector (we must not process it twice). */
   readonly amoChats: AmoChatsClient | null;
   readonly flight: FlightProvider;
@@ -70,6 +72,7 @@ export function buildAdapters(config: AppConfig, redis: Redis, tokenProviderFor:
       limiter,
       metaLeads: new DemoMetaLeadsClient(store),
       metaDirect: new DemoMetaDirectClient(store),
+      metaDirectLive: config.meta.graphVersion ? new GraphMetaDirectClient(config.meta.graphVersion, config.meta.directLogin) : null,
       amoChats: config.directChannelMode === 'custom_channel' ? new DemoAmoChatsClient(store) : null,
       flight,
       storage,
@@ -89,6 +92,7 @@ export function buildAdapters(config: AppConfig, redis: Redis, tokenProviderFor:
     limiter,
     metaLeads,
     metaDirect,
+    metaDirectLive: metaDirect,
     amoChats,
     flight,
     storage,

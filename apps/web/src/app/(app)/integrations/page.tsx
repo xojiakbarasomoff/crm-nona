@@ -32,6 +32,7 @@ export default function IntegrationsPage() {
   const state = useApi<Health>('/api/v1/integrations/health', { pollMs: 10_000 });
   const [error, setError] = useState<ApiError | null>(null);
   const [domain, setDomain] = useState('');
+  const ig = useApi<{ configured: boolean; oauthRedirectUri: string; webhookCallbackPath: string; verifyTokenConfigured: boolean; signatureSecretConfigured: boolean; graphVersion: string | null; connections: Array<{ id: string; accountId: string; username: string | null; state: string; health: string; healthReason: string | null; verifiedInboundAt: string | null; verifiedOutboundAt: string | null; expiresAt: string | null }> }>('/api/v1/integrations/instagram/status');
   const act = async (fn: () => Promise<unknown>) => {
     setError(null);
     try {
@@ -118,6 +119,45 @@ export default function IntegrationsPage() {
                 </form>
               )}
             </Section>
+            {canDo(me, 'integrations.manage') && (
+              <Section title="Instagram Direct (Instagram API with Instagram Login)">
+                <p className="muted">
+                  Akkaunt egasi o‘z Instagram sessiyasida rasmiy ruxsat beradi; parol yoki token bu yerga kiritilmaydi. Instagram <b>professional</b> (Business/Creator) akkaunt kerak. Facebook Page talab qilinmaydi. Meta ilovasi Development rejimida yoki App Review’dan o‘tmaguncha faqat ilovaga qo‘shilgan test akkauntlar bilan ishlaydi — bu barcha mijozlar uchun tayyor integratsiya emas.
+                </p>
+                {ig.data && !ig.data.configured && <div className="state error">Sozlanmagan: INSTAGRAM_APP_ID, INSTAGRAM_APP_SECRET va META_GRAPH_VERSION kerak (docs/instagram-direct-setup.md).</div>}
+                {ig.data && (
+                  <ul className="hint">
+                    <li>OAuth redirect URI: <code>{ig.data.oauthRedirectUri}</code></li>
+                    <li>Webhook callback: <code>{typeof window === 'undefined' ? '' : window.location.origin}{ig.data.webhookCallbackPath}</code> · verify token: {ig.data.verifyTokenConfigured ? 'sozlangan' : 'YO‘Q'} · imzo siri: {ig.data.signatureSecretConfigured ? 'sozlangan' : 'YO‘Q'}</li>
+                  </ul>
+                )}
+                {ig.data?.connections.map((c) => (
+                  <div key={c.id} className="state">
+                    <b>@{c.username ?? c.accountId}</b>{' '}
+                    {c.state === 'ready' && <Badge tone="ok">Tayyor: kiruvchi va chiquvchi haqiqiy sinovdan o‘tgan</Badge>}
+                    {c.state === 'inbound_verified' && <Badge tone="warn">Kiruvchi tasdiqlangan; chiquvchi javob sinovi kutilmoqda (tayyor emas)</Badge>}
+                    {c.state === 'outbound_verified' && <Badge tone="warn">Chiquvchi tasdiqlangan; kiruvchi sinov kutilmoqda (tayyor emas)</Badge>}
+                    {c.state === 'not_ready' && <Badge tone="warn">Ulangan, lekin haqiqiy sinov o‘tmagan — faol deb hisoblanmaydi</Badge>}
+                    {c.state === 'problem' && <Badge tone="bad">Muammo: {c.healthReason}</Badge>}
+                    {c.state === 'disconnected' && <Badge>Uzilgan</Badge>}
+                    <div className="muted">Kiruvchi: {c.verifiedInboundAt ? fmtDateTime(c.verifiedInboundAt) : '—'} · Chiquvchi: {c.verifiedOutboundAt ? fmtDateTime(c.verifiedOutboundAt) : '—'} · Token muddati: {c.expiresAt ? fmtDateTime(c.expiresAt) : '—'}</div>
+                  </div>
+                ))}
+                <button
+                  className="btn"
+                  type="button"
+                  disabled={!ig.data?.configured}
+                  onClick={() =>
+                    void act(async () => {
+                      const r = await api<{ authorizeUrl: string }>('/api/v1/integrations/instagram/oauth/start', { method: 'POST' });
+                      window.location.href = r.authorizeUrl;
+                    })
+                  }
+                >
+                  Instagram akkauntni ulash / qayta ulash
+                </button>
+              </Section>
+            )}
             <Section title="Navbatlar va monitoring">
               <div className="grid">
                 <div className="kpi">

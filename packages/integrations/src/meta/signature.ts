@@ -18,6 +18,28 @@ export function signMetaBody(rawBody: Buffer | string, appSecret: string): strin
   return `sha256=${createHmac('sha256', appSecret).update(rawBody).digest('hex')}`;
 }
 
+/**
+ * `signed_request` of Meta's Deauthorize / Data Deletion callbacks: `<base64url(HMAC-SHA256)>.<base64url(JSON)>`,
+ * signed with the app secret. Returns the payload only when the signature matches one of the given secrets.
+ */
+export function parseSignedRequest(signedRequest: string, secrets: string[]): Record<string, unknown> | null {
+  const [sigPart, payloadPart] = signedRequest.split('.');
+  if (!sigPart || !payloadPart) return null;
+  const given = Buffer.from(sigPart, 'base64url');
+  for (const secret of secrets.filter(Boolean)) {
+    const expected = createHmac('sha256', secret).update(payloadPart).digest();
+    if (given.length === expected.length && timingSafeEqual(given, expected)) {
+      try {
+        const json = JSON.parse(Buffer.from(payloadPart, 'base64url').toString('utf8'));
+        return json && typeof json === 'object' ? (json as Record<string, unknown>) : null;
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
 export function verifyChallenge(
   query: Record<string, unknown>,
   verifyToken: string,

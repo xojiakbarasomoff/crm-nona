@@ -4,7 +4,8 @@ import type { Response } from 'express';
 import type { Redis } from 'ioredis';
 import { AmoOAuthCallbackQuery, AmoOAuthStartSchema, buildOpenApi, DemoAmoChatReplySchema, DemoDirectSchema, DemoLeadAdsSchema } from '@crm/contracts';
 import { can } from '@crm/domain';
-import { DemoAmoRestClient, DemoMetaLeadsClient, signMetaBody, type DemoFailure } from '@crm/integrations';
+import { DemoAmoRestClient, DemoMetaLeadsClient, parseSignedRequest, signMetaBody, type DemoFailure } from '@crm/integrations';
+import { AppError } from '../core/errors';
 import { createHmac } from 'node:crypto';
 import { eventsChannel, forbidden, notFound, requireCapOrThrow, type ChangeEvent, type Core, type UserActor } from './platform-helpers';
 import { Actor, CORE, parse, Public, requireDemo, send, UuidPipe as uuid, type AuthedRequest } from './common';
@@ -79,6 +80,63 @@ export class PlatformController {
   @Post('api/v1/integrations/amocrm/oauth/start')
   async oauthStart(@Actor() actor: UserActor, @Body() body: unknown, @Res() res: Response) {
     send(res, 200, await this.core.oauth.start(actor, parse(AmoOAuthStartSchema, body).domain));
+  }
+
+  // ---------------- Instagram API with Instagram Login (Direct) ----------------
+
+  @Get('api/v1/integrations/instagram/status')
+  async igStatus(@Actor() actor: UserActor, @Res() res: Response) {
+    requireCapOrThrow(actor, 'integrations.manage');
+    send(res, 200, await this.core.instagram.status(actor.companyId));
+  }
+
+  @Post('api/v1/integrations/instagram/oauth/start')
+  async igStart(@Actor() actor: UserActor, @Res() res: Response) {
+    send(res, 200, await this.core.instagram.start(actor));
+  }
+
+  /** The Meta redirect lands here (through the web domain, so the admin's session cookie is present). */
+  @Get('api/v1/integrations/instagram/oauth/callback')
+  async igCallback(@Actor() actor: UserActor, @Query() q: Record<string, unknown>, @Res() res: Response) {
+    const base = `${this.core.deps.config.appPublicUrl}/integrations`;
+    if (typeof q.error === 'string' || typeof q.code !== 'string' || typeof q.state !== 'string') {
+      res.redirect(302, `${base}?instagram=denied`);
+      return;
+    }
+    try {
+      await this.core.instagram.callback(actor, { code: q.code, state: q.state });
+      res.redirect(302, `${base}?connected=instagram`);
+    } catch (err) {
+      const code = (err as { code?: string }).code ?? 'ERROR';
+      res.redirect(302, `${base}?instagram=failed&reason=${encodeURIComponent(code)}`);
+    }
+  }
+
+  /** Meta "Deauthorize callback URL" (form-encoded `signed_request`). */
+  @Public()
+  @Post('webhooks/meta/deauthorize')
+  async igDeauthorize(@Req() req: AuthedRequest, @Res() res: Response) {
+    const sr = new URLSearchParams((req.rawBody ?? Buffer.alloc(0)).toString('utf8')).get('signed_request') ?? '';
+    const payload = parseSignedRequest(sr, [this.core.deps.config.meta.appSecret]);
+    if (!payload) throw new AppError(401, 'INVALID_SIGNATURE', 'Invalid signed_request');
+    const userId = String(payload.user_id ?? '');
+    const n = userId ? await this.core.instagram.handleDeauthorize(userId) : 0;
+    send(res, 200, { ok: true, paused: n });
+  }
+
+  /**
+   * Meta "Data deletion request URL". We acknowledge and return a confirmation code; the actual erasure of the
+   * person's data is done by an administrator through the existing erasure flow (documented, not automatic).
+   */
+  @Public()
+  @Post('webhooks/meta/data-deletion')
+  async igDataDeletion(@Req() req: AuthedRequest, @Res() res: Response) {
+    const sr = new URLSearchParams((req.rawBody ?? Buffer.alloc(0)).toString('utf8')).get('signed_request') ?? '';
+    const payload = parseSignedRequest(sr, [this.core.deps.config.meta.appSecret]);
+    if (!payload) throw new AppError(401, 'INVALID_SIGNATURE', 'Invalid signed_request');
+    const code = randomUUID();
+    await this.core.deps.redis.set(`ig_data_deletion:${code}`, JSON.stringify({ userId: String(payload.user_id ?? ''), at: new Date().toISOString() }), 'EX', 90 * 86400);
+    res.status(200).json({ url: `${this.core.deps.config.appPublicUrl}/data-deletion?code=${code}`, confirmation_code: code });
   }
 
   @Get('api/v1/integrations/amocrm/oauth/callback')

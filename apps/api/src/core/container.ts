@@ -16,6 +16,7 @@ import { DashboardService } from './services/dashboard.service';
 import { IntakeService } from './services/intake.service';
 import { LeadsService } from './services/leads.service';
 import { OAuthService } from './services/oauth.service';
+import { InstagramService } from './services/instagram.service';
 import { OrdersService } from './services/orders.service';
 import { ProcessingService } from './services/processing.service';
 import { RemindersService } from './services/reminders.service';
@@ -34,6 +35,7 @@ export interface Core {
   intake: IntakeService;
   processing: ProcessingService;
   oauth: OAuthService;
+  instagram: InstagramService;
   dashboard: DashboardService;
   webhooks: WebhooksService;
   admin: AdminService;
@@ -73,6 +75,7 @@ export function createCore(config: AppConfig, o: CoreOverrides = {}): Core {
     intake: new IntakeService(deps),
     processing: new ProcessingService(deps),
     oauth,
+    instagram: new InstagramService(deps, o.fetchImpl),
     dashboard: new DashboardService(deps),
     webhooks: new WebhooksService(deps),
     admin: new AdminService(deps),
