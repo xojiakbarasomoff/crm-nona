@@ -71,6 +71,10 @@ export class WebhooksService {
       // Direct hodisasi faqat ulangan akkauntning ID'siga (entry.id = OAuth /me user_id) mos kelsa saqlanadi; aks holda qayta ishlanmaydi.
       if (provider === 'META_DIRECT' && !conn) {
         await this.d.redis.incr('metrics:webhook_unknown_account').catch(() => undefined);
+        // Diagnostika: qaysi akkaunt ID tashlandi va qaysilari ulangan (ID'lar sir emas; xabar matni/yuboruvchi logga chiqmaydi).
+        const connected = await this.d.prisma.integrationConnection.findMany({ where: { provider: 'META_DIRECT', mode: 'live', disconnectedAt: null }, select: { accountId: true } }).catch(() => []);
+        const entryIds = Array.isArray((body as { entry?: unknown })?.entry) ? ((body as { entry: Array<{ id?: unknown }> }).entry.map((x) => String(x?.id ?? '')).slice(0, 5)) : [];
+        this.d.logger.warn({ kind: e.kind, droppedAccountKey: accountKey, entryIds, connectedAccountIds: connected.map((c) => c.accountId) }, 'meta direct webhook dropped: account id does not match a connected account');
         continue;
       }
       if (await storeInboxEvent(this.d.prisma, this.d.encryptionKey, { provider: 'meta', connectionKey: accountKey, companyId: conn?.companyId ?? null, externalEventId: e.key, eventType: e.kind, payload: e, correlationId })) stored++;
