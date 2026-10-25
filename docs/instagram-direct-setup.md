@@ -17,7 +17,7 @@ Meta’da Instagram Direct uchun ikki yo‘l bor: **Instagram API with Instagram
 | App Review | Hujjatlar bir-biriga to‘liq mos emas: «Instagram App Review tugamaguncha jonli ma’lumotga kira olmaydi» deyiladi, boshqa joyda Standard Access test rollari bilan ishlashi aytiladi. **Ochiq aytamiz:** NONA Travel o‘z akkauntini o‘z ilovasiga ulasa, odatda Development rejimi + ilova roli bilan sinash mumkin; ammo **jonli (Live) rejim va boshqa mijozlarning akkauntlari uchun App Review + Advanced Access (ko‘pincha Business Verification) kerak bo‘ladi.** Test ulanish **barcha mijozlar uchun tayyor integratsiya emas**. |
 | Xabar qoidalari | Foydalanuvchi birinchi yozgandan keyingina javob berish mumkin; standart oyna 24 soat (Click-to-Direct reklamadan — 7 kungacha). Human Agent tegi (7 kun) alohida ruxsat/review talab qiladi (`META_HUMAN_AGENT_GRANTED=false` qoldiriladi). Matn ≤ 1000 bayt. |
 | Tokenlar | Avtorizatsiya kodi 1 soat, bir martalik → qisqa token → **uzun muddatli token (~60 kun)**; ≥24 soatlik tokenni yangilash mumkin, 60 kun yangilanmasa o‘ladi. Kod buni worker’da avtomatik yangilaydi (`instagram-token` sikli, 6 soatda bir, 14 kundan kam qolganlarni). |
-| Jonli vs sinov | Meta panelida ilova **Development** rejimida ekan, faqat ilovada roli bor akkauntlar ishlaydi. |
+| Jonli vs sinov | Ilova **Development** rejimida bo‘lsa, faqat ilovada roli bor akkauntlar ishlaydi. **Joriy holat (Meta paneli, 2026-10-26, faqat o‘qildi):** ilova «NONA Travel CRM» (`1139555365103234`) — **«Опубликовано» (Live)**. Rollar: administrator Hojiakbar Asomov; Instagram testerlari `nonatravel.uz` va `_khojiakbarr`. Boshqa rol yo‘q. Ruxsatlarning kirish darajasi (Standard/Advanced) bu tekshiruvda ko‘rilmagan. |
 
 ## 3. Railway’dagi haqiqiy URL’lar (mavjud route’lardan)
 
@@ -85,9 +85,19 @@ Faqat jamoaning o‘z test akkaunti bilan; boshqa mijozlarga xabar yuborilmagan.
 | Chiquvchi | CRM’dan «salom» yuborildi: xabar `26f63b3e-3ccc-4a29-b15e-53ca4166f309`, yaratildi 22:24:09.736 UTC, holati **`accepted`**, xato yo‘q. Lidda `firstHumanActionAt` va suhbatda `lastHumanReplyAt` = 22:24:10.997 UTC (`meta.send` muvaffaqiyatli tarmog‘i yozadi). `verifiedOutboundAt = 2026-10-25T22:24:11.014Z`. Test akkaunt egasi xabar Instagram’da kelganini tasdiqladi. |
 | Meta xabar ID | Instagram yuborilgan xabarning echo hodisasini 22:24:11.429 UTC da yubordi: `ig_echo:aWdfZAG1faXRlbToxOklHTWVzc2FnZAUlEOjE3ODQxNDc0MjAxNDU2NjAzOjM0MDI4MjM2Njg0MTcxMDMwMTI0NDI2MDA5NTY5OTM2NjAwMzk0NzozMzA3NDQwNDMxNTkyNzEzMTM5NTI1MjQ5MzQ5NjYxNDkxMgZDZD` (`done`, 1 urinish). Echo yangi xabar qatori yaratmagan — `processEcho` bu faqat echo `mid` bizning xabarning `providerMessageId` siga teng bo‘lganda bo‘ladi. Demak saqlangan Meta ID = shu `mid`. **Cheklov:** `providerMessageId` maydoni API orqali chiqmaydi va prod bazaga tashqi ulanish yo‘q, shuning uchun bu maydon to‘g‘ridan-to‘g‘ri o‘qilmagan — xulosa echo mantiqidan. |
 | Takroriy yuborish yo‘q | Suhbatda bitta chiquvchi xabar; kompaniya bo‘yicha outbox: `done: 1`, `outbox_retries: 0`, `outbox_dead: 0`, `provider_429: 0`, `needsOperator`/`deadLetters` bo‘sh; shu vaqtdan keyin bitta echo hodisa. |
+| Rolsiz akkaunt — kiruvchi | `@d1lsh0d_05` (ilovada hech qanday roli yo‘q — rollar ro‘yxatida yo‘q) Live ilova orqali ikkita xabar yuborgan: 2026-10-25 12:24:40 va 12:27:26 UTC → lid `279dee21-67ef-44df-96d0-84a4a01fe1c8` (Instagram Direct). Shu suhbatdagi ikkita chiquvchi xabar — Instagram ilovasining o‘zida yozilgan xabarlarning echo’lari (15:22 UTC), **CRM’dan yuborilmagan**. |
 | Ulanish holati | `nonatravel.uz` (`17841474201456603`): `health: ok`, `state: ready` (kiruvchi va chiquvchi tasdiqlangan). Token muddati 2026-12-24. |
 
-**Bu nimani tasdiqlamaydi:** ilova hali Meta Development rejimida — ishlash faqat ilovada roli bor akkauntlar bilan sinalgan. Boshqa (oddiy) mijozlarga javob berish uchun App Review / Advanced Access kerak bo‘lishi mumkin (2-bo‘lim). Human Agent tegi (24 soatdan keyin javob) sinalmagan. Lead Ads (reklama formalari) bu sinovga kirmaydi va **tasdiqlanmagan** — `docs/lead-ads-setup.md`.
+**Holat bo‘yicha xulosa (alohida-alohida):**
+
+1. ✅ **Test akkaunt (`_khojiakbarr`, Instagram tester) — kiruvchi va chiquvchi tasdiqlangan:** kiruvchi lidga tushdi; CRM’dan javob `accepted`, Instagram’da qabul qilingan, takror yuborilmagan.
+2. ✅ **Rolsiz akkaunt — kiruvchi avval tasdiqlangan:** `@d1lsh0d_05` dan ikkita xabar Live ilova orqali CRM’ga kelgan (2026-10-25).
+3. ⛔ **Rolsiz akkauntga chiquvchi javob hali sinalmagan:** CRM’dan rolsiz akkauntga hech qanday javob yuborilmagan. Meta buni Standard Access bilan ruxsat beradimi yoki App Review / Advanced Access talab qiladimi — shu sinovgacha noma’lum.
+4. ⛔ **Lead Ads hali bloklangan** — bu sinovga kirmaydi; `docs/lead-ads-setup.md`.
+
+Human Agent tegi (24 soatdan keyin javob) ham sinalmagan.
+
+**Webhook imzo xatolari:** `signature_failures` hisoblagichi 2026-10-26 dagi ikki o‘qishda (oraliq ~10 daqiqa) o‘zgarmagan — 30 ta webhook’dan 23 tasi; jonli sinov hodisalari xatosiz o‘tgan. Hisoblagich deploy’larda nolga tushmaydi (Redis), shuning uchun xatolar avvalgi sozlash bosqichiga tegishli bo‘lishi mumkin; kod va hisoblagich o‘zgartirilmagan.
 
 ## 7. Hali tasdiqlanmagan (birinchi jonli sinovda tekshiriladi)
 
