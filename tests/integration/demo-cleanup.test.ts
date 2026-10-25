@@ -182,5 +182,48 @@ describe('demo tozalash: eksport → tiklash tekshiruvi → o‘chirish', () => 
       expect(await p().lead.findUnique({ where: { id: lead.id } })).not.toBeNull();
       expect(await p().payment.count({ where: { orderId: order.id } })).toBe(1);
       expect(await p().lead.findUnique({ where: { id: real.lead.id } })).not.toBeNull();
+      const guard = async () => (await p().$queryRawUnsafe<Array<{ tgenabled: string }>>(`SELECT tgenabled::text AS tgenabled FROM pg_trigger WHERE tgname = 'payments_no_delete' AND tgrelid = 'payments'::regclass`))[0]?.tgenabled;
+      expect(await guard()).toBe('O');
+
+      // Rollback: o'chirilmaydigan buyurtma demo lidga havola qiladi -> FK xatosi; to'lov o'chirilgan bo'lsa ham hammasi qaytadi, trigger yoqilgan
+      const keeper = (await head.post('/api/v1/leads', { firstName: 'Saqlanadi' })).body;
+      const keepOrder = (await head.post('/api/v1/orders', { leadId: keeper.id, agreedAmount: '10.00', currency: 'USD' })).body;
+      await p().order.update({ where: { id: keepOrder.id }, data: { contactId: lead.contactId } }); // o'chirilmaydigan buyurtma demo KONTAKTga havola qiladi
+      const exp2 = (await admin.get('/api/v1/admin/maintenance/demo-cleanup/export')).body as ExportFile;
+      const before2 = await counts();
+      const rb = await admin.post('/api/v1/admin/maintenance/demo-cleanup/execute', { manifestHash: exp2.manifestHash, confirm: 'DELETE-DEMO-RECORDS', allowPaymentDeletion: 'DELETE-DEMO-PAYMENTS' });
+      expect(rb.status).toBe(409);
+      expect(['DELETE_BLOCKED_BY_REFERENCE', 'DELETE_COUNT_MISMATCH']).toContain(rb.body.error.code);
+      expect(await counts()).toEqual(before2);
+      expect(await p().payment.count({ where: { orderId: order.id } })).toBe(1);
+      expect(await guard()).toBe('O');
+    }));
+
+  it('to‘lov himoyasi aniq so‘ralganda faqat shu tranzaksiyada ochiladi: sun’iy to‘lov o‘chadi, trigger qayta yoqiladi, boshqa to‘lov hamon o‘chmaydi, haqiqiy yozuvlar saqlanadi', () =>
+    withEnv(async () => {
+      const lead = await newLead(app, core);
+      const order = (await head.post('/api/v1/orders', { leadId: lead.id, agreedAmount: '500.00', currency: 'USD' })).body;
+      expect((await head.post(`/api/v1/orders/${order.id}/payments`, { kind: 'payment', amount: '100.00', currency: 'USD', receivedAt: new Date().toISOString(), method: 'cash' }, { 'Idempotency-Key': `cl3-${order.id}` })).status).toBe(201);
+      const real = await makeReal('c');
+      // Noaniq (qo'lda) lid va uning to'lovi: o'chirilmasligi va himoyasi saqlanishi kerak
+      const keeper = (await head.post('/api/v1/leads', { firstName: 'Saqlanadigan' })).body;
+      const keepOrder = (await head.post('/api/v1/orders', { leadId: keeper.id, agreedAmount: '70.00', currency: 'USD' })).body;
+      expect((await head.post(`/api/v1/orders/${keepOrder.id}/payments`, { kind: 'payment', amount: '20.00', currency: 'USD', receivedAt: new Date().toISOString(), method: 'cash' }, { 'Idempotency-Key': `cl3k-${keepOrder.id}` })).status).toBe(201);
+      await drain(core);
+      const exp = (await admin.get('/api/v1/admin/maintenance/demo-cleanup/export')).body as ExportFile;
+      expect(exp.tables.find((t) => t.table === 'payments')!.count).toBe(1);
+      const run = await admin.post('/api/v1/admin/maintenance/demo-cleanup/execute', { manifestHash: exp.manifestHash, confirm: 'DELETE-DEMO-RECORDS', allowPaymentDeletion: 'DELETE-DEMO-PAYMENTS' });
+      expect(run.status).toBe(200);
+      expect(run.body.deleted.payments).toBe(1);
+      expect(await p().payment.count({ where: { orderId: order.id } })).toBe(0);
+      expect(await p().lead.findUnique({ where: { id: lead.id } })).toBeNull();
+      // Trigger qayta yoqilgan va ishlaydi
+      const trg = await p().$queryRawUnsafe<Array<{ tgenabled: string }>>(`SELECT tgenabled::text AS tgenabled FROM pg_trigger WHERE tgname = 'payments_no_delete' AND tgrelid = 'payments'::regclass`);
+      expect(trg[0]?.tgenabled).toBe('O');
+      await expect(p().$executeRawUnsafe(`DELETE FROM payments WHERE order_id = '${keepOrder.id}'`)).rejects.toThrow(/payments cannot be deleted/);
+      expect(await p().payment.count({ where: { orderId: keepOrder.id } })).toBe(1);
+      expect(await p().lead.findUnique({ where: { id: real.lead.id } })).not.toBeNull();
+      expect(await p().message.count({ where: { conversationId: real.conv.id } })).toBe(1);
+      expect(await p().lead.findUnique({ where: { id: keeper.id } })).not.toBeNull();
     }));
 });

@@ -116,8 +116,8 @@ export class PlatformController {
 
   /** O'chirish: eksport hash'i va tasdiqlash matni bilan; bitta tranzaksiya. Faqat administrator. */
   @Post('api/v1/admin/maintenance/demo-cleanup/execute')
-  async demoCleanupExecute(@Actor() actor: UserActor, @Body() body: { manifestHash?: string; confirm?: string }, @Res() res: Response) {
-    send(res, 200, await this.core.demoCleanup.execute(actor, { manifestHash: String(body?.manifestHash ?? ''), confirm: String(body?.confirm ?? '') }));
+  async demoCleanupExecute(@Actor() actor: UserActor, @Body() body: { manifestHash?: string; confirm?: string; allowPaymentDeletion?: string }, @Res() res: Response) {
+    send(res, 200, await this.core.demoCleanup.execute(actor, { manifestHash: String(body?.manifestHash ?? ''), confirm: String(body?.confirm ?? ''), allowPaymentDeletion: String(body?.allowPaymentDeletion ?? '') }));
   }
 
   @Post('api/v1/integrations/instagram/profiles/sync')
