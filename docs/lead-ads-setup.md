@@ -36,6 +36,29 @@ amoCRM kerak emas. Reklama budjeti, kampaniyalar yoki e’lonlarni bu kod yaratm
 7. Page’ning `leadgen` obunasi API’dan qayta o‘qib tasdiqlanadi. Eski subscription maydonlari saqlanadi.
    Yaqin 7 kunlik formalar tarixi navbatga qo‘yiladi; mavjud Meta retrieval oynasi/ruxsatlari bilan cheklanadi.
 
+## Joriy holat — 2026-10-26 (Meta va Facebook faqat o‘qib tekshirildi)
+
+**Lead Ads ulanmagan va jonli sinalmagan.** Kod tayyor (OAuth → Page/forma tanlash → `leadgen` obunasi → Graph’dan javoblar → lid, mas’ul, `meta_leads:<leadgen_id>` dedupe), lekin NONA Page’iga kirish yo‘q.
+
+| Tekshirilgan | Natija |
+| --- | --- |
+| Meta ilova | «NONA Travel CRM» `1139555365103234`, «Опубликовано». Railway: `META_APP_ID`, `META_LEADS_CONFIG_ID` (`1446647680762146`) o‘rnatilgan; CRM `lead-ads/status` → `configured: true`, ulanishlar yo‘q. |
+| Ilova rollari | Administrator — Hojiakbar Asomov; Instagram testerlari `nonatravel.uz`, `_khojiakbarr`. Nozima’da rol yo‘q. |
+| Brauzerdagi FB akkaunt (Hojiakbar Asomov) boshqaradigan Page’lar | «Page Category», «Xojiakbarrrr» — NONA Travel emas. Kutilayotgan Page taklifi yo‘q. |
+| Biznes-portfoliolar | `pppp15548` (boshqa biznes — tegilmadi), `unicorn.7303091` (`1625532576248094`: reklama akkaunti 0, Page — «Page Category»). |
+| Reklama akkauntlari | Faqat shaxsiy `1329410249179376` (kampaniyasiz). NONA reklama akkaunti ko‘rinmaydi. |
+| Instant Form | NONA Page’iga kirish yo‘qligi sabab ko‘rib bo‘lmadi. |
+| Facebook qidiruvi | Bir nechta «Nona Travel» Page’lari bor; qaysi biri NONA’niki — taxmin qilinmadi. |
+| App webhook, Page obyekti | Callback URL bo‘sh, `leadgen` — «Нет подписки». |
+
+**Qolgan bloklar (tartib bilan):**
+1. NONA Travel Facebook Page egasi (formalar shu Page’da) Hojiakbar Asomov akkauntiga shu Page’da to‘liq boshqaruv (Facebook access, «Full control») berishi kerak. Page Business portfolio’da Leads Access bilan cheklangan bo‘lsa, Leads Access’da ham shu odamni yoqish kerak.
+2. Meta ilovasida Page obyekti webhook’i: callback `https://web-production-e57d0a.up.railway.app/webhooks/meta`, mavjud verify token (`META_VERIFY_TOKEN` qiymati — chatga yozilmaydi), `leadgen` maydoniga obuna.
+3. CRM → Интеграции → «Рекламные формы» orqali Hojiakbar akkaunti bilan ulash, NONA Page va formani tanlash.
+4. Lead Ads Testing Tool bilan bitta test ariza → webhook → lid; keyin alohida — haqiqiy reklama formasidan kelgan ariza.
+
+Ruxsat darajasi: rasmiy Meta Access Levels qoidasiga ko‘ra Standard Access bilan ilova faqat ilovada roli bor foydalanuvchilar ma’lumotiga kira oladi; ulash ilova administratori (Hojiakbar) akkaunti orqali bo‘lsa, shu Page uchun App Review talab qilinmasligi kutiladi. Bu jonli sinovda tasdiqlanishi kerak; Advanced Access / Business Verification bajarilgan deb hisoblanmaydi.
+
 ## Haqiqiy qabul sinovi — reklama xarajatisiz
 
 1. Meta Lead Ads Testing Tool’da aynan tanlangan Page/form uchun test lid yuboring.
