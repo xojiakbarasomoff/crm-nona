@@ -404,6 +404,11 @@ model Contact {
   instagramProfileNextAttemptAt   DateTime? @map("instagram_profile_next_attempt_at") @db.Timestamptz(3)
   instagramProfileError           String?   @map("instagram_profile_error")
 
+  /// Qo'lda kiritiladigan mijoz maydonlari (menejer kiritgan qiymat Instagram profil yangilanishi bilan ustidan yozilmaydi).
+  firstName                       String?   @map("first_name")
+  lastName                        String?   @map("last_name")
+  telegramUsername                String?   @map("telegram_username")
+
   identifiers ContactIdentifier[]
 
   @@unique([companyId, id])
@@ -488,6 +493,8 @@ model Lead {
   returnStage        Stage?    @map("return_stage")
   ownerId            String?   @map("owner_id") @db.Uuid
   assignmentReason   String?   @map("assignment_reason")
+  /// Qo'lda lid yaratishda kiritilgan izoh.
+  note               String?
   serviceType        String?   @map("service_type")
   requirements       Json      @default("{}")
   firstSource        Channel   @map("first_source")

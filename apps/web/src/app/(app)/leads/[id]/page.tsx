@@ -7,6 +7,7 @@ import { api, fmtDateTime, newKey, SOURCE_LABELS, STAGE_LABELS, useApi, type Api
 import { Async, Badge, Field, FormError, InstagramLink, Section, SyncBadge } from '../../../../components/ui';
 import { canDo, useMe } from '../../../../components/shell';
 import { Attachments } from '../../../../components/attachments';
+import { ContactEditForm } from '../../../../components/manual-lead';
 
 interface LeadDetail {
   lead: {
@@ -34,11 +35,12 @@ interface LeadDetail {
     firstHumanActionAt: string | null;
     slaBreachedAt: string | null;
     createdAt: string;
+    note: string | null;
   };
   events: Array<{ id: string; kind: string; oldStage: string | null; newStage: string | null; oldOwnerId: string | null; newOwnerId: string | null; origin: string; reason: string | null; effectiveAt: string }>;
   offers: Array<{ id: string; version: number; content: string; amount: string; currency: string; sentAt: string | null; acceptedAt: string | null; validUntil: string | null }>;
   orders: Array<{ id: string; orderNo: string; fulfillmentState: string }>;
-  contact: { id: string; fullName: string | null; primaryPhone: string | null; instagramUsername: string | null; instagramName: string | null } | null;
+  contact: { id: string; fullName: string | null; firstName: string | null; lastName: string | null; primaryPhone: string | null; telegramUsername: string | null; instagramUsername: string | null; instagramName: string | null } | null;
   pendingOperations: Array<{ id: string; action: string; state: string; lastError: string | null }>;
   tourOperator: { id: string; name: string; status: string } | null;
   /** Faol buyurtma bo'lsa turoperator buyurtmaniki (tarixiy bog'lanish): lid kartasida o'zgartirilmaydi. */
@@ -52,6 +54,7 @@ export default function LeadPage() {
   const state = useApi<LeadDetail>(`/api/v1/leads/${id}`);
   const team = useApi<{ items: Array<{ id: string; fullName: string; role: string }> }>('/api/v1/team');
   const [error, setError] = useState<ApiError | null>(null);
+  const [editingContact, setEditingContact] = useState(false);
   const run = async (fn: () => Promise<unknown>) => {
     setError(null);
     try {
@@ -159,10 +162,34 @@ export default function LeadPage() {
                 )}
                 <TourOperatorPicker current={d.tourOperator} ownedBy={d.operatorOwnedByOrder} onSave={(tourOperatorId) => run(() => api(`/api/v1/leads/${id}`, { method: 'PATCH', body: { version: l.version, tourOperatorId } }))} />
                 <Section title="Mijoz">
-                  {d.contact ? (
+                  {d.contact && editingContact ? (
+                    <ContactEditForm
+                      leadId={l.id}
+                      contact={d.contact}
+                      onCancel={() => setEditingContact(false)}
+                      onSaved={() => {
+                        setEditingContact(false);
+                        void state.reload();
+                      }}
+                    />
+                  ) : d.contact ? (
                     <>
                       <div>{d.contact.fullName && d.contact.fullName !== 'Instagram mijoz' ? d.contact.fullName : d.contact.instagramUsername ? `@${d.contact.instagramUsername}` : d.contact.fullName ?? '—'}</div>
                       <div className="muted">{d.contact.primaryPhone ?? 'Telefon yo‘q'}</div>
+                      {d.contact.telegramUsername && (
+                        <div className="muted">
+                          Telegram:{' '}
+                          <a href={`https://t.me/${encodeURIComponent(d.contact.telegramUsername)}`} target="_blank" rel="noopener noreferrer">
+                            @{d.contact.telegramUsername}
+                          </a>
+                        </div>
+                      )}
+                      {l.note && <div className="muted">Izoh: {l.note}</div>}
+                      {(me.role === 'ADMIN' || me.role === 'HEAD' || l.ownerId === me.id) && (
+                        <button className="btn secondary" type="button" onClick={() => setEditingContact(true)}>
+                          Tahrirlash
+                        </button>
+                      )}
                       <Link href={`/contacts/${d.contact.id}`}>Mijoz kartasi va yozishmalar</Link>
                     </>
                   ) : (
