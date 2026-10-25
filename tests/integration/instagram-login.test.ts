@@ -319,6 +319,33 @@ describe('Instagram Login: kiruvchi Direct → kontakt/lid → mas’ul → javo
     });
   });
 
+  it('demo tozalash rejasi (faqat o‘qish): haqiqiy Instagram kontaktlari/lidlari «saqlanadi», seed demo yozuvlari «o‘chiriladi» ro‘yxatida, qo‘lda yaratilgani «noaniq»; hech narsa o‘chirilmaydi', async () => {
+    const liveConn = await p().integrationConnection.findFirstOrThrow({ where: { provider: 'META_DIRECT', mode: 'live' } });
+    const realConvs = await p().conversation.findMany({ where: { connectionId: liveConn.id } });
+    expect(realConvs.length).toBeGreaterThan(0);
+    // Qo'lda yaratilgan (kelib chiqishi noaniq) kontakt va lid
+    const company = await p().company.findFirstOrThrow();
+    const manual = await p().contact.create({ data: { companyId: company.id, fullName: 'Qo‘lda kiritilgan mijoz', syncState: 'pending_create' } });
+    // Sun'iy (Lead Ads demo adapteridan kelgan) kontakt
+    const synthetic = await p().contact.create({ data: { companyId: company.id, fullName: 'Sun‘iy Lead Ads mijozi', syncState: 'pending_create' } });
+    await p().inquiry.create({ data: { companyId: company.id, providerEventKey: `meta_leads:demo_plan_${synthetic.id}`, contactId: synthetic.id, channel: 'meta_lead_ads', placement: 'facebook', receivedAt: new Date(), correlationId: 'plan-test', processingState: 'linked' } });
+    const counts = { contacts: await p().contact.count(), leads: await p().lead.count(), orders: await p().order.count(), messages: await p().message.count() };
+    expect((await mgr.get('/api/v1/admin/maintenance/demo-cleanup/plan')).status).toBe(403);
+    const plan = (await admin.get('/api/v1/admin/maintenance/demo-cleanup/plan')).body;
+    const keepContacts = new Set<string>(plan.keep.realContacts);
+    const delContacts = new Set<string>(plan.delete.contacts.map((c: { id: string }) => c.id));
+    for (const c of realConvs) {
+      expect(keepContacts.has(c.contactId)).toBe(true);
+      expect(delContacts.has(c.contactId)).toBe(false);
+    }
+    expect(delContacts.has(synthetic.id)).toBe(true); // sun'iy Lead Ads kontakti o'chirish ro'yxatida
+    expect([...keepContacts].some((id) => delContacts.has(id))).toBe(false);
+    expect(plan.keep.uncertain.contacts.map((c: { id: string }) => c.id)).toContain(manual.id);
+    expect(delContacts.has(manual.id)).toBe(false);
+    // Hech narsa o'chirilmadi
+    expect({ contacts: await p().contact.count(), leads: await p().lead.count(), orders: await p().order.count(), messages: await p().message.count() }).toEqual(counts);
+  });
+
   it('deauthorize callback: imzolangan so‘rov ulanishni to‘xtatadi (tarix saqlanadi); imzosiz rad etiladi', async () => {
     const { createHmac } = await import('node:crypto');
     const payload = Buffer.from(JSON.stringify({ user_id: IG_ID, algorithm: 'HMAC-SHA256' })).toString('base64url');

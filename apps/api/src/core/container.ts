@@ -18,6 +18,7 @@ import { LeadsService } from './services/leads.service';
 import { OAuthService } from './services/oauth.service';
 import { InstagramService } from './services/instagram.service';
 import { InstagramProfileService } from './services/instagram-profile.service';
+import { DemoCleanupService } from './services/demo-cleanup.service';
 import { OrdersService } from './services/orders.service';
 import { ProcessingService } from './services/processing.service';
 import { RemindersService } from './services/reminders.service';
@@ -38,6 +39,7 @@ export interface Core {
   oauth: OAuthService;
   instagram: InstagramService;
   instagramProfiles: InstagramProfileService;
+  demoCleanup: DemoCleanupService;
   dashboard: DashboardService;
   webhooks: WebhooksService;
   admin: AdminService;
@@ -79,6 +81,7 @@ export function createCore(config: AppConfig, o: CoreOverrides = {}): Core {
     oauth,
     instagram: new InstagramService(deps, o.fetchImpl),
     instagramProfiles: new InstagramProfileService(deps),
+    demoCleanup: new DemoCleanupService(deps),
     dashboard: new DashboardService(deps),
     webhooks: new WebhooksService(deps),
     admin: new AdminService(deps),

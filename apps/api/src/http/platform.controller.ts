@@ -102,6 +102,12 @@ export class PlatformController {
     send(res, 200, await this.core.instagram.inboundSummary(actor, typeof q.marker === 'string' && q.marker.length >= 3 ? q.marker.slice(0, 64) : null));
   }
 
+  /** Demo yozuvlarni tozalash REJASI (faqat o'qish, administrator). O'chirish bu yerda yo'q. */
+  @Get('api/v1/admin/maintenance/demo-cleanup/plan')
+  async demoCleanupPlan(@Actor() actor: UserActor, @Res() res: Response) {
+    send(res, 200, await this.core.demoCleanup.plan(actor));
+  }
+
   @Post('api/v1/integrations/instagram/profiles/sync')
   async igProfilesSync(@Actor() actor: UserActor, @Res() res: Response) {
     requireCapOrThrow(actor, 'integrations.manage');
