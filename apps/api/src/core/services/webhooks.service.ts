@@ -67,13 +67,23 @@ export class WebhooksService {
     for (const e of events) {
       const accountKey = e.kind === 'leadgen' ? e.pageId : e.kind === 'ig_message' || e.kind === 'ig_read' ? e.businessAccountId : 'unknown';
       const provider = e.kind === 'leadgen' ? 'META_LEADS' : 'META_DIRECT';
-      const conn = accountKey !== 'unknown' ? await this.d.prisma.integrationConnection.findFirst({ where: { provider, accountId: accountKey, disconnectedAt: null }, select: { id: true, companyId: true } }) : null;
+      let conn = accountKey !== 'unknown' ? await this.d.prisma.integrationConnection.findFirst({ where: { provider, accountId: accountKey, disconnectedAt: null }, select: { id: true, companyId: true, accountId: true } }) : null;
+      // Instagram Login'da webhook account ID `user_id` yoki shu akkauntning app-scoped `id` si bilan kelishi mumkin: faqat shu ulanishning o'z ID'lari.
+      if (!conn && provider === 'META_DIRECT' && accountKey !== 'unknown') {
+        conn = await this.d.prisma.integrationConnection.findFirst({ where: { provider, mode: 'live', disconnectedAt: null, settings: { path: ['appScopedId'], equals: accountKey } }, select: { id: true, companyId: true, accountId: true } });
+      }
       // Direct hodisasi faqat ulangan akkauntning ID'siga (entry.id = OAuth /me user_id) mos kelsa saqlanadi; aks holda qayta ishlanmaydi.
       if (provider === 'META_DIRECT' && !conn) {
         await this.d.redis.incr('metrics:webhook_unknown_account').catch(() => undefined);
+        // Diagnostika: qaysi akkaunt ID tashlandi va qaysilari ulangan (ID'lar sir emas; xabar matni/yuboruvchi logga chiqmaydi).
+        const connected = await this.d.prisma.integrationConnection.findMany({ where: { provider: 'META_DIRECT', mode: 'live', disconnectedAt: null }, select: { accountId: true } }).catch(() => []);
+        const entryIds = Array.isArray((body as { entry?: unknown })?.entry) ? ((body as { entry: Array<{ id?: unknown }> }).entry.map((x) => String(x?.id ?? '')).slice(0, 5)) : [];
+        this.d.logger.warn({ kind: e.kind, droppedAccountKey: accountKey, entryIds, connectedAccountIds: connected.map((c) => c.accountId) }, 'meta direct webhook dropped: account id does not match a connected account');
         continue;
       }
-      if (await storeInboxEvent(this.d.prisma, this.d.encryptionKey, { provider: 'meta', connectionKey: accountKey, companyId: conn?.companyId ?? null, externalEventId: e.key, eventType: e.kind, payload: e, correlationId })) stored++;
+      // Qayta ishlash ulanishni `accountId` bo'yicha topadi: app-scoped ID bilan kelgan hodisa kanonik akkaunt ID'siga keltiriladi.
+      const canonical = conn && (e.kind === 'ig_message' || e.kind === 'ig_read') && e.businessAccountId !== conn.accountId ? { ...e, businessAccountId: conn.accountId } : e;
+      if (await storeInboxEvent(this.d.prisma, this.d.encryptionKey, { provider: 'meta', connectionKey: conn?.accountId ?? accountKey, companyId: conn?.companyId ?? null, externalEventId: e.key, eventType: e.kind, payload: canonical, correlationId })) stored++;
       if (conn) await this.d.prisma.integrationConnection.update({ where: { id: conn.id }, data: { lastWebhookAt: this.d.clock.now() } }).catch(() => undefined);
     }
     await this.d.redis.incrby('metrics:webhook_count', events.length).catch(() => undefined);

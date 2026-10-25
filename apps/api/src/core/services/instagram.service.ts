@@ -76,24 +76,47 @@ export class InstagramService {
     requireCap(actor, 'integrations.manage');
     const m = this.d.config.meta;
     const conns = await this.d.prisma.integrationConnection.findMany({ where: { companyId: actor.companyId, provider: 'META_DIRECT', mode: 'live', disconnectedAt: null, credentialsEnc: { not: null } } });
-    const out: Array<{ accountId: string; httpStatus: number | null; apps: Array<{ name: string | null; id: string | null; fields: string[] }>; error: string | null }> = [];
+    const out: Array<{ accountId: string; httpStatus: number | null; apps: Array<{ name: string | null; id: string | null; fields: string[] }>; error: string | null; profileIds?: { id: string | null; user_id: string | null } }> = [];
     for (const conn of conns) {
       const creds = JSON.parse(decryptSecret(conn.credentialsEnc!, this.d.encryptionKey)) as StoredInstagramCreds;
       try {
         const url = `https://graph.instagram.com/${m.graphVersion}/${conn.accountId}/subscribed_apps?access_token=${encodeURIComponent(creds.accessToken)}`;
         const res = await this.fetchImpl(url, { method: 'GET' });
         const body = (await res.json().catch(() => ({}))) as { data?: Array<{ id?: string; name?: string; subscribed_fields?: string[] }>; error?: { message?: string; code?: number } };
+        // /me: `id` (app-scoped) va `user_id` (professional account ID) farq qilishi mumkin; webhook qaysi biri bilan kelishini aniqlash uchun ikkalasi ham ko'rsatiladi.
+        const meRes = await this.fetchImpl(`https://graph.instagram.com/${m.graphVersion}/me?fields=id,user_id&access_token=${encodeURIComponent(creds.accessToken)}`, { method: 'GET' });
+        const me = (await meRes.json().catch(() => ({}))) as { id?: string; user_id?: string };
         out.push({
           accountId: conn.accountId,
           httpStatus: res.status,
           apps: (body.data ?? []).map((a) => ({ name: a.name ?? null, id: a.id ?? null, fields: a.subscribed_fields ?? [] })),
           error: body.error ? `code=${body.error.code ?? '?'}` : null,
+          profileIds: { id: me.id ?? null, user_id: me.user_id ?? null },
         });
       } catch (err) {
         out.push({ accountId: conn.accountId, httpStatus: null, apps: [], error: (err as Error).name });
       }
     }
     return { graphVersion: m.graphVersion || null, connections: out };
+  }
+
+  /**
+   * Mavjud ulanishga `/me → id` (app-scoped) ni yozadi (token orqali o'sha akkauntning o'zi aytgan ID). Webhook `recipient.id` ikkala
+   * qiymatdan biri bilan kelishi mumkin; mos kelish faqat SHU ulanishning o'z ikki ID'si bilan bo'ladi, boshqa akkaunt qabul qilinmaydi.
+   */
+  async syncProfileIds(actor: UserActor) {
+    requireCap(actor, 'integrations.manage');
+    const cfg = this.cfg();
+    const conns = await this.d.prisma.integrationConnection.findMany({ where: { companyId: actor.companyId, provider: 'META_DIRECT', mode: 'live', disconnectedAt: null, credentialsEnc: { not: null } } });
+    const out: Array<{ accountId: string; appScopedIdStored: boolean }> = [];
+    for (const conn of conns) {
+      const creds = JSON.parse(decryptSecret(conn.credentialsEnc!, this.d.encryptionKey)) as StoredInstagramCreds;
+      const profile = await fetchInstagramProfile(cfg, creds.accessToken, this.fetchImpl);
+      const ok = profile.userId === conn.accountId && !!profile.appScopedId;
+      if (ok) await this.d.prisma.integrationConnection.update({ where: { id: conn.id }, data: { settings: { ...((conn.settings ?? {}) as object), appScopedId: profile.appScopedId } as object, version: { increment: 1 } } });
+      out.push({ accountId: conn.accountId, appScopedIdStored: ok });
+    }
+    return { connections: out };
   }
 
   async start(actor: UserActor) {
@@ -133,7 +156,7 @@ export class InstagramService {
 
     const credentialsEnc = encryptSecret(JSON.stringify({ accessToken: long.accessToken, igUserId: profile.userId, username: profile.username, issuedAt: now.toISOString() } satisfies StoredInstagramCreds), this.d.encryptionKey);
     // Credential kiritilgani «tayyor» degani emas: haqiqiy kiruvchi va chiquvchi sinov o'tmaguncha degraded.
-    const settings = { username: profile.username, accountType: profile.accountType, login: 'instagram_login', webhookSubscribed: subscribed, permissions: short.permissions, verifiedInboundAt: null, verifiedOutboundAt: null };
+    const settings = { username: profile.username, accountType: profile.accountType, login: 'instagram_login', appScopedId: profile.appScopedId, webhookSubscribed: subscribed, permissions: short.permissions, verifiedInboundAt: null, verifiedOutboundAt: null };
     const reason = subscribed ? AWAITING_LIVE_VERIFICATION : WEBHOOK_UNCONFIRMED;
     const conn = await this.d.prisma.$transaction(async (tx) => {
       const existing = await tx.integrationConnection.findFirst({ where: { companyId: actor.companyId, provider: 'META_DIRECT', accountId: profile.userId } });
