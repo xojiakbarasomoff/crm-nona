@@ -212,8 +212,16 @@ describe('demo tozalash: eksport → tiklash tekshiruvi → o‘chirish', () => 
       await drain(core);
       const exp = (await admin.get('/api/v1/admin/maintenance/demo-cleanup/export')).body as ExportFile;
       expect(exp.tables.find((t) => t.table === 'payments')!.count).toBe(1);
-      const run = await admin.post('/api/v1/admin/maintenance/demo-cleanup/execute', { manifestHash: exp.manifestHash, confirm: 'DELETE-DEMO-RECORDS', allowPaymentDeletion: 'DELETE-DEMO-PAYMENTS' });
+      // Eksportdan KEYIN kelgan yangi (sun'iy ko'rinishdagi) lid: tozalash paytida kelgan yangi lid sifatida saqlanishi kerak
+      const newer = await newLead(app, core);
+      const stale = await admin.post('/api/v1/admin/maintenance/demo-cleanup/execute', { manifestHash: exp.manifestHash, confirm: 'DELETE-DEMO-RECORDS', allowPaymentDeletion: 'DELETE-DEMO-PAYMENTS' });
+      expect(stale.status).toBe(409); // cheklovsiz: yangi lid to'plamni o'zgartirdi -> to'xtaydi
+      const onlyIds = { contacts: (exp as unknown as { sets: { contacts: string[] } }).sets.contacts, leads: (exp as unknown as { sets: { leads: string[] } }).sets.leads, orders: (exp as unknown as { sets: { orders: string[] } }).sets.orders };
+      const run = await admin.post('/api/v1/admin/maintenance/demo-cleanup/execute', { manifestHash: exp.manifestHash, confirm: 'DELETE-DEMO-RECORDS', allowPaymentDeletion: 'DELETE-DEMO-PAYMENTS', only: onlyIds, cutoff: (exp as unknown as { generatedAt: string }).generatedAt });
       expect(run.status).toBe(200);
+      expect(await p().lead.findUnique({ where: { id: newer.id } })).not.toBeNull(); // yangi lid saqlandi
+      expect(await p().inquiry.count({ where: { leadId: newer.id } })).toBe(1);
+      expect(await p().webhookInbox.count({ where: { externalEventId: { startsWith: 'leadgen:' }, receivedAt: { gt: new Date((exp as unknown as { generatedAt: string }).generatedAt) } } })).toBeGreaterThanOrEqual(1);
       expect(run.body.deleted.payments).toBe(1);
       expect(await p().payment.count({ where: { orderId: order.id } })).toBe(0);
       expect(await p().lead.findUnique({ where: { id: lead.id } })).toBeNull();
