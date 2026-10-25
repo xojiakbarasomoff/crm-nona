@@ -100,7 +100,7 @@ export class LeadsService {
    */
   async createLead(
     tx: Tx,
-    p: { companyId: string; contactId: string; name: string; channel: Channel; placement: string; inquiryId: string | null; serviceType: string | null; at: Date; actor: Actor; deferAssignment?: boolean },
+    p: { companyId: string; contactId: string; name: string; channel: Channel; placement: string; inquiryId: string | null; serviceType: string | null; at: Date; actor: Actor; deferAssignment?: boolean; note?: string | null },
   ): Promise<Lead> {
     const company = await tx.company.findUniqueOrThrow({ where: { id: p.companyId } });
     const firstResponseDueAt = addWorkingMinutes(company.workSchedule as unknown as WeeklySchedule, p.at, company.slaFirstResponseMinutes);
@@ -117,6 +117,7 @@ export class LeadsService {
         firstInquiryId: p.inquiryId,
         firstResponseDueAt,
         syncState: 'pending_create',
+        note: p.note ?? null,
       },
     });
     await enqueueOutbox(tx, { companyId: p.companyId, operationKey: `lead.create:${lead.id}`, target: 'amocrm', action: 'lead.create', payload: { leadId: lead.id } });
@@ -192,7 +193,7 @@ export class LeadsService {
       this.d.prisma.leadEvent.findMany({ where: { companyId: actor.companyId, leadId: id }, orderBy: { effectiveAt: 'asc' } }),
       this.d.prisma.offer.findMany({ where: { companyId: actor.companyId, leadId: id }, orderBy: { version: 'desc' } }),
       this.d.prisma.order.findMany({ where: { companyId: actor.companyId, leadId: id }, select: { id: true, orderNo: true, fulfillmentState: true, tourOperatorId: true } }),
-      this.d.prisma.contact.findFirst({ where: { companyId: actor.companyId, id: lead.contactId }, select: { id: true, fullName: true, primaryPhone: true, instagramUsername: true, instagramName: true } }),
+      this.d.prisma.contact.findFirst({ where: { companyId: actor.companyId, id: lead.contactId }, select: { id: true, fullName: true, firstName: true, lastName: true, primaryPhone: true, telegramUsername: true, instagramUsername: true, instagramName: true } }),
       this.d.prisma.outboxOperation.findMany({
         where: { companyId: actor.companyId, state: { in: ['pending', 'processing', 'failed', 'unknown', 'paused'] }, payload: { path: ['leadId'], equals: id } },
         select: { id: true, action: true, state: true, lastError: true },

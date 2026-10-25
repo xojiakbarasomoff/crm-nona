@@ -115,7 +115,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   meta_lead_ads: 'Meta Lead Ads (joy noma’lum)',
   instagram_direct: 'Instagram Direct',
   amocrm: 'amoCRM',
-  manual: 'Qo‘lda',
+  manual: 'Qo‘lda kiritilgan',
   other: 'Boshqa',
 };
 

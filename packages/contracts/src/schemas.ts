@@ -76,6 +76,26 @@ export const LeadDetailsSchema = z
   .strict()
   .openapi('LeadDetailsPatch');
 
+const optText = (max: number) => z.string().trim().max(max).nullable().optional();
+export const ManualLeadCreateSchema = z
+  .object({
+    firstName: optText(100),
+    lastName: optText(100),
+    phone: optText(40),
+    telegram: optText(120),
+    name: optText(200),
+    ownerId: id.nullable().optional(),
+    note: optText(2000),
+    existingContactId: id.nullable().optional(),
+    forceNewContact: z.boolean().optional(),
+  })
+  .strict()
+  .openapi('ManualLeadCreate');
+export const ContactEditSchema = z
+  .object({ firstName: optText(100), lastName: optText(100), phone: optText(40), telegram: optText(120), allowDuplicatePhone: z.boolean().optional() })
+  .strict()
+  .openapi('ContactEdit');
+
 export const StageChangeSchema = z.object({ version: z.number().int(), stage: STAGE, reason: z.string().max(1000).optional() }).strict().openapi('StageChange');
 export const AssigneeSchema = z.object({ userId: id, reason: z.string().min(1).max(1000) }).strict();
 export const ReopenSchema = z.object({ reason: z.string().min(1).max(1000), stage: STAGE.default('CONTACTED') }).strict();

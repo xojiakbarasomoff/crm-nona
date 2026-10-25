@@ -4,7 +4,9 @@ import {
   AssigneeSchema,
   DashboardQuery,
   DuplicateResolveSchema,
+  ContactEditSchema,
   LeadDetailsSchema,
+  ManualLeadCreateSchema,
   LeadListQuery,
   OfferSchema,
   OfferSentSchema,
@@ -53,6 +55,19 @@ export class SalesController {
   async lead(@Actor() actor: UserActor, @Param('id', uuid) id: string, @Res() res: Response) {
     const r = await this.core.leads.get(actor, id);
     send(res, 200, { ...r, offers: r.offers.map(serializeOffer) });
+  }
+
+  /** Qo'lda lid yaratish (manba «Qo'lda kiritilgan», bosqich «Yangi lid»). */
+  @Post('leads')
+  async createManualLead(@Actor() actor: UserActor, @Body() body: unknown, @Res() res: Response) {
+    const lead = await this.core.manualLeads.create(actor, parse(ManualLeadCreateSchema, body));
+    send(res, 201, lead);
+  }
+
+  /** Lid kartasidagi mijozni tahrirlash (ism, familiya, telefon, Telegram). */
+  @Patch('leads/:id/contact')
+  async editLeadContact(@Actor() actor: UserActor, @Param('id', uuid) id: string, @Body() body: unknown, @Res() res: Response) {
+    send(res, 200, await this.core.manualLeads.editContact(actor, id, parse(ContactEditSchema, body)));
   }
 
   @Patch('leads/:id')

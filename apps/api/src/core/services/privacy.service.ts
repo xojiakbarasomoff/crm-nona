@@ -114,12 +114,12 @@ export class PrivacyService {
     const orderIds = orders.map((o) => o.id);
     const conversations = await tx.conversation.findMany({ where: { companyId, contactId }, select: { id: true, scopedPeerId: true } });
 
-    await tx.contact.update({ where: { id: contactId }, data: { fullName: ERASED_NAME, primaryPhone: null, primaryEmail: null, piiErasedAt: now, instagramUsername: null, instagramName: null, instagramProfileError: null, instagramProfileNextAttemptAt: null } });
+    await tx.contact.update({ where: { id: contactId }, data: { fullName: ERASED_NAME, primaryPhone: null, primaryEmail: null, piiErasedAt: now, firstName: null, lastName: null, telegramUsername: null, instagramUsername: null, instagramName: null, instagramProfileError: null, instagramProfileNextAttemptAt: null } });
     const ids = await tx.contactIdentifier.findMany({ where: { companyId, contactId } });
     for (const i of ids) {
       await tx.contactIdentifier.update({ where: { id: i.id }, data: { value: `erased:${hashId(`${i.type}|${i.scope}|${i.value}`)}`, originalValue: null, displayUsername: null, active: false } });
     }
-    await tx.lead.updateMany({ where: { id: { in: leadIds } }, data: { name: `${ERASED_NAME} lidi`, contactOutcome: null, followUpNote: null, lostNote: null, requirements: {}, piiErasedAt: now } });
+    await tx.lead.updateMany({ where: { id: { in: leadIds } }, data: { name: `${ERASED_NAME} lidi`, contactOutcome: null, followUpNote: null, lostNote: null, requirements: {}, note: null, piiErasedAt: now } });
     await tx.$executeRaw`UPDATE inquiries SET form_data = NULL WHERE company_id = ${companyId}::uuid AND contact_id = ${contactId}::uuid`;
     for (const c of conversations) {
       await tx.conversation.update({ where: { id: c.id }, data: { scopedPeerId: `erased:${hashId(c.scopedPeerId)}`, peerUsername: null } });

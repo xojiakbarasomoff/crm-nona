@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { SOURCE_LABELS, STAGE_LABELS, fmtDateTime, useApi } from '../../../lib/api';
 import { Async, Badge, Field, InstagramLink, Section, SyncBadge } from '../../../components/ui';
+import { NewLeadForm } from '../../../components/manual-lead';
 
 interface LeadRow {
   id: string;
@@ -28,6 +29,7 @@ export default function LeadsPage() {
     if (s) setSearch(s);
   }, []);
   const [cursor, setCursor] = useState<string | undefined>();
+  const [creating, setCreating] = useState(false);
   const q = new URLSearchParams({ limit: '50', ...(stage ? { stage } : {}), ...(search ? { search } : {}), ...(cursor ? { cursor } : {}) });
   const state = useApi<{ items: LeadRow[]; nextCursor: string | null }>(`/api/v1/leads?${q}`);
   const team = useApi<{ items: Array<{ id: string; fullName: string }> }>('/api/v1/team');
@@ -35,7 +37,13 @@ export default function LeadsPage() {
 
   return (
     <>
-      <h1>Lidlar</h1>
+      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+        <h1>Lidlar</h1>
+        <button className="btn" type="button" onClick={() => setCreating((v) => !v)}>
+          + Yangi lid
+        </button>
+      </div>
+      {creating && <NewLeadForm onClose={() => setCreating(false)} />}
       <p className="muted">Lid statusi va mas’ulning asosiy tizimi — amoCRM. Bu ro‘yxat lokal proyeksiya.</p>
       <Section title="Filtr">
         <div className="row">
