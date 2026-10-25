@@ -21,7 +21,10 @@ export type Capability =
   | 'reminders.assign_others'
   | 'leads.reopen'
   | 'integrations.replay'
-  | 'reference.view_full';
+  | 'reference.view_full'
+  | 'suppliers.manage'
+  /** Tannarx (net price), foyda va yetkazib beruvchi qaytarimlarini ko‘rish/kiritish. Rahbar va administratorda standart; menejerga administrator shaxsiy yoqadi. */
+  | 'finance.cost.view';
 
 const MATRIX: Record<Role, ReadonlySet<Capability>> = {
   ADMIN: new Set<Capability>([
@@ -39,6 +42,8 @@ const MATRIX: Record<Role, ReadonlySet<Capability>> = {
     'leads.reopen',
     'integrations.replay',
     'reference.view_full',
+    'suppliers.manage',
+    'finance.cost.view',
   ]),
   HEAD: new Set<Capability>([
     'records.view_all',
@@ -52,6 +57,8 @@ const MATRIX: Record<Role, ReadonlySet<Capability>> = {
     'reminders.assign_others',
     'leads.reopen',
     'reference.view_full',
+    'suppliers.manage',
+    'finance.cost.view',
   ]),
   MANAGER: new Set<Capability>(['duplicates.flag', 'audit.read_own']),
 };
@@ -62,6 +69,26 @@ export function can(role: Role, cap: Capability): boolean {
 
 export function capabilitiesOf(role: Role): Capability[] {
   return [...MATRIX[role]];
+}
+
+/** Rolga qo‘shimcha, administrator shaxsiy yoqadigan huquqlar (DB: users.extra_capabilities). */
+export const GRANTABLE_CAPABILITIES = ['finance.cost.view'] as const satisfies readonly Capability[];
+export type GrantableCapability = (typeof GRANTABLE_CAPABILITIES)[number];
+
+export interface CapabilityHolder {
+  role: Role;
+  extraCapabilities?: readonly string[];
+}
+
+/** Rol huquqi YOKI shaxsiy qo‘shimcha huquq. Tannarx/foyda tekshiruvi har doim shu funksiya orqali. */
+export function canWith(user: CapabilityHolder, cap: Capability): boolean {
+  // Shaxsiy yozuv faqat berilishi mumkin bo‘lgan huquqlar uchun amal qiladi (boshqasi — DB CHECK va bu yerda rad etiladi).
+  return can(user.role, cap) || ((GRANTABLE_CAPABILITIES as readonly string[]).includes(cap) && (user.extraCapabilities?.includes(cap) ?? false));
+}
+
+export function capabilitiesFor(user: CapabilityHolder): Capability[] {
+  const extra = (GRANTABLE_CAPABILITIES as readonly string[]).filter((c) => user.extraCapabilities?.includes(c)) as Capability[];
+  return [...new Set([...capabilitiesOf(user.role), ...extra])];
 }
 
 /** Managers see only records they own. Returns the owner filter to add to every query, or null. */

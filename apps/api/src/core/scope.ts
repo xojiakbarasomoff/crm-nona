@@ -1,4 +1,4 @@
-import { can, ownerScope, type Capability } from '@crm/domain';
+import { can, canWith, ownerScope, type Capability } from '@crm/domain';
 import type { Actor, UserActor } from './context';
 import { forbidden, notFound } from './errors';
 
@@ -10,6 +10,15 @@ import { forbidden, notFound } from './errors';
 export function requireCap(actor: Actor, cap: Capability): void {
   if (actor.type !== 'user') return;
   if (!can(actor.role, cap)) throw forbidden();
+}
+
+/** Tannarx, foyda va yetkazib beruvchi qaytarimlarini ko'rish/kiritish huquqi (rol yoki shaxsiy). Backend, dashboard va eksportda bir xil. */
+export function canCost(actor: Actor): boolean {
+  return actor.type !== 'user' || canWith(actor, 'finance.cost.view');
+}
+
+export function requireCost(actor: Actor): void {
+  if (!canCost(actor)) throw forbidden('Tannarx va foydani ko‘rish/kiritish huquqingiz yo‘q');
 }
 
 export function isUser(actor: Actor): actor is UserActor {

@@ -6,6 +6,7 @@ import { useState, type ReactNode } from 'react';
 import { SOURCE_LABELS, STAGE_LABELS, fmtDateTime, useApi, type Loadable } from '../../../lib/api';
 import { Async, Badge, Field } from '../../../components/ui';
 import { Icon, type IconName } from '../../../components/icons';
+import { CURRENCIES, fmtAmount, money, CURRENCY_LABEL } from '../../../lib/format';
 import { canDo, useMe } from '../../../components/shell';
 
 interface Ratio {
@@ -38,6 +39,32 @@ interface Dash {
   managers: Array<{ userId: string | null; name: string; newLeads: number; won: number; inProgress: number; conversion: { display: string }; salesByCurrency: Record<string, string> }>;
   notes: Record<string, string>;
   dataQuality: { dataCollectionStartedAt: string; lastSyncAt: string | null; stale: boolean };
+  finance: FinanceDash;
+}
+
+/** Tannarx/foyda maydonlari faqat `finance.cost.view` huquqi bo'lsa keladi (aks holda `costHidden=true`). */
+interface Agg {
+  sales: string;
+  customerRefunded: string;
+  ordersWithRefund: number;
+  supplierRefunded?: string;
+  /** Dastlabki foyda: sotuv − tannarx (tannarxi aniq buyurtmalar bo'yicha). */
+  profitBasis?: { sales: string; net: string; profit: string; orders: number; marginPercent: string | null };
+  /** Qaytarimdan keyingi: (sotuv − mijozga qaytarilgan) − (tannarx − yetkazib beruvchidan qaytgan). */
+  afterRefund?: { sales: string; net: string; profit: string; marginPercent: string | null };
+  undetermined?: { orders: number; sales: string };
+}
+interface FinanceDash {
+  costHidden: boolean;
+  rules: Record<string, string>;
+  confirmed: Record<string, Agg>;
+  undeterminedOrders: number | null;
+  unpricedOrders: number;
+  refundMismatchOrders: number | null;
+  expected: Record<string, { profit: string; orders: number; undeterminedOrders: number }>;
+  cancelled: Record<string, { sales: string; orders: number }>;
+  byOperator: Array<{ operatorId: string | null; name: string; orders: number; undeterminedOrders: number | null; currencies: Record<string, Agg> }>;
+  byManager: Array<{ userId: string | null; name: string; orders: number; undeterminedOrders: number | null; currencies: Record<string, Agg> }>;
 }
 
 interface FlightRow {
@@ -59,14 +86,6 @@ interface FlightRow {
 /** Bugungi sana kompaniya vaqt zonasida (Asia/Tashkent), brauzer/UTC zonasida emas. */
 const tashkentToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tashkent' }).format(new Date());
 const mins = (s: number | null) => (s === null ? '—' : `${Math.round(s / 60)} daq`);
-const CURRENCY_LABEL: Record<string, string> = { UZS: 'so‘m', USD: '$' };
-/** "58500000.00" -> "58 500 000" (kasr faqat nolga teng bo‘lmasa ko‘rsatiladi). */
-const fmtAmount = (v: string) => {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return v;
-  return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: Number.isInteger(n) ? 0 : 2 }).format(n);
-};
-const money = (m: Record<string, string>) => (Object.keys(m).length ? Object.entries(m).map(([c, v]) => `${fmtAmount(v)} ${CURRENCY_LABEL[c] ?? c}`).join(' · ') : '—');
 const initials = (name: string) =>
   name
     .replace(/\(.*?\)/g, '')
@@ -87,12 +106,15 @@ export default function DashboardPage() {
   const [to, setTo] = useState(tashkentToday);
   const [source, setSource] = useState('');
   const [bucket, setBucket] = useState('day');
+  const [operator, setOperator] = useState('');
+  const [currency, setCurrency] = useState('');
   const [query, setQuery] = useState('');
-  const q = new URLSearchParams({ from, to, bucket, ...(source ? { source } : {}) });
+  const q = new URLSearchParams({ from, to, bucket, ...(source ? { source } : {}), ...(operator ? { tourOperatorId: operator } : {}), ...(currency ? { currency } : {}) });
   const state = useApi<Dash>(`/api/v1/dashboard?${q}`);
   const notifications = useApi<{ items: Array<{ id: string; readAt: string | null }> }>('/api/v1/notifications');
   const unread = notifications.data?.items.filter((n) => !n.readAt).length ?? 0;
   const flights = useApi<{ items: FlightRow[] }>('/api/v1/flights?limit=5');
+  const operators = useApi<{ items: Array<{ id: string; name: string; status: string }> }>('/api/v1/suppliers?status=all&kind=tour_operator');
 
   return (
     <>
@@ -138,6 +160,27 @@ export default function DashboardPage() {
             ))}
           </select>
         </Field>
+        <Field label="Turoperator">
+          <select value={operator} onChange={(e) => setOperator(e.target.value)}>
+            <option value="">Barchasi</option>
+            {(operators.data?.items ?? []).map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.name}
+                {o.status === 'archived' ? ' (arxiv)' : ''}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Valyuta">
+          <select value={currency} onChange={(e) => setCurrency(e.target.value)}>
+            <option value="">Barchasi</option>
+            {CURRENCIES.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </Field>
         <Field label="Kesim">
           <select value={bucket} onChange={(e) => setBucket(e.target.value)}>
             <option value="day">Kun</option>
@@ -149,6 +192,12 @@ export default function DashboardPage() {
           <a className="btn secondary with-icon" href={`/api/v1/exports/leads.csv?${q}`}>
             <Icon name="download" size={16} />
             CSV eksport
+          </a>
+        )}
+        {canDo(me, 'export') && (
+          <a className="btn secondary with-icon" href={`/api/v1/exports/orders.csv?${q}`}>
+            <Icon name="download" size={16} />
+            Buyurtmalar CSV (foyda)
           </a>
         )}
       </section>
@@ -171,6 +220,8 @@ export default function DashboardPage() {
                 <Stat icon="wallet" label="Sotuv summasi (foyda emas)" value={money(pm.salesByCurrency)} note={`Qabul qilingan to‘lov: ${money(pm.paymentsByCurrency)}`} />
                 <Stat icon="clock" label="Birinchi javob (median / p90)" value={`${mins(fr.medianSeconds)} / ${mins(fr.p90Seconds)}`} note={`Kuzatilgan ${fr.observed}, javobsiz ${fr.unanswered}`} />
               </div>
+
+              <FinanceBlock f={d.finance} />
 
               <div className="dash-grid">
                 <section className="card panel">
@@ -287,6 +338,231 @@ export default function DashboardPage() {
         }}
       </Async>
     </>
+  );
+}
+
+const isNeg = (v: string) => v.startsWith('-');
+
+/** Foyda: tannarxi aniq buyurtma bo'lmasa «Aniqlanmagan» (0 emas); qisman bo'lsa belgi bilan. */
+function ProfitText({ a, c }: { a: Agg; c: string }) {
+  if (!a.profitBasis || a.profitBasis.orders === 0) return <Badge tone="warn">Aniqlanmagan</Badge>;
+  return (
+    <>
+      <b className={a.profitBasis.profit.startsWith('-') ? 'neg' : 'pos'}>{money({ [c]: a.profitBasis.profit })}</b>
+      {a.afterRefund && a.ordersWithRefund > 0 && (
+        <div className="muted">
+          qaytarimdan keyin: <b className={a.afterRefund.profit.startsWith('-') ? 'neg' : 'pos'}>{money({ [c]: a.afterRefund.profit })}</b>
+        </div>
+      )}
+      {a.undetermined && a.undetermined.orders > 0 && <span className="muted" title="Tannarxi kiritilmagan buyurtmalar foydaga kirmaydi"> *</span>}
+    </>
+  );
+}
+const profitCls = (v: string) => (isNeg(v) ? 'neg' : 'pos');
+const sel = (m: Record<string, unknown>) => Object.keys(m);
+
+/** Tasdiqlangan sotuvlar bo'yicha sotuv / tannarx / foyda (valyutalar alohida), kutilayotgan foyda va kesimlar. */
+function FinanceBlock({ f }: { f: FinanceDash }) {
+  const ccys = sel(f.confirmed);
+  const cost = !f.costHidden;
+  const cell = (m: Record<string, Agg>, pick: (a: Agg, c: string) => React.ReactNode) =>
+    sel(m).length ? (
+      sel(m).map((c) => (
+        <div key={c}>{pick(m[c]!, c)}</div>
+      ))
+    ) : (
+      <span className="muted">—</span>
+    );
+  return (
+    <section className="finance-block" aria-label="Moliyaviy ko‘rsatkichlar">
+      <div className="card panel">
+        <header className="card-head">
+          <h2>{cost ? 'Moliya: sotuv, tannarx va foyda' : 'Moliya: sotuv va qaytarimlar'}</h2>
+          <span className="muted">tasdiqlangan sotuvlar · valyutalar alohida</span>
+        </header>
+        <p className="hint">
+          {cost ? (
+            <>
+              <b>Dastlabki foyda = sotuv narxi − tannarx.</b> <b>Qaytarimdan keyingi foyda = (sotuv − mijozga qaytarilgan) − (tannarx − yetkazib beruvchidan qaytgan).</b> {f.rules.confirmed} Qo‘shimcha xarajatlar hisobga olinmagan: bu buxgalteriya bo‘yicha yakuniy «sof foyda» emas.
+            </>
+          ) : (
+            <>{f.rules.confirmed} Tannarx va foydani ko‘rish uchun alohida ruxsat kerak (administrator beradi).</>
+          )}
+        </p>
+        {ccys.length === 0 ? (
+          <div className="state empty">Tanlangan davrda tasdiqlangan (yopilgan) sotuv yo‘q.</div>
+        ) : (
+          ccys.map((c) => {
+            const a = f.confirmed[c]!;
+            const pb = a.profitBasis;
+            return (
+              <div key={c} className="fin-ccy">
+                <h3 className="fin-ccy-title">{c}</h3>
+                <div className="stat-row">
+                  <div className="stat">
+                    <div className="stat-label">Jami sotuv summasi</div>
+                    <div className="stat-value">{fmtAmount(a.sales)} <small>{CURRENCY_LABEL[c] ?? c}</small></div>
+                    <div className="stat-note">barcha tasdiqlangan buyurtmalar</div>
+                  </div>
+                  <div className="stat">
+                    <div className="stat-label">Mijozga qaytarilgan</div>
+                    <div className="stat-value">{fmtAmount(a.customerRefunded)} <small>{CURRENCY_LABEL[c] ?? c}</small></div>
+                    <div className="stat-note">{a.ordersWithRefund} ta buyurtmada qaytarim bor</div>
+                  </div>
+                  {cost && pb && (
+                    <>
+                      <div className="stat">
+                        <div className="stat-label">Jami tannarx</div>
+                        {pb.orders === 0 ? <div className="stat-value">—</div> : <div className="stat-value">{fmtAmount(pb.net)} <small>{CURRENCY_LABEL[c] ?? c}</small></div>}
+                        <div className="stat-note">{pb.orders === 0 ? 'tannarxi ma’lum buyurtma yo‘q' : `tannarxi ma’lum ${pb.orders} ta buyurtma bo‘yicha`}</div>
+                      </div>
+                      <div className="stat">
+                        <div className="stat-label">Dastlabki foyda</div>
+                        {pb.orders === 0 ? (
+                          <div className="stat-value">
+                            <Badge tone="warn">Aniqlanmagan</Badge>
+                          </div>
+                        ) : (
+                          <div className={`stat-value ${profitCls(pb.profit)}`}>{fmtAmount(pb.profit)} <small>{CURRENCY_LABEL[c] ?? c}</small></div>
+                        )}
+                        <div className="stat-note">
+                          {pb.orders === 0 ? 'tannarx kiritilmaguncha hisoblanmaydi' : `sotuv ${fmtAmount(pb.sales)} − tannarx ${fmtAmount(pb.net)}`}
+                          {pb.orders > 0 && pb.marginPercent !== null && ` · marja ${pb.marginPercent.replace('.', ',')}%`}
+                        </div>
+                      </div>
+                      <div className="stat">
+                        <div className="stat-label">Yetkazib beruvchidan qaytgan</div>
+                        <div className="stat-value">{fmtAmount(a.supplierRefunded ?? '0.00')} <small>{CURRENCY_LABEL[c] ?? c}</small></div>
+                        <div className="stat-note">tannarxni qaytarish (mijoz qaytarimidan alohida)</div>
+                      </div>
+                      <div className="stat">
+                        <div className="stat-label">Qaytarimdan keyingi foyda</div>
+                        {pb.orders === 0 || !a.afterRefund ? (
+                          <div className="stat-value">
+                            <Badge tone="warn">Aniqlanmagan</Badge>
+                          </div>
+                        ) : (
+                          <div className={`stat-value ${profitCls(a.afterRefund.profit)}`}>{fmtAmount(a.afterRefund.profit)} <small>{CURRENCY_LABEL[c] ?? c}</small></div>
+                        )}
+                        <div className="stat-note">{a.afterRefund ? `(${fmtAmount(a.afterRefund.sales)}) − (${fmtAmount(a.afterRefund.net)})` : 'tannarx kiritilmaguncha hisoblanmaydi'}</div>
+                      </div>
+                      <div className="stat">
+                        <div className="stat-label">Foyda aniqlanmagan</div>
+                        <div className="stat-value">{a.undetermined?.orders ?? 0} <small>ta buyurtma</small></div>
+                        <div className="stat-note">tannarx kiritilmagan; sotuvi {fmtAmount(a.undetermined?.sales ?? '0.00')} {CURRENCY_LABEL[c] ?? c} — foydaga kirmaydi, 0 deb hisoblanmaydi</div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })
+        )}
+        {f.unpricedOrders > 0 && <p className="hint">Narxi umuman kiritilmagan tasdiqlangan buyurtmalar: {f.unpricedOrders} ta.</p>}
+        {cost && !!f.refundMismatchOrders && <div className="state error">{f.refundMismatchOrders} ta buyurtmada qaytarim valyutasi narx valyutasiga mos emas — ularning qaytarimdan keyingi foydasi hisoblanmadi.</div>}
+        <div className="fin-extra">
+          {cost && (
+            <div>
+              <b>Kutilayotgan foyda</b> <span className="muted">(ochiq buyurtmalar, tasdiqlanmagan)</span>
+              {sel(f.expected).length === 0 ? (
+                <div className="muted">—</div>
+              ) : (
+                sel(f.expected).map((c) => (
+                  <div key={c}>
+                    <b className={profitCls(f.expected[c]!.profit)}>{money({ [c]: f.expected[c]!.profit })}</b> <span className="muted">· {f.expected[c]!.orders} ta buyurtma{f.expected[c]!.undeterminedOrders ? `, ${f.expected[c]!.undeterminedOrders} tasida tannarx yo‘q` : ''}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+          <div>
+            <b>Bekor qilingan buyurtmalar</b> <span className="muted">(jamiga kirmaydi, tarixda saqlanadi)</span>
+            {sel(f.cancelled).length === 0 ? <div className="muted">—</div> : sel(f.cancelled).map((c) => <div key={c}>{money({ [c]: f.cancelled[c]!.sales })} <span className="muted">· {f.cancelled[c]!.orders} ta</span></div>)}
+          </div>
+        </div>
+        <details className="fin-rules">
+          <summary>Hisoblash qoidalari</summary>
+          <ul>
+            {Object.entries(f.rules).map(([k, v]) => (
+              <li key={k}>{v}</li>
+            ))}
+          </ul>
+        </details>
+      </div>
+
+      <div className="dash-grid">
+        <section className="card panel">
+          <header className="card-head">
+            <h2>Turoperatorlar kesimida</h2>
+            <span className="muted">{cost ? 'sotuv va foyda (turoperator — buyurtmaning tarixiy bog‘lanishi)' : 'sotuv'}</span>
+          </header>
+          {f.byOperator.length === 0 ? (
+            <div className="state empty">Ma’lumot yo‘q</div>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Turoperator</th>
+                    <th>Buyurtma</th>
+                    <th>Sotuv</th>
+                    {cost && <th>Foyda</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {f.byOperator.map((r) => (
+                    <tr key={r.operatorId ?? 'none'}>
+                      <td>
+                        <b>{r.name}</b>
+                        {cost && !!r.undeterminedOrders && <div className="muted">foyda aniqlanmagan: {r.undeterminedOrders} ta</div>}
+                      </td>
+                      <td>{r.orders}</td>
+                      <td>{cell(r.currencies, (a, c) => money({ [c]: a.sales }))}</td>
+                      {cost && <td>{cell(r.currencies, (a, c) => <ProfitText a={a} c={c} />)}</td>}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+        <section className="card panel">
+          <header className="card-head">
+            <h2>Menejerlar kesimida</h2>
+            <span className="muted">{cost ? 'sotuv va foyda (yopilish paytidagi mas’ul)' : 'sotuv (yopilish paytidagi mas’ul)'}</span>
+          </header>
+          {f.byManager.length === 0 ? (
+            <div className="state empty">Ma’lumot yo‘q</div>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Menejer</th>
+                    <th>Buyurtma</th>
+                    <th>Sotuv</th>
+                    {cost && <th>Foyda</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {f.byManager.map((r) => (
+                    <tr key={r.userId ?? 'none'}>
+                      <td>
+                        <b>{r.name}</b>
+                        {cost && !!r.undeterminedOrders && <div className="muted">foyda aniqlanmagan: {r.undeterminedOrders} ta</div>}
+                      </td>
+                      <td>{r.orders}</td>
+                      <td>{cell(r.currencies, (a, c) => money({ [c]: a.sales }))}</td>
+                      {cost && <td>{cell(r.currencies, (a, c) => <ProfitText a={a} c={c} />)}</td>}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      </div>
+    </section>
   );
 }
 

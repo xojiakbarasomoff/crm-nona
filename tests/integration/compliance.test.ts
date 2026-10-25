@@ -1,21 +1,37 @@
 import type { INestApplication } from '@nestjs/common';
+import { DateTime } from 'luxon';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Core } from '../../apps/api/src/core';
 import { storeInboxEvent } from '../../apps/api/src/core/queue';
 import { DEMO_STATUS_IDS, type DemoAmoRestClient, type DemoMetaLeadsClient } from '@crm/integrations';
-import { companyId, drain, login, makeApp, makeCore, newLead, sendLeadAds, TestClock, userId, type Session } from './helpers';
+import { WORK_SCHEDULE } from '../../packages/database/src/seed';
+import { companyId, drain, login as loginHelper, makeApp, makeCore, newLead, sendLeadAds, TestClock, userId, type Session } from './helpers';
 
 const clock = new TestClock();
+const login = (a: INestApplication, email: string) => loginHelper(a, email, clock.now().getTime());
+/**
+ * Test vaqti haqiqiy soatga bog'liq emas: kompaniya ish jadvali (seed: Asia/Tashkent, Du–Sha 09:00–19:00, Yakshanba dam)
+ * bo'yicha aniq ttanlangan lahzalar. Navbatchi menejer bor-yo'qligi lid egasini (yoki rahbarga zaxira biriktirishni)
+ * belgilaydi, bu esa bildirishnoma oluvchilar sonini o'zgartiradi — shuning uchun soat qat'iy.
+ */
+const TZ = 'Asia/Tashkent';
+const WORKDAY = DateTime.fromISO('2026-10-20T11:00:00', { zone: TZ }).toJSDate(); // seshanba, ish vaqti (o'tmishda: DB default'lari (lastSeenAt) soatdan keyin bo'lmasligi uchun)
+const SUNDAY = DateTime.fromISO('2026-10-18T11:00:00', { zone: TZ }).toJSDate(); // yakshanba, dam olish kuni
 let core: Core;
 let app: INestApplication;
 const p = () => core.deps.prisma;
 const amo = () => core.deps.adapters.amoRest({ id: '', accountDomain: null, accountId: '' }) as DemoAmoRestClient;
 const EICAR = 'X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*';
 
+beforeEach(() => clock.set(WORKDAY));
+
 beforeAll(async () => {
   core = makeCore({ clock, env: { MAX_UPLOAD_BYTES: String(64 * 1024) } });
   app = await makeApp(core);
+  // Fixture: navbatchilik jadvali aniq (Toshkent, Du–Sha 09–19, Yakshanba dam) — boshqa fayllar qoldirgan holatga tayanmaymiz.
+  await p().managerPoolMember.updateMany({ data: { schedule: WORK_SCHEDULE as never, available: true } });
+  await p().company.update({ where: { id: companyId }, data: { workSchedule: WORK_SCHEDULE as never, timezone: TZ } });
 });
 afterAll(async () => {
   await app.close();
@@ -41,7 +57,7 @@ function upload(s: Session, q: string, body: Buffer, mime: string, name = 'paspo
 
 describe('attachments (TZ §21, AC12 files)', () => {
   it('upload → pending → scan → signed short-lived download; foreign manager gets 404 everywhere', async () => {
-    clock.real();
+    clock.set(WORKDAY);
     const lead = await newLead(app, core);
     const owner = await ownerSession(lead.ownerId!);
     const order = await owner.post('/api/v1/orders', { leadId: lead.id });
@@ -70,9 +86,9 @@ describe('attachments (TZ §21, AC12 files)', () => {
     expect((await other.get(link.body.url)).status).toBe(404); // leaked URL does not work for another user
     expect((await upload(other, q, pdf, 'application/pdf')).status).toBe(404);
 
-    clock.set(new Date(Date.now() + (core.deps.config.downloadUrlTtlSeconds + 5) * 1000));
+    clock.set(new Date(clock.now().getTime() + (core.deps.config.downloadUrlTtlSeconds + 5) * 1000));
     expect((await owner.get(link.body.url)).status).toBe(404); // expired
-    clock.real();
+    clock.set(WORKDAY);
 
     const head = await login(app, 'rahbar@demo.local');
     expect((await head.get(`/api/v1/attachments?${q}`)).body.items).toHaveLength(1);
@@ -95,7 +111,21 @@ describe('attachments (TZ §21, AC12 files)', () => {
     expect(big.body.error.code).toBe('FILE_TOO_LARGE');
   });
 
+  it('infected file on a Sunday: no manager on duty, lead is held by the head — one recipient, still quarantined', async () => {
+    clock.set(SUNDAY);
+    const lead = await newLead(app, core);
+    expect(lead.ownerId).toBe(await userId(core, 'rahbar@demo.local'));
+    const owner = await ownerSession(lead.ownerId!);
+    const up = await upload(owner, `ownerType=lead&ownerId=${lead.id}`, Buffer.from(`%PDF-1.4 ${EICAR}`), 'application/pdf');
+    await core.attachments.scanPending();
+    expect((await p().attachment.findUniqueOrThrow({ where: { id: up.body.id } })).scanState).toBe('infected');
+    expect(await p().notification.count({ where: { kind: 'attachment_infected', dedupeKey: { startsWith: `att_infected:${up.body.id}` } } })).toBe(1); // yuklovchi = rahbar
+  });
+
   it('infected file is quarantined: storage object removed, never downloadable, people notified', async () => {
+    const lead0 = await newLead(app, core);
+    expect(lead0.ownerId).not.toBe(await userId(core, 'rahbar@demo.local')); // ish kuni: menejer egasi
+
     const lead = await newLead(app, core);
     const owner = await ownerSession(lead.ownerId!);
     const up = await upload(owner, `ownerType=lead&ownerId=${lead.id}`, Buffer.from(`%PDF-1.4 ${EICAR}`), 'application/pdf');
@@ -111,10 +141,16 @@ describe('attachments (TZ §21, AC12 files)', () => {
 });
 
 describe('SLA notifications (TZ §10)', () => {
-  it('approaching → manager warning; breached → manager + head, no auto reassignment', async () => {
-    clock.real();
+  it('ish kuni 11:00 (Toshkent): lid menejerga biriktiriladi (rahbarga emas)', async () => {
     const lead = await newLead(app, core);
-    const due = new Date(Date.now() + 60 * 60_000);
+    expect(lead.ownerId).not.toBeNull();
+    expect(lead.ownerId).not.toBe(await userId(core, 'rahbar@demo.local'));
+  });
+
+  it('approaching → manager warning; breached → manager + head, no auto reassignment', async () => {
+    clock.set(WORKDAY);
+    const lead = await newLead(app, core);
+    const due = new Date(clock.now().getTime() + 60 * 60_000);
     await p().lead.update({ where: { id: lead.id }, data: { firstResponseDueAt: due } });
     clock.set(new Date(due.getTime() - 3 * 60_000));
     await core.sla.tick();
@@ -131,18 +167,30 @@ describe('SLA notifications (TZ §10)', () => {
     expect(await p().notification.count({ where: { kind: 'sla_breached', dedupeKey: `sla_breach:${lead.id}:${lead.ownerId}` } })).toBe(1);
     await core.sla.tick();
     expect(await p().notification.count({ where: { kind: 'sla_breached', dedupeKey: { startsWith: `sla_breach:${lead.id}:` } } })).toBe(2); // once each
-    clock.real();
+    clock.set(WORKDAY);
+  });
+
+  it('yakshanba (ish jadvalida dam): navbatchi menejer yo‘q — lid rahbarga biriktiriladi, SLA buzilishida bitta bildirishnoma (egasi = rahbar)', async () => {
+    clock.set(SUNDAY);
+    const lead = await newLead(app, core);
+    const headId = await userId(core, 'rahbar@demo.local');
+    expect(lead.ownerId).toBe(headId); // zaxira biriktirish: ish kuni emas
+    const due = new Date(clock.now().getTime() + 60 * 60_000);
+    await p().lead.update({ where: { id: lead.id }, data: { firstResponseDueAt: due } });
+    clock.set(new Date(due.getTime() + 60_000));
+    await core.sla.tick();
+    expect(await p().notification.count({ where: { kind: 'sla_breached', dedupeKey: { startsWith: `sla_breach:${lead.id}:` } } })).toBe(1);
   });
 
   it('a recorded human action before the deadline prevents the breach', async () => {
-    clock.real();
+    clock.set(WORKDAY);
     const lead = await newLead(app, core);
     const owner = await ownerSession(lead.ownerId!);
     await owner.patch(`/api/v1/leads/${lead.id}`, { version: lead.version, contactOutcome: 'Qo‘ng‘iroq qilindi' });
-    clock.set(new Date(Date.now() + 48 * 3600_000));
+    clock.set(new Date(clock.now().getTime() + 48 * 3600_000));
     await core.sla.tick();
     expect((await p().lead.findUniqueOrThrow({ where: { id: lead.id } })).slaBreachedAt).toBeNull();
-    clock.real();
+    clock.set(WORKDAY);
   });
 });
 
@@ -157,11 +205,11 @@ describe('retention and PII erasure (TZ §21)', () => {
     expect((await head.post('/api/v1/privacy/retention/confirm', { rawWebhookDays: 30, technicalLogDays: 90, messageContentMonths: 12 })).status).toBe(403);
     const conf = await admin.post('/api/v1/privacy/retention/confirm', { rawWebhookDays: 30, technicalLogDays: 90, messageContentMonths: 12 });
     expect(conf.body.policy).toMatchObject({ confirmed: true, rawWebhookDays: 30 });
-    const key = `retention-test-${Date.now()}`;
+    const key = `retention-test-${clock.now().getTime()}`;
     await storeInboxEvent(p(), core.deps.encryptionKey, { provider: 'meta', connectionKey: 'x', companyId, externalEventId: key, eventType: 'leadgen', payload: { secret: 'pii' } });
-    await p().webhookInbox.updateMany({ where: { externalEventId: key }, data: { state: 'done', receivedAt: new Date(Date.now() - 40 * 86400_000) } });
+    await p().webhookInbox.updateMany({ where: { externalEventId: key }, data: { state: 'done', receivedAt: new Date(clock.now().getTime() - 40 * 86400_000) } });
     const conv = await p().conversation.findFirst({ where: { companyId } });
-    if (conv) await p().message.updateMany({ where: { conversationId: conv.id }, data: { createdAt: new Date(Date.now() - 400 * 86400_000) } });
+    if (conv) await p().message.updateMany({ where: { conversationId: conv.id }, data: { createdAt: new Date(clock.now().getTime() - 400 * 86400_000) } });
     const r = await admin.post('/api/v1/privacy/retention/run');
     expect(r.status).toBe(200);
     expect(r.body.webhookPayloadsPurged).toBeGreaterThanOrEqual(1);
@@ -171,7 +219,7 @@ describe('retention and PII erasure (TZ §21)', () => {
   });
 
   it('erasure anonymizes the person, keeps payments, flags provider copies and survives restore', async () => {
-    clock.real();
+    clock.set(WORKDAY);
     const phone = `+99894${Math.floor(1_000_000 + Math.random() * 8_999_999)}`;
     const lead = await newLead(app, core, 'Erase Valiyev', phone);
     const owner = await ownerSession(lead.ownerId!);
@@ -215,7 +263,7 @@ describe('retention and PII erasure (TZ §21)', () => {
 
 describe('amoCRM initial import, reconciliation and daily control (TZ §5.2)', () => {
   it('imports active leads with contacts, resumable and idempotent; closed leads are not imported', async () => {
-    clock.real();
+    clock.set(WORKDAY);
     const aAmo = (await p().user.findUniqueOrThrow({ where: { email: 'menejer.a@demo.local' } })).amoUserId!;
     const created = [];
     for (let i = 0; i < 5; i++) created.push(await amo().simulateNativeCreate({ name: `Native ${i}`, contactName: `Native Mijoz ${i}`, phone: `+99895000000${i}`, statusId: i === 4 ? DEMO_STATUS_IDS.WON! : DEMO_STATUS_IDS.CONTACTED!, responsibleUserId: aAmo, createdAt: new Date('2026-09-01T10:00:00Z') }));
@@ -261,8 +309,8 @@ describe('amoCRM initial import, reconciliation and daily control (TZ §5.2)', (
 
 describe('Lead Ads history re-fetch (TZ §8.3)', () => {
   it('paginates, checkpoints, dedupes with webhook deliveries and reports gaps', async () => {
-    clock.real();
-    const formId = `form_bf_${Date.now()}`;
+    clock.set(WORKDAY);
+    const formId = `form_bf_${clock.now().getTime()}`;
     const company = await p().company.findUniqueOrThrow({ where: { id: companyId } });
     await p().company.update({ where: { id: companyId }, data: { settings: { ...(company.settings as object), leadForms: { [formId]: { instagramOnly: true } } } } });
     const leads = core.deps.adapters.metaLeads as DemoMetaLeadsClient;
@@ -270,14 +318,14 @@ describe('Lead Ads history re-fetch (TZ §8.3)', () => {
     for (let i = 0; i < 5; i++) {
       const id = `bf_${formId}_${i}`;
       ids.push(id);
-      await leads.registerLead({ leadgenId: id, createdTime: new Date(Date.now() - (10 - i) * 3600_000), formId, adId: null, adsetId: null, campaignId: null, platform: null, fields: { full_name: `Backfill ${i}`, phone_number: `+9989600000${i}` } });
+      await leads.registerLead({ leadgenId: id, createdTime: new Date(clock.now().getTime() - (10 - i) * 3600_000), formId, adId: null, adsetId: null, campaignId: null, platform: null, fields: { full_name: `Backfill ${i}`, phone_number: `+9989600000${i}` } });
     }
     // Lead #0 already arrived by webhook.
     const before = await sendLeadAds(app, core, { fullName: 'Backfill 0', phone: '+99896000000', leadgenId: ids[0] });
     expect(before.res.status).toBe(200);
     await drain(core);
 
-    const r = await core.leadAdsBackfill.run(companyId, { since: new Date(Date.now() - 24 * 3600_000), pageSize: 2 });
+    const r = await core.leadAdsBackfill.run(companyId, { since: new Date(clock.now().getTime() - 24 * 3600_000), pageSize: 2 });
     const stat = r.forms.find((f) => f.formId === formId)!;
     expect(stat).toMatchObject({ fetched: 5, newEvents: 4, duplicates: 1, gap: null });
     expect(stat.pages).toBe(3);
@@ -289,7 +337,7 @@ describe('Lead Ads history re-fetch (TZ §8.3)', () => {
     const again = await core.leadAdsBackfill.run(companyId, { pageSize: 2 });
     expect(again.forms.find((f) => f.formId === formId)).toMatchObject({ fetched: 0, newEvents: 0 });
 
-    const old = await core.leadAdsBackfill.run(companyId, { since: new Date(Date.now() - 400 * 86400_000), pageSize: 2 });
+    const old = await core.leadAdsBackfill.run(companyId, { since: new Date(clock.now().getTime() - 400 * 86400_000), pageSize: 2 });
     expect(old.forms.find((f) => f.formId === formId)!.gap).toMatchObject({ reason: 'outside_retrieval_window' });
   });
 

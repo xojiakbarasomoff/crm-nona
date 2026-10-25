@@ -31,7 +31,7 @@ export const CLOSED_STAGES: ReadonlySet<Stage> = new Set(['WON', 'LOST']);
 export const isClosed = (s: Stage) => CLOSED_STAGES.has(s);
 export const isOpen = (s: Stage) => !CLOSED_STAGES.has(s);
 
-export const SERVICE_TYPES = ['avia', 'tour_package', 'hotel', 'visa', 'other'] as const;
+export const SERVICE_TYPES = ['avia', 'tour_package', 'hotel', 'transfer', 'visa', 'other'] as const;
 export type ServiceType = (typeof SERVICE_TYPES)[number];
 
 /** Facts about a lead that transition rules depend on. */

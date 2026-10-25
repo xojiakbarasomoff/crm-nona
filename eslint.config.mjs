@@ -3,7 +3,7 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['**/node_modules/**', '**/dist/**', '**/.next/**', 'playwright-report/**', 'test-results/**', '**/next-env.d.ts'] },
+  { ignores: ['**/node_modules/**', '**/dist/**', '**/.next/**', '**/.next-*/**', 'playwright-report/**', 'test-results/**', '**/next-env.d.ts'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
@@ -26,7 +26,7 @@ export default tseslint.config(
     languageOptions: { globals: { ...globals.browser } },
   },
   {
-    files: ['tests/**/*.ts', '**/*.test.ts', '**/cli/**/*.ts', 'packages/contracts/src/openapi/generate.ts', 'packages/database/src/*seed*.ts'],
+    files: ['tests/**/*.ts', 'scripts/**/*.mjs', '**/*.test.ts', '**/cli/**/*.ts', 'packages/contracts/src/openapi/generate.ts', 'packages/database/src/*seed*.ts'],
     rules: { 'no-console': 'off', '@typescript-eslint/no-explicit-any': 'off' },
   },
 );

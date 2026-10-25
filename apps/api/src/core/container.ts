@@ -20,6 +20,7 @@ import { OrdersService } from './services/orders.service';
 import { ProcessingService } from './services/processing.service';
 import { RemindersService } from './services/reminders.service';
 import { SegmentsService } from './services/segments.service';
+import { SuppliersService } from './services/suppliers.service';
 import { WebhooksService } from './services/webhooks.service';
 
 export interface Core {
@@ -28,6 +29,7 @@ export interface Core {
   leads: LeadsService;
   orders: OrdersService;
   segments: SegmentsService;
+  suppliers: SuppliersService;
   reminders: RemindersService;
   intake: IntakeService;
   processing: ProcessingService;
@@ -66,6 +68,7 @@ export function createCore(config: AppConfig, o: CoreOverrides = {}): Core {
     leads: new LeadsService(deps),
     orders: new OrdersService(deps),
     segments: new SegmentsService(deps),
+    suppliers: new SuppliersService(deps),
     reminders: new RemindersService(deps),
     intake: new IntakeService(deps),
     processing: new ProcessingService(deps),

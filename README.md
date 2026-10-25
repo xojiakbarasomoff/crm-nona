@@ -4,7 +4,7 @@ Instagram Lead Ads va Direct → kontakt/lid → mas’ul menejer → taklif →
 
 > **Holat:** demo rejimida ishlaydigan to‘liq vertikal oqim. Real amoCRM/Meta integratsiyasi live tasdiqlanmagan — `docs/feasibility.md`, `docs/acceptance-matrix.md`, `KNOWN_LIMITATIONS.md`. Production tayyor emas.
 
-Asosiy hujjatlar: `docs/TZ.md` (shartnoma), `docs/implementation-plan.md`, `docs/decisions/`, `docs/integrations.md`, `docs/runbook.md`, `docs/openapi.json`.
+Asosiy hujjatlar: `docs/TZ.md` (shartnoma), `docs/tz-addendum-finance.md` (turoperatorlar, tannarx/foyda, hujjatlar), `docs/user-guide-finance.md` (yo‘riqnoma), `docs/implementation-plan.md`, `docs/decisions/`, `docs/integrations.md`, `docs/runbook.md`, `docs/openapi.json`.
 
 ## Tarkib
 

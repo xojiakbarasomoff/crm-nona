@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Attachment } from '@crm/database';
+import { can } from '@crm/domain';
 import { newObjectKey, safeFileName, signDownload, sniffMime, verifyDownload } from '@crm/integrations';
 import { audit } from '../audit';
 import { systemActor, type CoreDeps, type UserActor } from '../context';
@@ -7,7 +8,11 @@ import { headRecipients, notify } from '../events';
 import { AppError, forbidden, notFound, unprocessable } from '../errors';
 import { assertFound, canEditRecord, leadWhere, orderWhere } from '../scope';
 
-export const ATTACHMENT_OWNER_TYPES = ['order', 'lead', 'offer'] as const;
+export const ATTACHMENT_OWNER_TYPES = ['order', 'lead', 'offer', 'contact', 'passenger'] as const;
+export const DOCUMENT_CATEGORIES = ['passport', 'invoice', 'payment_receipt', 'air_ticket', 'voucher', 'other'] as const;
+export type DocumentCategory = (typeof DOCUMENT_CATEGORIES)[number];
+/** Pasport nusxasi uchun faqat rasm yoki PDF (ofis hujjatlari emas). */
+const PASSPORT_MIMES = new Set(['application/pdf', 'image/png', 'image/jpeg', 'image/webp']);
 export type AttachmentOwnerType = (typeof ATTACHMENT_OWNER_TYPES)[number];
 
 /**
@@ -32,10 +37,24 @@ export class AttachmentsService {
       const l = assertFound(await this.d.prisma.lead.findFirst({ where: leadWhere(actor, { id: offer.leadId }) }), 'Taklif');
       return { ownerUserId: l.ownerId };
     }
+    if (ownerType === 'passenger') {
+      const pax = assertFound(await this.d.prisma.passenger.findFirst({ where: { id: ownerId, companyId: actor.companyId } }), 'Yo‘lovchi');
+      const o = assertFound(await this.d.prisma.order.findFirst({ where: orderWhere(actor, { id: pax.orderId }) }), 'Yo‘lovchi');
+      return { ownerUserId: o.ownerId };
+    }
+    if (ownerType === 'contact') {
+      // Menejer mijozni faqat o'z lidi orqali ko'radi (AdminService.getContact bilan bir xil qoida).
+      const c = assertFound(await this.d.prisma.contact.findFirst({ where: { id: ownerId, companyId: actor.companyId, deletedAt: null } }), 'Mijoz');
+      if (can(actor.role, 'records.view_all')) return { ownerUserId: c.ownerId };
+      const mine = await this.d.prisma.lead.findFirst({ where: { companyId: actor.companyId, contactId: ownerId, ownerId: actor.id, deletedAt: null }, select: { id: true } });
+      assertFound(mine, 'Mijoz');
+      return { ownerUserId: actor.id };
+    }
     throw notFound();
   }
 
-  async upload(actor: UserActor, p: { ownerType: string; ownerId: string; fileName: string; declaredMime: string; data: Buffer }) {
+  async upload(actor: UserActor, p: { ownerType: string; ownerId: string; fileName: string; declaredMime: string; data: Buffer; category?: DocumentCategory }) {
+    const category: DocumentCategory = p.category ?? 'other';
     const { ownerUserId } = await this.owner(actor, p.ownerType, p.ownerId);
     if (!canEditRecord(actor, ownerUserId)) throw forbidden();
     if (!p.data.length) throw unprocessable('EMPTY_FILE', 'Fayl bo‘sh');
@@ -47,6 +66,9 @@ export class AttachmentsService {
     if (p.declaredMime.split(';')[0]!.trim().toLowerCase() !== sniffed) {
       throw unprocessable('MIME_MISMATCH', 'Fayl mazmuni e’lon qilingan turga mos emas', { contentType: `sniffed:${sniffed}` });
     }
+    if (category === 'passport' && !PASSPORT_MIMES.has(sniffed)) {
+      throw unprocessable('UNSUPPORTED_FILE_TYPE', 'Pasport nusxasi faqat PDF yoki rasm (PNG, JPEG, WEBP) bo‘lishi mumkin', { category: 'passport_requires_image_or_pdf' });
+    }
     const objectKey = newObjectKey();
     await this.d.adapters.storage.put(objectKey, p.data);
     try {
@@ -56,6 +78,7 @@ export class AttachmentsService {
             companyId: actor.companyId,
             ownerType: p.ownerType,
             ownerId: p.ownerId,
+            category,
             objectKey,
             fileName: safeFileName(p.fileName),
             mime: sniffed,
@@ -65,7 +88,7 @@ export class AttachmentsService {
             uploadedById: actor.id,
           },
         });
-        await audit(tx, actor, { entityType: p.ownerType, entityId: p.ownerId, action: 'attachment_uploaded', newValue: { attachmentId: a.id, mime: sniffed, size: a.size } });
+        await audit(tx, actor, { entityType: p.ownerType, entityId: p.ownerId, action: 'attachment_uploaded', newValue: { attachmentId: a.id, category, mime: sniffed, size: a.size } });
         return a;
       });
       return serializeAttachment(row);
@@ -75,10 +98,38 @@ export class AttachmentsService {
     }
   }
 
-  async list(actor: UserActor, ownerType: string, ownerId: string) {
+  async list(actor: UserActor, ownerType: string, ownerId: string, opts: { related?: boolean } = {}) {
     await this.owner(actor, ownerType, ownerId);
+    if (opts.related && ownerType === 'order') return this.listForOrder(actor, ownerId);
     const rows = await this.d.prisma.attachment.findMany({ where: { companyId: actor.companyId, ownerType, ownerId, deletedAt: null }, orderBy: { createdAt: 'desc' } });
-    return rows.map(serializeAttachment);
+    return rows.map((r) => serializeAttachment(r));
+  }
+
+  /** Buyurtma kartasi: buyurtma, uning yo'lovchilari va mijoz hujjatlari — bitta ro'yxatda, egasi bilan. */
+  private async listForOrder(actor: UserActor, orderId: string) {
+    const order = assertFound(await this.d.prisma.order.findFirst({ where: orderWhere(actor, { id: orderId }) }), 'Buyurtma');
+    const pax = await this.d.prisma.passenger.findMany({ where: { companyId: actor.companyId, orderId }, select: { id: true, fullName: true } });
+    const contact = await this.d.prisma.contact.findFirst({ where: { id: order.contactId, companyId: actor.companyId }, select: { id: true, fullName: true } });
+    const labels = new Map<string, string>([[`order:${orderId}`, `Buyurtma ${order.orderNo}`], ...pax.map((x) => [`passenger:${x.id}`, `Yo'lovchi: ${x.fullName}`] as [string, string]), ...(contact ? [[`contact:${contact.id}`, `Mijoz: ${contact.fullName ?? '—'}`] as [string, string]] : [])]);
+    const rows = await this.d.prisma.attachment.findMany({
+      where: {
+        companyId: actor.companyId,
+        deletedAt: null,
+        OR: [{ ownerType: 'order', ownerId: orderId }, ...(pax.length ? [{ ownerType: 'passenger', ownerId: { in: pax.map((x) => x.id) } }] : []), ...(contact ? [{ ownerType: 'contact', ownerId: contact.id }] : [])],
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map((r) => serializeAttachment(r, labels.get(`${r.ownerType}:${r.ownerId}`)));
+  }
+
+  /** Kategoriyani o'zgartirish (noto'g'ri tanlangan bo'lsa). Passportga o'tkazishda fayl turi tekshiriladi. */
+  async setCategory(actor: UserActor, id: string, category: DocumentCategory) {
+    const { a, owner } = await this.loadVisible(actor, id);
+    if (!canEditRecord(actor, owner.ownerUserId)) throw forbidden();
+    if (category === 'passport' && !PASSPORT_MIMES.has(a.mime)) throw unprocessable('UNSUPPORTED_FILE_TYPE', 'Pasport nusxasi faqat PDF yoki rasm bo‘lishi mumkin', { category: 'passport_requires_image_or_pdf' });
+    const row = await this.d.prisma.attachment.update({ where: { id }, data: { category } });
+    await audit(this.d.prisma, actor, { entityType: a.ownerType, entityId: a.ownerId, action: 'attachment_recategorized', oldValue: { attachmentId: id, category: a.category }, newValue: { category } });
+    return serializeAttachment(row);
   }
 
   private async loadVisible(actor: UserActor, id: string) {
@@ -105,7 +156,7 @@ export class AttachmentsService {
     const { a } = await this.loadVisible(actor, id);
     if (a.scanState !== 'clean') throw notFound('Fayl');
     const data = await this.d.adapters.storage.get(a.objectKey);
-    await audit(this.d.prisma, actor, { entityType: a.ownerType, entityId: a.ownerId, action: 'attachment_downloaded', newValue: { attachmentId: a.id } });
+    await audit(this.d.prisma, actor, { entityType: a.ownerType, entityId: a.ownerId, action: 'attachment_downloaded', newValue: { attachmentId: a.id, category: a.category } });
     return { data, mime: a.mime, fileName: a.fileName };
   }
 
@@ -114,7 +165,7 @@ export class AttachmentsService {
     if (!canEditRecord(actor, owner.ownerUserId)) throw forbidden();
     await this.d.prisma.attachment.update({ where: { id }, data: { deletedAt: this.d.clock.now() } });
     await this.d.adapters.storage.delete(a.objectKey);
-    await audit(this.d.prisma, actor, { entityType: a.ownerType, entityId: a.ownerId, action: 'attachment_deleted', oldValue: { attachmentId: a.id, fileName: a.fileName } });
+    await audit(this.d.prisma, actor, { entityType: a.ownerType, entityId: a.ownerId, action: 'attachment_deleted', oldValue: { attachmentId: a.id, category: a.category, ...(a.category === 'passport' ? {} : { fileName: a.fileName }) } });
   }
 
   /** Worker: scans pending files; infected files are removed from storage and quarantined. */
@@ -148,6 +199,6 @@ export class AttachmentsService {
   }
 }
 
-export function serializeAttachment(a: Attachment) {
-  return { id: a.id, ownerType: a.ownerType, ownerId: a.ownerId, fileName: a.fileName, mime: a.mime, size: a.size, scanState: a.scanState, createdAt: a.createdAt, uploadedById: a.uploadedById };
+export function serializeAttachment(a: Attachment, ownerLabel?: string) {
+  return { id: a.id, ownerType: a.ownerType, ownerId: a.ownerId, ownerLabel: ownerLabel ?? null, category: a.category, fileName: a.fileName, mime: a.mime, size: a.size, scanState: a.scanState, createdAt: a.createdAt, uploadedById: a.uploadedById };
 }

@@ -68,6 +68,28 @@ Test to‘plamlari (2026-10-24, Node 22.23.4, Prisma 7.10.1): unit + contract **
 | Webhook 10 ev/s × 15 daq (§22.1) | ✅ | demo provayderlar | PG/Redis ✅ lokal, ikki marta (`webhook-15min.md`, `webhook-15min-v2.md`) · ajratilgan muhit ⛔ |
 | Dependency xavfsizligi (§4.2) | ✅ | — | `npm audit` 0 (ADR 0005) |
 
+## Moliya, turoperatorlar va hujjatlar (`docs/tz-addendum-finance.md`)
+
+| ID | Ssenariy | Kod | Mock bilan sinalgan | Haqiqiy xizmatda sinalgan |
+| --- | --- | --- | --- | --- |
+| AC37 | 1 200 sotuv, 1 000 tannarx → 200 foyda; karta = dashboard | ✅ | — | unit `finance.test.ts` · PG/Redis ✅ `finance.test.ts` · Chrome ✅ E2E `finance` |
+| AC38 | Manfiy foyda | ✅ | — | unit + PG ✅ |
+| AC39 | Tannarxi noma’lum eski buyurtma: «aniqlanmagan», 0 emas, dashboard soni | ✅ | — | unit + PG ✅ |
+| AC40 | Turli valyutalar kurssiz qo‘shilmaydi; valyuta filtri | ✅ | — | unit + PG ✅ |
+| AC41 | Paket va xizmatlar ikki marta sanalmaydi | ✅ | — | unit + PG ✅ · Chrome ✅ |
+| AC42 | Bekor qilish va qaytarim qoidalari | ✅ | — | unit + PG ✅ |
+| AC43 | Boshqa menejerning hujjatini ochishga urinish | ✅ | — | PG ✅ (ro‘yxat, havola, yuklash, kategoriya, o‘chirish, yuklash → 404) |
+| AC44 | Karta qiymatlari dashboard’da mos | ✅ | — | PG ✅ · Chrome ✅ |
+| AC45 | Turoperator ma’lumotnomasi: huquq, arxiv, noyoblik, eski narxlar o‘zgarmaydi | ✅ | — | PG ✅ |
+| AC46 | Menejer/rahbar doirasi, eksport huquqi | ✅ | — | PG ✅ |
+| AC47 | Hujjat kategoriyalari, bog‘lash, pasport cheklovi, auditda fayl nomi yo‘q | ✅ | builtin skaner | PG ✅ · haqiqiy ClamAV/S3 bilan kategoriya oqimi alohida sinalmagan |
+| AC48 | Tannarx/foyda amoCRM’ga chiqmaydi | ✅ | ✅ demo amoCRM | PG ✅ · amoCRM ⛔ (credential yo‘q) |
+| AC49 | Buyurtma operatori buyurtma paytidagi nusxa (eski buyurtmalarda — tasdiqlanmagan backfill, `KNOWN_LIMITATIONS.md`); lid o‘zgarsa eski statistika o‘zgarmaydi; buyurtma operatorini o‘zgartirish sabab va audit bilan | ✅ | — | PG ✅ (`finance.test.ts`: turoperator — tarixiy bog‘lanish) |
+| AC50 | Dastlabki va qaytarimdan keyingi foyda; mijoz va yetkazib beruvchi qaytarimlari alohida; valyuta tekshiruvi | ✅ (domain 29) | — | PG ✅ (`qaytarim: dastlabki foyda…`) |
+| AC51 | `finance.cost.view` huquqi: backend, dashboard, eksport; administrator menejerga yoqadi | ✅ | — | PG ✅ (`tannarx va foydani ko‘rish huquqi`) |
+| AC52 | Migratsiya eski sxemadagi ma’lumotni saqlaydi (vaqtinchalik baza) | — | — | PG ✅ (`npm run test:migration`, 9 tekshiruv) |
+| AC53 | Sun’iy demo ma’lumot Railway/production bazasiga avtomatik qo‘shilmaydi; alohida demo muhit | — | — | ✅ (migratsiya testi: seed/migratsiya turoperator va narx yaratmaydi; `scripts/demo-env` faqat lokal) |
+
 ## Unumdorlik (TZ §22.1)
 
 Dataset: 20 xodim, 50 000 kontakt, 100 000 lid, 1 020 490 xabar, 10 000 segment. Windows 11 noutbuk (12 CPU) + Docker Desktop — ajratilgan 4 vCPU/8 GB emas. `127.0.0.1` orqali, isinishdan keyin.

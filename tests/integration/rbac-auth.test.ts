@@ -23,12 +23,17 @@ afterAll(async () => {
 });
 
 async function leadOwnedBy(email: string) {
+  // Round-robin ish vaqtiga bog'liq (menejerlar faqat 09:00–19:00 da navbatga olinadi), shuning uchun
+  // lid rahbar tomonidan kerakli menejerga biriktiriladi: haqiqiy oqim, soatdan mustaqil.
   const owner = await userId(core, email);
-  for (let i = 0; i < 6; i++) {
-    const lead = await newLead(app, core);
-    if (lead.ownerId === owner) return lead;
-  }
-  throw new Error('round robin did not reach owner');
+  const lead = await newLead(app, core);
+  if (lead.ownerId === owner) return lead;
+  const r = await head.patch(`/api/v1/leads/${lead.id}/assignee`, { userId: owner, reason: 'test' });
+  expect(r.status).toBe(202);
+  await drain(core);
+  const fresh = await core.deps.prisma.lead.findUniqueOrThrow({ where: { id: lead.id } });
+  expect(fresh.ownerId).toBe(owner);
+  return fresh;
 }
 
 describe('authentication', () => {

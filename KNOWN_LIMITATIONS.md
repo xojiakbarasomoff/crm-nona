@@ -26,6 +26,21 @@ Holat: 2026-10-24. Tizim **production tayyor emas** — quyidagi bloklar tashqi 
 - Telefon raqami uchun standart mamlakat qoidasi (`phoneRule.confirmed=false`), ish jadvali, SLA, sticky owner, navbatchi — hozir seed qiymatlari; sozlamalar UI’si yo‘q.
 - Hosting hududi va Meta/amoCRM’ga uzatiladigan shaxsiy ma’lumotlar doirasi.
 
+## 3a. Moliya va hujjatlar (2026-10-25, `docs/tz-addendum-finance.md`)
+
+- **Foyda = sotuv − tannarx** (mijoz talabi, v1). Komissiya, soliq, bank to‘lovlari va valyuta farqi hisobga olinmaydi: bu buxgalteriya «sof foydasi» emas. Interfeys buni aytadi.
+- **Valyuta kursi yo‘q:** bir nechta valyuta bo‘yicha yagona jami hisoblanmaydi; har valyuta alohida. Kurs manbai va sana qoidasi (TZ §12.3) tasdiqlanmaguncha konvertatsiya qo‘shilmaydi.
+- **Turoperator kesimi buyurtma darajasida (2026-10-25 dan):** turoperator buyurtma yaratilganda lidnikidan nusxalanadi va buyurtmada qoladi; lid keyin o‘zgarsa ham eski sotuvlar statistikasi o‘zgarmaydi (qarang: operator kelib chiqishi). Xizmat qatoridagi yetkazib beruvchilar kesimi dashboard’da hali yo‘q (har qatorda saqlanadi va eksport/API orqali olinadi).
+- **Menejer o‘z buyurtmalarida tannarx va foydani ko‘radi.** Tannarxni menejerdan yashirish kerak bo‘lsa, alohida capability qo‘shiladi (qaror kerak).
+- **Kutilayotgan foyda** faqat ochiq buyurtmalardan (tannarxi ma’lumlari); takliflar (`offers`) tannarx saqlamaydi.
+- Olib tashlangan xizmat qatorini tiklash interfeysi yo‘q (qator bazada va auditda saqlanadi).
+- Hujjatlar: pasport fayllari uchun storage darajasida shifrlash (S3 SSE) provayderda sozlanmagan/sinalmagan; EXIF/OCR tekshiruvi yo‘q; haqiqiy ClamAV bilan kategoriya oqimi alohida sinalmagan (mavjud `services` testlari fayl oqimini sinaydi).
+- **Test beqarorligi (eski, mazkur ishga aloqasiz):** `rbac-auth` dagi 2 ta integratsiya testi haqiqiy soatga bog‘liq: menejerlar faqat 09:00–19:00 (Asia/Tashkent) da navbatga olinadi, shu oraliqdan tashqarida yiqiladi (tuzatish: testda soatni qotirish).
+
+- **Operator kelib chiqishi — tasdiqlanmagan qiymatlar:** `orders.tour_operator_id` migratsiyadan (2026-10-25) **oldin** yaratilgan buyurtmalarda tarixiy tasdiqlangan qiymat emas. U migratsiya paytida lidning o‘sha kundagi `leads.tour_operator_id` qiymatidan bir marta **tiklangan**. Lid operatori maydoni ham shu kuni (oldingi migratsiya) paydo bo‘lgan, ya’ni undan oldin hech bir buyurtma uchun operator saqlanmagan edi; backfill qiymati — foydalanuvchining o‘sha oraliqda lid kartasida tanlagani (agar tanlagan bo‘lsa). Operator tanlanmagan eski buyurtmalarda `NULL` (dashboard’da «Ko‘rsatilmagan»). Faqat migratsiyadan **keyin** yaratilgan buyurtmalarning operatori buyurtma paytidagi nusxa, o‘zgartirishlari esa sabab va audit bilan. Backfill qilingan va qo‘lda yig‘ilgan qiymatlar bazada hozircha farqlanmaydi (alohida belgi ustuni yo‘q). Kerak bo‘lsa, eski buyurtmalar operatorini rahbar tekshirib, buyurtma kartasida sabab bilan tasdiqlashi kerak.
+- **Qaytarimdan keyingi foyda** qo‘shimcha xarajatlarsiz hisoblanadi (sof foyda emas); yetkazib beruvchi qaytarimi qo‘lda qayd etiladi — tizim uni turoperator hisobidan avtomatik tekshirmaydi.
+- **Railway’dagi sun’iy demo yozuvlar:** Railway demo bazasida avvalgi bosqichda skript bilan yaratilgan sun’iy lidlar (16), kontaktlar (16), buyurtmalar (5) va to‘lovlar bor; turoperator/tannarx yozuvlari **yo‘q** (u yerda feature kodi hali deploy qilinmagan). Ro‘yxat (ID, dalil, bog‘langan yozuvlar): `docs/railway-demo-records-inventory.md`. Hozircha o‘chirilmagan; endi avtomatik qo‘shilmaydi.
+
 ## 4. Ma’lum texnik cheklovlar
 
 - Audit yozuvlari o‘zgarmas: PII o‘chirishda audit `old/new` qiymatlaridagi shaxsiy ma’lumot qoladi (siyosat bo‘yicha saqlanadi).

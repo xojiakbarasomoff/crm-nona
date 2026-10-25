@@ -7,19 +7,24 @@ import {
   companyDateRangeToUtc,
   firstResponseStats,
   formatMoney,
+  marginPercent,
   percent,
   sha256Hex,
   stableStringify,
+  summarizeFinance,
   sumByCurrency,
   wonInPeriod,
   workingMinutesBetween,
   type Bucket,
+  type FinanceOrderInput,
   type LeadFact,
+  type MoneyAgg,
   type WeeklySchedule,
 } from '@crm/domain';
 import { audit } from '../audit';
 import type { CoreDeps, UserActor } from '../context';
-import { requireCap } from '../scope';
+import { canCost, requireCap } from '../scope';
+import { loadRefunds, orderFinance } from './orders.service';
 
 export interface DashboardFilters {
   from: string;
@@ -30,6 +35,10 @@ export interface DashboardFilters {
   stage?: Stage;
   departureFrom?: string;
   departureTo?: string;
+  /** Turoperator (lidga biriktirilgan yetkazib beruvchi). */
+  tourOperatorId?: string;
+  /** Faqat shu valyutadagi summalar. */
+  currency?: string;
   bucket: Bucket;
 }
 
@@ -59,6 +68,7 @@ export class DashboardService {
       ...(f.source ? { firstSource: f.source } : {}),
       ...(f.serviceType ? { serviceType: f.serviceType } : {}),
       ...(f.stage ? { stage: f.stage } : {}),
+      ...(f.tourOperatorId ? { tourOperatorId: f.tourOperatorId } : {}),
     };
   }
 
@@ -70,6 +80,7 @@ export class DashboardService {
     if (f.source) parts.push(Prisma.sql`l.first_source = ${f.source}::"Channel"`);
     if (f.serviceType) parts.push(Prisma.sql`l.service_type = ${f.serviceType}`);
     if (f.stage) parts.push(Prisma.sql`l.stage = ${f.stage}::"Stage"`);
+    if (f.tourOperatorId) parts.push(Prisma.sql`l.tour_operator_id = ${f.tourOperatorId}::uuid`);
     if (departure) {
       parts.push(Prisma.sql`EXISTS (SELECT 1 FROM orders o JOIN flight_segments s ON s.order_id = o.id WHERE o.lead_id = l.id AND s.active AND s.departure_at_utc >= ${departure.start} AND s.departure_at_utc < ${departure.end})`);
     }
@@ -78,7 +89,7 @@ export class DashboardService {
 
   /** Short Redis cache per scope+filters; the payload carries generatedAt so staleness is visible. */
   async compute(actor: UserActor, f: DashboardFilters) {
-    const scopeKey = can(actor.role, 'dashboard.company') ? 'company' : `user:${actor.id}`;
+    const scopeKey = `${can(actor.role, 'dashboard.company') ? 'company' : `user:${actor.id}`}:cost${canCost(actor) ? 1 : 0}`;
     const key = `dash:${actor.companyId}:${scopeKey}:${sha256Hex(stableStringify(f))}`;
     const cached = await this.d.redis.get(key).catch(() => null);
     if (cached) return JSON.parse(cached) as Awaited<ReturnType<DashboardService['computeFresh']>>;
@@ -105,9 +116,9 @@ export class DashboardService {
     const q = <T>(sql: Prisma.Sql) => this.d.prisma.$queryRaw<T[]>(sql);
 
     // Leads relevant for the period: created, closed or first won in the period.
-    const leads = await q<{ id: string; createdAt: Date; stage: string; firstWonAt: Date | null; firstSource: string; firstHumanActionAt: Date | null; ownerId: string | null }>(Prisma.sql`
+    const leads = await q<{ id: string; createdAt: Date; stage: string; firstWonAt: Date | null; firstSource: string; firstHumanActionAt: Date | null; ownerId: string | null; tourOperatorId: string | null }>(Prisma.sql`
       SELECT l.id, l.created_at AS "createdAt", l.stage::text AS stage, l.first_won_at AS "firstWonAt", l.first_source::text AS "firstSource",
-             l.first_human_action_at AS "firstHumanActionAt", l.owner_id AS "ownerId"
+             l.first_human_action_at AS "firstHumanActionAt", l.owner_id AS "ownerId", l.tour_operator_id AS "tourOperatorId"
       FROM leads l
       WHERE ${where} AND ((l.created_at >= ${start} AND l.created_at < ${end}) OR (l.closed_at >= ${start} AND l.closed_at < ${end}) OR (l.first_won_at >= ${start} AND l.first_won_at < ${end}))`);
     const leadIds = leads.map((l) => l.id);
@@ -141,7 +152,7 @@ export class DashboardService {
     const companyWide = can(actor.role, 'dashboard.company') && !f.ownerId && !f.serviceType && !f.stage && !departure;
 
     const wonIds = leads.filter((l) => inRange(l.firstWonAt)).map((l) => l.id);
-    const [inquiryRows, inProgress, awaitingRows, cancelledOrders, wonOrders, paymentRows, convs, ownerEvents] = await Promise.all([
+    const [inquiryRows, inProgress, awaitingRows, cancelledOrders, paymentRows, convs, ownerEvents] = await Promise.all([
       companyWide
         ? q<{ n: bigint }>(Prisma.sql`SELECT count(*)::bigint AS n FROM inquiries i WHERE i.company_id = ${actor.companyId}::uuid AND i.received_at >= ${start} AND i.received_at < ${end} ${f.source ? Prisma.sql`AND i.channel = ${f.source}::"Channel"` : Prisma.empty}`)
         : q<{ n: bigint }>(Prisma.sql`SELECT count(*)::bigint AS n FROM inquiries i JOIN leads l ON l.id = i.lead_id WHERE ${where} AND i.received_at >= ${start} AND i.received_at < ${end} ${f.source ? Prisma.sql`AND i.channel = ${f.source}::"Channel"` : Prisma.empty}`),
@@ -150,9 +161,6 @@ export class DashboardService {
         SELECT count(*)::bigint AS n FROM conversations c JOIN leads l ON l.id = c.lead_id
         WHERE ${where} AND l.stage NOT IN ('WON', 'LOST') AND c.last_inbound_at IS NOT NULL AND (c.last_human_reply_at IS NULL OR c.last_human_reply_at < c.last_inbound_at)`),
       q<{ n: bigint }>(Prisma.sql`SELECT count(*)::bigint AS n FROM orders o JOIN leads l ON l.id = o.lead_id WHERE ${where} AND o.fulfillment_state = 'cancelled' AND o.cancelled_at >= ${start} AND o.cancelled_at < ${end}`),
-      wonIds.length
-        ? this.d.prisma.order.findMany({ where: { companyId: actor.companyId, leadId: { in: wonIds }, fulfillmentState: { not: 'cancelled' }, agreedAmountMinor: { not: null } }, select: { agreedAmountMinor: true, currency: true, ownerId: true, leadId: true } })
-        : Promise.resolve([]),
       q<{ kind: string; currency: string; total: bigint }>(Prisma.sql`
         SELECT p.kind, p.currency, sum(p.amount_minor)::bigint AS total FROM payments p JOIN orders o ON o.id = p.order_id JOIN leads l ON l.id = o.lead_id
         WHERE ${where} AND p.status = 'confirmed' AND p.received_at >= ${start} AND p.received_at < ${end} GROUP BY p.kind, p.currency`),
@@ -166,8 +174,7 @@ export class DashboardService {
     const inquiries = Number(inquiryRows[0]?.n ?? 0);
     const awaiting = [{ n: awaitingRows[0]?.n ?? 0n }];
     const lostCount = new Set(closeEvents.filter((e) => e.newStage === 'LOST' && inRange(e.effectiveAt) && leadById.get(e.leadId)?.stage === 'LOST').map((e) => e.leadId)).size;
-    const salesByCurrency = sumByCurrency(wonOrders.filter((o) => o.currency).map((o) => ({ amountMinor: o.agreedAmountMinor!, currency: o.currency! })));
-    const payments = paymentRows.map((r) => ({ kind: r.kind, amountMinor: BigInt(r.total), currency: r.currency }));
+    const payments = paymentRows.filter((r) => !f.currency || r.currency === f.currency).map((r) => ({ kind: r.kind, amountMinor: BigInt(r.total), currency: r.currency }));
     const ownerEventsByLead = new Map<string, Array<{ newOwnerId: string | null; effectiveAt: Date }>>();
     for (const e of ownerEvents) ownerEventsByLead.set(e.leadId, [...(ownerEventsByLead.get(e.leadId) ?? []), e]);
     const fr = firstResponseStats(convs.map((c) => ({ firstInboundAt: c.firstInboundAt, firstHumanReplyAt: c.firstHumanReplyAt })));
@@ -181,14 +188,110 @@ export class DashboardService {
       for (const e of ownerEventsByLead.get(leadId) ?? []) if (e.effectiveAt <= at) owner = e.newOwnerId;
       return owner;
     };
+
+    // ---- Moliya (tannarx / sotuv / foyda). Qoidalar: docs/tz-addendum-finance.md ----
+    // confirmed: davrda birinchi marta WON bo'lgan lidlarning bekor qilinmagan buyurtmalari (qaytarimlari bo'lsa ham).
+    // open: hali yopilmagan lidlarning bekor qilinmagan buyurtmalari (kutilayotgan foyda, davrga bog'lanmagan snapshot).
+    // cancelled: davrda bekor qilingan buyurtmalar (tarixiy summa saqlanadi, jami sotuvga kirmaydi).
+    // Turoperator — BUYURTMANING tarixiy bog'lanishi (lid keyin o'zgarsa ham statistika o'zgarmaydi), shuning uchun
+    // turoperator filtri bu yerda lidga emas, buyurtmaga qo'llanadi.
+    const cost = canCost(actor);
+    const noOp = { ...f, tourOperatorId: undefined };
+    const scopeNoOp = this.leadScope(actor, noOp);
+    if (departure) scopeNoOp.orders = { some: { segments: { some: { active: true, departureAtUtc: { gte: departure.start, lt: departure.end } } } } };
+    const whereNoOp = this.scopeSql(actor, noOp, departure);
+    const finLeads = await q<{ id: string; firstWonAt: Date; ownerId: string | null }>(Prisma.sql`
+      SELECT l.id, l.first_won_at AS "firstWonAt", l.owner_id AS "ownerId" FROM leads l
+      WHERE ${whereNoOp} AND l.first_won_at >= ${start} AND l.first_won_at < ${end}`);
+    const finLeadById = new Map(finLeads.map((l) => [l.id, l]));
+    const orderOp = f.tourOperatorId ? { tourOperatorId: f.tourOperatorId } : {};
+    const svcInclude = { services: { where: { removedAt: null } } } as const;
+    const [wonOrders, cancelledRows, openRows, finOwnerEvents] = await Promise.all([
+      finLeads.length ? this.d.prisma.order.findMany({ where: { companyId: actor.companyId, leadId: { in: finLeads.map((l) => l.id) }, fulfillmentState: { not: 'cancelled' }, ...orderOp }, include: svcInclude }) : Promise.resolve([]),
+      this.d.prisma.order.findMany({ where: { companyId: actor.companyId, fulfillmentState: 'cancelled', cancelledAt: { gte: start, lt: end }, lead: scopeNoOp, ...orderOp }, include: svcInclude }),
+      this.d.prisma.order.findMany({ where: { companyId: actor.companyId, fulfillmentState: { not: 'cancelled' }, lead: { AND: [scopeNoOp, { stage: { notIn: ['WON', 'LOST'] } }] }, ...orderOp }, include: svcInclude }),
+      finLeads.length ? this.d.prisma.leadEvent.findMany({ where: { companyId: actor.companyId, leadId: { in: finLeads.map((l) => l.id) }, newOwnerId: { not: null } }, select: { leadId: true, newOwnerId: true, effectiveAt: true }, orderBy: { effectiveAt: 'asc' } }) : Promise.resolve([]),
+    ]);
+    const finOwnerByLead = new Map<string, Array<{ newOwnerId: string | null; effectiveAt: Date }>>();
+    for (const e of finOwnerEvents) finOwnerByLead.set(e.leadId, [...(finOwnerByLead.get(e.leadId) ?? []), e]);
+    const finOwnerAt = (leadId: string, at: Date) => {
+      let owner: string | null = null;
+      for (const e of finOwnerByLead.get(leadId) ?? []) if (e.effectiveAt <= at) owner = e.newOwnerId;
+      return owner;
+    };
+    const refundMap = await loadRefunds(this.d.prisma, actor.companyId, wonOrders.map((o) => o.id));
+    const financeInputs: FinanceOrderInput[] = [];
+    for (const o of wonOrders) {
+      const fl = finLeadById.get(o.leadId);
+      financeInputs.push({
+        orderId: o.id,
+        bucket: 'confirmed',
+        finance: orderFinance(o, o.services, refundMap.get(o.id)?.refunds ?? {}),
+        managerId: (fl ? finOwnerAt(o.leadId, fl.firstWonAt) : null) ?? fl?.ownerId ?? o.ownerId,
+        operatorId: o.tourOperatorId,
+      });
+    }
+    for (const o of cancelledRows) financeInputs.push({ orderId: o.id, bucket: 'cancelled', finance: orderFinance(o, o.services), managerId: o.ownerId, operatorId: o.tourOperatorId });
+    for (const o of openRows) financeInputs.push({ orderId: o.id, bucket: 'open', finance: orderFinance(o, o.services), managerId: o.ownerId, operatorId: o.tourOperatorId });
+    const finance = summarizeFinance(financeInputs, f.currency ? { currency: f.currency } : {});
+    const salesByCurrency = Object.fromEntries(Object.entries(finance.confirmed).map(([c, a]) => [c, a.sales]));
+    const operatorNames = new Map(
+      (await this.d.prisma.supplier.findMany({ where: { companyId: actor.companyId, id: { in: finance.byOperator.map((r) => r.operatorId).filter((x): x is string => !!x) } }, select: { id: true, name: true } })).map((x) => [x.id, x.name]),
+    );
+    const aggOut = (a: MoneyAgg, c: string) => {
+      const mon = (x: bigint) => formatMoney({ amountMinor: x, currency: c });
+      const base = { sales: mon(a.sales), customerRefunded: mon(a.customerRefunded), ordersWithRefund: a.ordersWithRefund };
+      if (!cost) return base; // tannarx, foyda va yetkazib beruvchi qaytarimlari huquqsiz foydalanuvchiga chiqmaydi
+      return {
+        ...base,
+        supplierRefunded: mon(a.supplierRefunded),
+        /** Dastlabki foyda (qaytarimsiz), tannarxi aniq buyurtmalar bo'yicha. */
+        profitBasis: { sales: mon(a.basisSales), net: mon(a.basisNet), profit: mon(a.profit), orders: a.basisOrders, marginPercent: marginPercent(a.basisSales, a.profit) },
+        /** Qaytarimdan keyingi: (sotuv − mijozga qaytarilgan) va (tannarx − yetkazib beruvchidan qaytgan). */
+        afterRefund: { sales: mon(a.basisSalesAfterRefund), net: mon(a.basisNetAfterRefund), profit: mon(a.profitAfterRefund), marginPercent: marginPercent(a.basisSalesAfterRefund, a.profitAfterRefund) },
+        undetermined: { orders: a.undeterminedOrders, sales: mon(a.undeterminedSales) },
+      };
+    };
+    const aggMap = (m2: Record<string, MoneyAgg>) => Object.fromEntries(Object.entries(m2).map(([c, a]) => [c, aggOut(a, c)]));
+    const userNames = new Map((await this.d.prisma.user.findMany({ where: { companyId: actor.companyId }, select: { id: true, fullName: true } })).map((u) => [u.id, u.fullName]));
+    const rulesAll = {
+      confirmed: "Tasdiqlangan sotuv: davrda birinchi marta «Sotuv yakunlandi» bo'lgan lidlarning bekor qilinmagan buyurtmalari (qaytarimlari bo'lsa ham).",
+      cancelled: "Bekor qilingan buyurtmalar jami sotuv/foydaga kirmaydi; tarixiy summalari saqlanadi va alohida ko'rsatiladi.",
+      operator: "Turoperator — buyurtmaning tarixiy bog'lanishi: lid operatori keyin o'zgarsa ham eski sotuvlar statistikasi o'zgarmaydi; buyurtma operatorini o'zgartirish alohida, sabab va audit bilan.",
+      currencies: "Valyutalar kurssiz qo'shilmaydi: har bir valyuta alohida hisoblanadi.",
+    };
+    const rulesCost = {
+      formula: "Dastlabki foyda = sotuv narxi (selling) − tannarx (net). Qaytarimdan keyingi foyda = (sotuv − mijozga qaytarilgan summa) − (tannarx − yetkazib beruvchidan qaytgan summa). Qo'shimcha xarajatlar (komissiya, soliq, bank to'lovlari, valyuta farqi) hisobga olinmagan: bu buxgalteriya bo'yicha yakuniy «sof foyda» emas.",
+      refunds: "Mijozga qaytarilgan va yetkazib beruvchidan qaytgan summalar alohida qayd etiladi; valyutasi buyurtma narxlari valyutasiga mos bo'lishi shart. Qaytarim dastlabki foydani o'zgartirmaydi — u «qaytarimdan keyingi foyda»da aks etadi.",
+      unknownNet: "Tannarxi kiritilmagan buyurtma 0 deb hisoblanmaydi: foyda «aniqlanmagan», soni alohida ko'rsatiladi va tannarx/foyda jamiga kirmaydi.",
+      expected: "Kutilayotgan foyda: hali yopilmagan lidlarning ochiq buyurtmalari (tannarxi ma'lum bo'lganlari). Tasdiqlangan foyda emas.",
+    };
+    const financeOut = {
+      costHidden: !cost,
+      rules: cost ? { ...rulesAll, ...rulesCost } : rulesAll,
+      confirmed: aggMap(finance.confirmed),
+      undeterminedOrders: cost ? finance.undeterminedOrders : null,
+      unpricedOrders: finance.unpricedOrders,
+      refundMismatchOrders: cost ? finance.refundMismatchOrders : null,
+      expected: cost ? Object.fromEntries(Object.entries(finance.expected).map(([c, e]) => [c, { profit: formatMoney({ amountMinor: e.profit, currency: c }), orders: e.orders, undeterminedOrders: e.undeterminedOrders }])) : {},
+      cancelled: Object.fromEntries(Object.entries(finance.cancelled).map(([c, e]) => [c, { sales: formatMoney({ amountMinor: e.sales, currency: c }), orders: e.orders }])),
+      byOperator: finance.byOperator
+        .map((r) => ({ operatorId: r.operatorId, name: r.operatorId ? (operatorNames.get(r.operatorId) ?? '—') : 'Ko‘rsatilmagan', orders: r.orders, undeterminedOrders: cost ? r.undeterminedOrders : null, currencies: aggMap(r.currencies) }))
+        .sort((a, b) => b.orders - a.orders),
+      byManager: finance.byManager
+        .map((r) => ({ userId: r.managerId, name: r.managerId ? (userNames.get(r.managerId) ?? '—') : 'Taqsimlanmagan', orders: r.orders, undeterminedOrders: cost ? r.undeterminedOrders : null, currencies: aggMap(r.currencies) }))
+        .sort((a, b) => b.orders - a.orders),
+    };
     const managers: Record<string, { newLeads: number; won: number; inProgress: number; sales: Record<string, bigint> }> = {};
     const m = (id: string | null) => (managers[id ?? 'unassigned'] ??= { newLeads: 0, won: 0, inProgress: 0, sales: {} });
     for (const l of cohort) m(l.ownerId).newLeads++;
     for (const l of leads.filter((x) => inRange(x.firstWonAt))) {
       const owner = ownerAt(l.id, l.firstWonAt!) ?? l.ownerId;
-      const row = m(owner);
-      row.won++;
-      for (const o of wonOrders.filter((o) => o.leadId === l.id && o.currency)) row.sales[o.currency!] = (row.sales[o.currency!] ?? 0n) + o.agreedAmountMinor!;
+      m(owner).won++;
+    }
+    for (const row of finance.byManager) {
+      const target = m(row.managerId);
+      for (const [c, agg] of Object.entries(row.currencies)) target.sales[c] = (target.sales[c] ?? 0n) + agg.sales;
     }
     const openByOwner = await this.d.prisma.lead.groupBy({ by: ['ownerId'], where: { ...scope, stage: { notIn: ['WON', 'LOST'] } }, _count: true });
     for (const g of openByOwner) m(g.ownerId).inProgress = g._count;
@@ -237,6 +340,7 @@ export class DashboardService {
         conversion: percent(v.won, v.newLeads),
         salesByCurrency: moneyMap(v.sales),
       })),
+      finance: financeOut,
       notes: {
         managerAttribution: 'Joriy yuklama — hozirgi mas’ul; tarixiy sotuv — yopilish paytidagi mas’ul.',
         sourceMode: 'Manba — lidning birinchi qayd etilgan manbasi.',
@@ -244,6 +348,57 @@ export class DashboardService {
       },
       dataQuality: { dataCollectionStartedAt: company.dataCollectionStartedAt.toISOString(), lastSyncAt: lastSync?.toISOString() ?? null, stale },
     };
+  }
+
+  /**
+   * Buyurtmalar CSV: faqat `export` huquqi (rahbar/administrator). Tannarx, foyda va qaytarim ustunlari qo'shimcha
+   * `finance.cost.view` huquqini talab qiladi (bo'lmasa shu ustunlar chiqarilmaydi). Har bir (buyurtma, valyuta) uchun
+   * bitta qator; foyda aniqlanmagan bo'lsa bo'sh (0 emas) va `profit_state=undetermined`. Auditga yoziladi.
+   */
+  async exportOrdersCsv(actor: UserActor, f: DashboardFilters): Promise<string> {
+    requireCap(actor, 'export');
+    const cost = canCost(actor);
+    const company = await this.d.prisma.company.findUniqueOrThrow({ where: { id: actor.companyId } });
+    const { start, end } = companyDateRangeToUtc(f.from, f.to, company.timezone);
+    const rows = await this.d.prisma.order.findMany({
+      where: { companyId: actor.companyId, createdAt: { gte: start, lt: end }, lead: this.leadScope(actor, { ...f, tourOperatorId: undefined }), ...(f.tourOperatorId ? { tourOperatorId: f.tourOperatorId } : {}) },
+      include: { services: { where: { removedAt: null } }, lead: { select: { name: true, stage: true } } },
+      orderBy: { createdAt: 'asc' },
+      take: 50_000,
+    });
+    const refundMap = cost ? await loadRefunds(this.d.prisma, actor.companyId, rows.map((o) => o.id)) : new Map();
+    const users = new Map((await this.d.prisma.user.findMany({ where: { companyId: actor.companyId }, select: { id: true, fullName: true } })).map((u) => [u.id, u.fullName]));
+    const ops = new Map((await this.d.prisma.supplier.findMany({ where: { companyId: actor.companyId }, select: { id: true, name: true } })).map((x) => [x.id, x.name]));
+    const esc = (v: unknown) => {
+      const s = v === null || v === undefined ? '' : String(v);
+      const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+      return /[",\n;]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+    };
+    const header = ['order_no', 'lead', 'lead_stage', 'owner', 'tour_operator', 'fulfillment_state', 'payment_state', 'currency', 'selling_price', ...(cost ? ['net_price', 'profit_initial', 'profit_state', 'customer_refunded', 'supplier_refunded', 'profit_after_refund'] : []), 'created_at'];
+    const lines: string[] = [];
+    for (const o of rows) {
+      const fin = orderFinance(o, o.services, refundMap.get(o.id)?.refunds ?? {});
+      const ccys = Object.values(fin.byCurrency).filter((c) => !f.currency || c.currency === f.currency);
+      for (const c of ccys.length ? ccys : f.currency ? [] : [null]) {
+        const mon = (x: bigint | null) => (x === null || !c ? '' : formatMoney({ amountMinor: x, currency: c.currency }));
+        const cells = [
+          o.orderNo,
+          o.lead.name,
+          o.lead.stage,
+          o.ownerId ? users.get(o.ownerId) : '',
+          o.tourOperatorId ? ops.get(o.tourOperatorId) : '',
+          o.fulfillmentState,
+          o.paymentState,
+          c?.currency ?? '',
+          c ? mon(c.sellingMinor) : '',
+          ...(cost ? [c && c.lines - c.missingNetLines > 0 ? mon(c.netMinor) : '', c ? mon(c.profitMinor) : '', c ? c.profitState : 'undetermined', c ? mon(c.customerRefundedMinor) : '', c ? mon(c.supplierRefundedMinor) : '', c ? mon(c.profitAfterRefundMinor) : ''] : []),
+          o.createdAt.toISOString(),
+        ];
+        lines.push(cells.map(esc).join(','));
+      }
+    }
+    await audit(this.d.prisma, actor, { entityType: 'export', entityId: actor.companyId, action: 'orders_csv', newValue: { filters: f, rows: lines.length, costColumns: cost } });
+    return [header.join(','), ...lines].join('\n');
   }
 
   /** CSV export of leads; requires the export capability, scoped and audited (TZ §6.1, AC12). */

@@ -36,6 +36,14 @@ export class SalesController {
     res.send(String.fromCharCode(0xfeff) + csv);
   }
 
+  /** Buyurtmalar CSV (moliyaviy ustunlar bilan): faqat export huquqi (rahbar, administrator); auditga yoziladi. */
+  @Get('exports/orders.csv')
+  async exportOrdersCsv(@Actor() actor: UserActor, @Query() q: unknown, @Res() res: Response) {
+    const csv = await this.core.dashboard.exportOrdersCsv(actor, parse(DashboardQuery, q));
+    res.status(200).type('text/csv; charset=utf-8').setHeader('Content-Disposition', 'attachment; filename="orders.csv"');
+    res.send(String.fromCharCode(0xfeff) + csv);
+  }
+
   @Get('leads')
   async leads(@Actor() actor: UserActor, @Query() q: unknown, @Res() res: Response) {
     send(res, 200, await this.core.leads.list(actor, parse(LeadListQuery, q)));

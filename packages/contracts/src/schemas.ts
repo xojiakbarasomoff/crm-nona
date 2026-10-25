@@ -17,7 +17,11 @@ const isoDateTime = z.string().datetime({ offset: true });
 
 export const STAGE = z.enum(['NEW', 'CONTACTED', 'QUALIFIED', 'PREPARING_OFFER', 'OFFER_SENT', 'AWAITING_PAYMENT', 'WON', 'LOST', 'FOLLOW_UP']);
 export const CHANNEL = z.enum(['instagram_lead_ads', 'meta_lead_ads', 'instagram_direct', 'amocrm', 'manual', 'other']);
-export const SERVICE_TYPE = z.enum(['avia', 'tour_package', 'hotel', 'visa', 'other']);
+export const SERVICE_TYPE = z.enum(['avia', 'tour_package', 'hotel', 'transfer', 'visa', 'other']);
+/** Hujjat kategoriyalari (TZ qo‘shimchasi §D). */
+export const DOCUMENT_CATEGORY = z.enum(['passport', 'invoice', 'payment_receipt', 'air_ticket', 'voucher', 'other']);
+export type DocumentCategory = z.infer<typeof DOCUMENT_CATEGORY>;
+export const SUPPLIER_KIND = z.enum(['tour_operator', 'hotel', 'transfer', 'airline', 'other']);
 
 export const ErrorSchema = z
   .object({
@@ -66,6 +70,8 @@ export const LeadDetailsSchema = z
     lostNote: z.string().max(2000).nullable().optional(),
     nextContactAt: isoDateTime.nullable().optional(),
     followUpNote: z.string().max(2000).nullable().optional(),
+    /** Turoperator (yetkazib beruvchi). Reklama manbasi emas. null — tanlovni olib tashlash. */
+    tourOperatorId: id.nullable().optional(),
   })
   .strict()
   .openapi('LeadDetailsPatch');
@@ -92,7 +98,13 @@ export const OrderCreateSchema = z.object({ leadId: id, offerVersionId: id.nulla
 export const OrderPatchSchema = z
   .object({
     version: z.number().int(),
+    /** Paket darajasidagi sotuv narxi (selling price). */
     agreedAmount: decimal.optional(),
+    /** Paket darajasidagi tannarx (net price); null — «noma’lum»ga qaytarish. Sotuv narxi bilan bir valyutada. */
+    netPrice: decimal.nullable().optional(),
+    /** Buyurtma turoperatori (tarixiy bog'lanish). Lid operatoridan alohida; tasdiqlangan buyurtmada sabab majburiy, audit bilan. */
+    tourOperatorId: id.nullable().optional(),
+    tourOperatorReason: z.string().max(500).nullable().optional(),
     currency: currency.optional(),
     saleEvidence: z.string().max(2000).nullable().optional(),
     note: z.string().max(4000).nullable().optional(),
@@ -106,8 +118,67 @@ export const PaymentSchema = z
   .object({ kind: z.enum(['payment', 'refund']), amount: decimal, currency, receivedAt: isoDateTime, method: z.enum(['cash', 'card', 'bank_transfer', 'online', 'other']), evidence: z.string().max(2000).nullable().optional(), reference: z.string().max(200).nullable().optional() })
   .strict()
   .openapi('PaymentCreate');
+/** Yetkazib beruvchidan qaytgan summa (mijozga qaytarim — PaymentCreate kind=refund — alohida). Idempotency-Key majburiy. */
+export const SupplierRefundSchema = z
+  .object({ amount: decimal, currency, receivedAt: isoDateTime, supplierId: id.nullable().optional(), serviceId: id.nullable().optional(), reference: z.string().max(200).nullable().optional(), note: z.string().max(2000).nullable().optional() })
+  .strict()
+  .openapi('SupplierRefundCreate');
+/** Menejerga tannarx va foydani ko'rish huquqini yoqish/o'chirish (administrator). */
+export const FinanceAccessSchema = z.object({ enabled: z.boolean() }).strict().openapi('FinanceAccess');
 export const PassengerSchema = z.object({ fullName: z.string().min(1).max(200), type: z.enum(['adult', 'child', 'infant']), birthDate: date.nullable().optional() }).strict();
-export const ServiceSchema = z.object({ serviceType: SERVICE_TYPE, description: z.string().min(1).max(2000), amount: decimal.nullable().optional(), currency: currency.nullable().optional() }).strict();
+const mealPlan = z.enum(['RO', 'BB', 'HB', 'FB', 'AI', 'UAI', 'other']);
+export const HotelDetailsSchema = z
+  .object({ hotelName: z.string().min(1).max(200), address: z.string().max(500).nullable().optional(), checkIn: date, checkOut: date, roomType: z.string().max(100).nullable().optional(), mealPlan: mealPlan.nullable().optional() })
+  .strict()
+  .refine((d) => d.checkOut > d.checkIn, { path: ['checkOut'], message: 'Chiqish sanasi kirish sanasidan keyin bo‘lishi kerak' });
+export const TransferDetailsSchema = z
+  .object({ route: z.string().min(1).max(300), pickupAt: localDateTime, timezone: z.string().min(3).max(60).nullable().optional(), vehicle: z.string().max(100).nullable().optional() })
+  .strict();
+
+/** Xizmat turiga xos tafsilotlarni tekshiradi (mehmonxona, transfer). Boshqa turlarda tafsilot bo‘sh. */
+export function validateServiceDetails(serviceType: string, details: unknown): { ok: true; value: Record<string, unknown> } | { ok: false; errors: Record<string, string> } {
+  const schema = serviceType === 'hotel' ? HotelDetailsSchema : serviceType === 'transfer' ? TransferDetailsSchema : null;
+  if (!schema) return { ok: true, value: {} };
+  const r = schema.safeParse(details ?? {});
+  if (r.success) return { ok: true, value: r.data as Record<string, unknown> };
+  const errors: Record<string, string> = {};
+  for (const issue of r.error.issues) errors[`details.${issue.path.join('.') || '_'}`] = issue.message;
+  return { ok: false, errors };
+}
+
+const ServiceFields = {
+  serviceType: SERVICE_TYPE,
+  description: z.string().min(1).max(2000),
+  /** Sotuv narxi (mijozga). */
+  amount: decimal.nullable().optional(),
+  /** Tannarx (yetkazib beruvchidan). null/yo‘q = noma’lum (0 emas). */
+  netAmount: decimal.nullable().optional(),
+  currency: currency.nullable().optional(),
+  supplierId: id.nullable().optional(),
+  /** true: xizmat paket narxiga kiritilgan va jami hisobga qo‘shilmaydi (ikki marta sanalmasligi uchun). */
+  includedInPackage: z.boolean().optional(),
+  details: z.record(z.string(), z.unknown()).optional(),
+};
+export const ServiceSchema = z
+  .object(ServiceFields)
+  .strict()
+  .superRefine((v, ctx) => {
+    if ((v.amount || v.netAmount) && !v.currency) ctx.addIssue({ code: 'custom', path: ['currency'], message: 'Narx kiritilganda valyuta majburiy' });
+    const d = validateServiceDetails(v.serviceType, v.details);
+    if (!d.ok) for (const [k, m] of Object.entries(d.errors)) ctx.addIssue({ code: 'custom', path: k.split('.'), message: m });
+  })
+  .openapi('ServiceCreate');
+export const ServicePatchSchema = z.object(ServiceFields).partial().strict().openapi('ServicePatch');
+
+export const SupplierCreateSchema = z
+  .object({ name: z.string().trim().min(1).max(200), kind: SUPPLIER_KIND.default('tour_operator'), contactPerson: z.string().max(200).nullable().optional(), phone: z.string().max(40).nullable().optional(), email: z.string().email().max(200).nullable().optional(), note: z.string().max(2000).nullable().optional() })
+  .strict()
+  .openapi('SupplierCreate');
+export const SupplierPatchSchema = z
+  .object({ version: z.number().int(), name: z.string().trim().min(1).max(200).optional(), kind: SUPPLIER_KIND.optional(), contactPerson: z.string().max(200).nullable().optional(), phone: z.string().max(40).nullable().optional(), email: z.string().email().max(200).nullable().optional(), note: z.string().max(2000).nullable().optional(), status: z.enum(['active', 'archived']).optional() })
+  .strict()
+  .openapi('SupplierPatch');
+export const SupplierListQuery = z.object({ status: z.enum(['active', 'archived', 'all']).default('active'), kind: SUPPLIER_KIND.optional(), q: z.string().max(100).optional() }).strict();
 export const TicketSchema = z.object({ passengerId: id, ticketNumber: z.string().min(3).max(40), segmentIds: z.array(id).min(1).max(20) }).strict();
 
 const LocalTime = z.object({ local: localDateTime, timezone: z.string().min(3).max(60), confirmedOffsetMinutes: z.number().int().min(-900).max(900).nullable().optional() }).strict();
@@ -179,6 +250,10 @@ export const DashboardQuery = z
     stage: STAGE.optional(),
     departureFrom: date.optional(),
     departureTo: date.optional(),
+    /** Turoperator filtri (lidga biriktirilgan). */
+    tourOperatorId: id.optional(),
+    /** Valyuta filtri: faqat shu valyutadagi summalar hisoblanadi. */
+    currency: currency.optional(),
     bucket: z.enum(['day', 'week', 'month']).default('day'),
   })
   .strict();

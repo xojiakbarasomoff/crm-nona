@@ -219,6 +219,8 @@ model User {
   amoUserId    String?    @map("amo_user_id")
   mfaSecretEnc String?    @map("mfa_secret_enc")
   mfaEnabled   Boolean    @default(false) @map("mfa_enabled")
+  /// Qo‘shimcha shaxsiy huquqlar (hozircha: 'finance.cost.view' — tannarx va foydani ko‘rish). Standart: bo‘sh.
+  extraCapabilities String[] @default([]) @map("extra_capabilities")
   lastLoginAt  DateTime?  @map("last_login_at") @db.Timestamptz(3)
   blockedAt    DateTime?  @map("blocked_at") @db.Timestamptz(3)
   version      Int        @default(1)
@@ -500,6 +502,8 @@ model Lead {
   syncState          SyncState @default(pending_create) @map("sync_state")
   sourceUpdatedAt    DateTime? @map("source_updated_at") @db.Timestamptz(3)
   stateHash          String?   @map("state_hash")
+  /// Tanlangan turoperator (yetkazib beruvchi). Reklama manbasi — firstSource — bilan aralashmaydi.
+  tourOperatorId     String?   @map("tour_operator_id") @db.Uuid
   deletedAt          DateTime? @map("deleted_at") @db.Timestamptz(3)
   version            Int       @default(1)
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -512,6 +516,7 @@ model Lead {
   @@index([companyId, ownerId, stage])
   @@index([companyId, contactId])
   @@index([companyId, createdAt])
+  @@index([companyId, tourOperatorId])
   @@map("leads")
 }
 
@@ -617,6 +622,50 @@ model Offer {
   @@map("offers")
 }
 
+/// Turoperatorlar va xizmat yetkazib beruvchilar ma’lumotnomasi. Keyingi o‘zgarishlar eski buyurtma narxlariga
+/// ta’sir qilmaydi: narxlar buyurtma/xizmat qatorlarida saqlanadi.
+model Supplier {
+  id            String   @id @default(uuid()) @db.Uuid
+  companyId     String   @map("company_id") @db.Uuid
+  name          String
+  /// tour_operator | hotel | transfer | airline | other
+  kind          String   @default("tour_operator")
+  contactPerson String?  @map("contact_person")
+  phone         String?
+  email         String?
+  note          String?
+  /// active | archived (arxivdagi yangi tanlovga chiqmaydi, eski yozuvlarda qoladi)
+  status        String   @default("active")
+  version       Int      @default(1)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([companyId, id])
+  @@index([companyId, status, kind])
+  @@map("suppliers")
+}
+
+/// Yetkazib beruvchidan qaytgan summa (mijozga qaytarim — `payments.kind = 'refund'` — alohida). O‘chirilmaydi.
+model SupplierRefund {
+  id           String   @id @default(uuid()) @db.Uuid
+  companyId    String   @map("company_id") @db.Uuid
+  orderId      String   @map("order_id") @db.Uuid
+  serviceId    String?  @map("service_id") @db.Uuid
+  supplierId   String?  @map("supplier_id") @db.Uuid
+  amountMinor  BigInt   @map("amount_minor")
+  currency     String   @db.Char(3)
+  receivedAt   DateTime @map("received_at") @db.Timestamptz(3)
+  reference    String?
+  note         String?
+  businessKey  String   @map("business_key")
+  recordedById String   @map("recorded_by_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([companyId, businessKey])
+  @@index([companyId, orderId])
+  @@map("supplier_refunds")
+}
+
 model OrderSequence {
   companyId String @map("company_id") @db.Uuid
   year      Int
@@ -634,6 +683,10 @@ model Order {
   contactId         String           @map("contact_id") @db.Uuid
   ownerId           String?          @map("owner_id") @db.Uuid
   agreedAmountMinor BigInt?          @map("agreed_amount_minor")
+  /// Paket darajasidagi tannarx (net price); sotuv narxi bilan bir valyutada. NULL = noma’lum (0 emas).
+  netPriceMinor     BigInt?          @map("net_price_minor")
+  /// Buyurtma turoperatori — tarixiy bog‘lanish: yaratilganda lidnikidan olinadi, keyin lid o‘zgarsa ham saqlanadi; faqat auditli o‘zgartiriladi.
+  tourOperatorId    String?          @map("tour_operator_id") @db.Uuid
   currency          String?          @db.Char(3)
   offerVersionId    String?          @map("offer_version_id") @db.Uuid
   confirmedAt       DateTime?        @map("confirmed_at") @db.Timestamptz(3)
@@ -657,6 +710,7 @@ model Order {
   @@unique([companyId, id])
   @@unique([companyId, orderNo])
   @@index([companyId, ownerId])
+  @@index([companyId, tourOperatorId])
   @@map("orders")
 }
 
@@ -666,12 +720,23 @@ model OrderService {
   orderId     String   @map("order_id") @db.Uuid
   serviceType String   @map("service_type")
   description String
+  /// Sotuv narxi (mijozga).
   amountMinor BigInt?  @map("amount_minor")
+  /// Tannarx (yetkazib beruvchidan). NULL = noma’lum.
+  netMinor    BigInt?  @map("net_minor")
   currency    String?  @db.Char(3)
+  supplierId  String?  @map("supplier_id") @db.Uuid
+  /// true: xizmat paket narxiga kiritilgan, yig‘indiga qo‘shilmaydi.
+  includedInPackage Boolean @default(false) @map("included_in_package")
+  /// Turga xos tafsilotlar (mehmonxona / transfer); zod bilan tekshiriladi.
+  details     Json     @default("{}")
+  removedAt   DateTime? @map("removed_at") @db.Timestamptz(3)
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   order Order @relation(fields: [companyId, orderId], references: [companyId, id])
 
+  @@index([companyId, orderId])
   @@map("order_services")
 }
 
@@ -1066,6 +1131,8 @@ model Attachment {
   fileName       String    @map("file_name")
   mime           String
   size           Int
+  /// passport | invoice | payment_receipt | air_ticket | voucher | other
+  category       String    @default("other")
   scanState      String    @default("pending") @map("scan_state")
   scanDetail     String?   @map("scan_detail")
   scannedAt      DateTime? @map("scanned_at") @db.Timestamptz(3)
@@ -1077,6 +1144,7 @@ model Attachment {
 
   @@unique([companyId, objectKey])
   @@index([companyId, ownerType, ownerId])
+  @@index([companyId, ownerType, category])
   @@map("attachments")
 }
 

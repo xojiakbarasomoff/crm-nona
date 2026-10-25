@@ -2,6 +2,8 @@ import { fileURLToPath } from 'node:url';
 /** @type {import('next').NextConfig} */
 const api = process.env.API_INTERNAL_URL ?? 'http://127.0.0.1:4100';
 export default {
+  // Alohida demo muhit (scripts/demo-env) asosiy dev server bilan .next papkasini bo'lishmasligi uchun.
+  distDir: process.env.NEXT_DIST_DIR ?? '.next',
   output: 'standalone',
   outputFileTracingRoot: fileURLToPath(new URL('../../', import.meta.url)),
   reactStrictMode: true,

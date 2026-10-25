@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { hash, verify } from '@node-rs/argon2';
 import { decryptSecret, encryptSecret, type Role } from '@crm/database';
-import { capabilitiesOf } from '@crm/domain';
+import { capabilitiesFor, GRANTABLE_CAPABILITIES } from '@crm/domain';
 import { hitCounter } from '@crm/integrations';
 import { audit } from '../audit';
 import type { CoreDeps, UserActor } from '../context';
@@ -92,7 +92,7 @@ export class AuthService {
     }
     const u = session.user;
     return {
-      actor: { type: 'user', id: u.id, companyId: u.companyId, role: u.role, email: u.email, sessionId: session.id },
+      actor: { type: 'user', id: u.id, companyId: u.companyId, role: u.role, email: u.email, extraCapabilities: u.extraCapabilities, sessionId: session.id },
       mfaVerified: session.mfaVerified,
       mfaRequired: u.role === 'ADMIN' && !(this.d.config.demoSimpleLogin && this.d.config.mode === 'demo'),
       mfaEnrolled: u.mfaEnabled,
@@ -113,7 +113,7 @@ export class AuthService {
       fullName: user.fullName,
       role: user.role,
       amoUserId: user.amoUserId,
-      capabilities: capabilitiesOf(user.role),
+      capabilities: capabilitiesFor({ role: user.role, extraCapabilities: user.extraCapabilities }),
       mfa: { required: info.mfaRequired, enrolled: info.mfaEnrolled, verified: info.mfaVerified },
       appMode: this.d.config.mode,
     };
@@ -191,6 +191,26 @@ export class AuthService {
    * Blocks a user immediately: all sessions revoked; open leads, orders, segments and reminders are
    * moved to the chosen successor with audit (TZ §6.2).
    */
+  /**
+   * Menejerga tannarx va foydani ko'rish huquqini yoqish/o'chirish (faqat administrator: `users.manage`).
+   * Rahbar va administratorda bu huquq rol bo'yicha standart bor — ularda shaxsiy yozuv ma'noga ega emas.
+   */
+  async setFinanceCostAccess(actor: UserActor, userId: string, enabled: boolean) {
+    requireCap(actor, 'users.manage');
+    return this.d.prisma.$transaction(async (tx) => {
+      const user = await tx.user.findFirst({ where: { id: userId, companyId: actor.companyId } });
+      if (!user) throw notFound('Foydalanuvchi');
+      if (user.role !== 'MANAGER') throw unprocessable('ROLE_HAS_DEFAULT', 'Rahbar va administratorda tannarx/foyda huquqi rol bo‘yicha standart mavjud', { role: 'not_manager' });
+      const cap = GRANTABLE_CAPABILITIES[0];
+      const had = user.extraCapabilities.includes(cap);
+      if (had === enabled) return { id: user.id, financeCostView: had };
+      const next = enabled ? [...user.extraCapabilities, cap] : user.extraCapabilities.filter((c) => c !== cap);
+      await tx.user.update({ where: { id: user.id }, data: { extraCapabilities: next, version: { increment: 1 } } });
+      await audit(tx, actor, { entityType: 'user', entityId: user.id, action: enabled ? 'finance_cost_access_granted' : 'finance_cost_access_revoked', oldValue: { financeCostView: had }, newValue: { financeCostView: enabled } });
+      return { id: user.id, financeCostView: enabled };
+    });
+  }
+
   async blockUser(actor: UserActor, userId: string, successorId: string | null) {
     requireCap(actor, 'users.manage');
     const now = this.d.clock.now();
@@ -236,7 +256,7 @@ export class AuthService {
     requireCap(actor, 'users.manage');
     return this.d.prisma.user.findMany({
       where: { companyId: actor.companyId },
-      select: { id: true, email: true, fullName: true, role: true, status: true, amoUserId: true, mfaEnabled: true, lastLoginAt: true },
+      select: { id: true, email: true, fullName: true, role: true, status: true, amoUserId: true, mfaEnabled: true, lastLoginAt: true, extraCapabilities: true },
       orderBy: { fullName: 'asc' },
     });
   }

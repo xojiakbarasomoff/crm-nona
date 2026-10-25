@@ -1,11 +1,14 @@
-import { Controller, Delete, Get, Inject, Param, Post, Query, Req, Res } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Inject, Param, Patch, Post, Query, Req, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { z } from 'zod';
 import type { Core, UserActor } from '../core';
-import { ATTACHMENT_OWNER_TYPES } from '../core/services/attachments.service';
+import { ATTACHMENT_OWNER_TYPES, DOCUMENT_CATEGORIES } from '../core/services/attachments.service';
 import { Actor, CORE, parse, send, UuidPipe as uuid, type AuthedRequest } from './common';
 
 const OwnerQuery = z.object({ ownerType: z.enum(ATTACHMENT_OWNER_TYPES), ownerId: z.string().uuid() }).strict();
+const UploadQuery = OwnerQuery.extend({ category: z.enum(DOCUMENT_CATEGORIES).default('other') }).strict();
+const ListQuery = OwnerQuery.extend({ related: z.enum(['0', '1']).optional() }).strict();
+const CategoryBody = z.object({ category: z.enum(DOCUMENT_CATEGORIES) }).strict();
 const ContentQuery = z.object({ exp: z.coerce.number().int(), sig: z.string().min(10).max(100) }).strict();
 
 @Controller('api/v1/attachments')
@@ -15,7 +18,7 @@ export class FilesController {
   /** Raw body upload: Content-Type = file MIME, X-File-Name = URL-encoded name. */
   @Post()
   async upload(@Actor() actor: UserActor, @Query() q: unknown, @Req() req: AuthedRequest, @Res() res: Response) {
-    const owner = parse(OwnerQuery, q);
+    const owner = parse(UploadQuery, q);
     const data = Buffer.isBuffer(req.body) ? (req.body as Buffer) : Buffer.alloc(0);
     let fileName = 'fayl';
     try {
@@ -28,8 +31,13 @@ export class FilesController {
 
   @Get()
   async list(@Actor() actor: UserActor, @Query() q: unknown, @Res() res: Response) {
-    const owner = parse(OwnerQuery, q);
-    send(res, 200, { items: await this.core.attachments.list(actor, owner.ownerType, owner.ownerId) });
+    const owner = parse(ListQuery, q);
+    send(res, 200, { items: await this.core.attachments.list(actor, owner.ownerType, owner.ownerId, { related: owner.related === '1' }) });
+  }
+
+  @Patch(':id')
+  async recategorize(@Actor() actor: UserActor, @Param('id', uuid) id: string, @Body() body: unknown, @Res() res: Response) {
+    send(res, 200, await this.core.attachments.setCategory(actor, id, parse(CategoryBody, body).category));
   }
 
   @Post(':id/link')

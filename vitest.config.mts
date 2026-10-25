@@ -30,6 +30,19 @@ export default defineConfig({
       {
         extends: true,
         test: {
+          name: 'migration',
+          include: ['tests/migration/**/*.test.ts'],
+          environment: 'node',
+          fileParallelism: false,
+          pool: 'forks',
+          maxWorkers: 1,
+          testTimeout: 120_000,
+          hookTimeout: 120_000,
+        },
+      },
+      {
+        extends: true,
+        test: {
           name: 'services',
           include: ['tests/services/**/*.test.ts'],
           environment: 'node',

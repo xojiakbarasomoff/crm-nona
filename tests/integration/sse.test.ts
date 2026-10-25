@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Core } from '../../apps/api/src/core';
 import { publishEvent } from '../../apps/api/src/core';
-import { companyId, login, makeApp, makeCore, newLead, type Session } from './helpers';
+import { alwaysOnDuty, companyId, login, makeApp, makeCore, newLead, type Session } from './helpers';
 
 let core: Core;
 let app: INestApplication;
@@ -11,6 +11,7 @@ let base: string;
 
 beforeAll(async () => {
   core = makeCore();
+  await alwaysOnDuty(core);
   app = await makeApp(core);
   await app.listen(0, '127.0.0.1');
   base = `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}`;

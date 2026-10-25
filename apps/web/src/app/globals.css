@@ -193,5 +193,31 @@ tr.row-cancelled td.code, tr.row-cancelled td.code a { color: #9a95a3; text-deco
 .pill.bad { color: var(--bad); background: var(--bad-bg); box-shadow: inset 0 0 0 1px var(--bad-line); }
 .pill.cancel { color: var(--cancel); background: var(--cancel-bg); }
 .pill.neutral { color: var(--text-soft); background: var(--surface); }
+/* ---- Moliya: foyda, xizmatlar, hujjatlar ---- */
+.pos { color: var(--ok); }
+.neg { color: var(--bad); }
+.profit-preview { min-width: 150px; flex: 0 1 auto; justify-content: flex-end; }
+.profit-preview b { font-size: 1.1rem; }
+.check { display: flex; align-items: center; gap: 8px; font-size: 0.88rem; }
+.service-form { margin-top: 14px; background: var(--pink-50); box-shadow: none; border: 1px solid var(--pink-100); }
+.row-included td { color: var(--muted); background: var(--pink-50); }
+.audit-diff { font-size: 0.8rem; margin: 2px 0 6px; }
+.kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px 16px; margin: 0; }
+.kv dt { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; }
+.kv dd { margin: 2px 0 0; font-weight: 600; }
+.msg-list { margin: 8px 0; padding-left: 18px; }
+.msg-list li { margin: 2px 0; }
+.doc-group { margin-top: 12px; }
+.doc-title { margin: 0 0 4px; font-size: 0.95rem; }
+.doc-cat { display: inline-block; padding: 2px 10px; border-radius: 999px; background: var(--pink-100); color: var(--bordo-700); font-weight: 700; font-size: 0.8rem; }
+.doc-cat.passport { background: var(--bordo-700); color: #fff; }
+.finance-block { margin-bottom: 16px; }
+.finance-block .card.panel { margin-bottom: 16px; }
+.fin-ccy { margin-top: 12px; }
+.fin-ccy-title { margin: 0 0 8px; font-size: 0.8rem; letter-spacing: 0.08em; color: var(--muted); }
+.stat-value small { font-size: 0.9rem; font-weight: 700; color: var(--muted); }
+.fin-extra { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 0.9rem; }
+.fin-rules { margin-top: 12px; font-size: 0.85rem; }
+.fin-rules summary { cursor: pointer; font-weight: 600; color: var(--bordo-700); }
 @media (max-width: 1100px) { .dash-grid { grid-template-columns: 1fr; } }
 @media (max-width: 700px) { .funnel-row { grid-template-columns: 110px minmax(0, 1fr) 52px; } .mgr-head, .mgr-row { grid-template-columns: minmax(0, 1fr) 40px 56px; } .mgr-head span:last-child, .mgr-row > :last-child { display: none; } }

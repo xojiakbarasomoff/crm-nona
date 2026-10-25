@@ -108,7 +108,8 @@ test('order flow: lead → order → segment → confirm → manual flight check
 
   await page.getByLabel('F.I.Sh.').fill('Ali Valiyev');
   await page.getByRole('button', { name: 'Qo‘shish' }).click();
-  await expect(page.getByText('Ali Valiyev')).toBeVisible();
+  // Yo'lovchi nomi hujjat egasi ro'yxatida (<option>) ham uchraydi: tekshiruv yo'lovchilar bo'limi ichida.
+  await expect(page.locator('section', { has: page.getByRole('heading', { name: 'Yo‘lovchilar' }) }).getByText('Ali Valiyev')).toBeVisible();
 
   const dep = new Date(Date.now() + 10 * 86400_000);
   const local = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tashkent', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(dep).replace(' ', 'T');
@@ -170,4 +171,62 @@ test('attachment: a disguised executable is rejected with a clear message', asyn
   await page.goto(`/leads/${lead.id}`);
   await page.getByLabel('Fayl yuklash').setInputFiles({ name: 'rasm.pdf', mimeType: 'application/pdf', buffer: Buffer.from('MZ\x90\x00 not a pdf') });
   await expect(page.getByText('Fayl turi ruxsat etilmagan')).toBeVisible();
+});
+
+test('finance: turoperator → sotuv/tannarx → avtomatik foyda → paketga kiritilgan xizmat ikki marta sanalmaydi → dashboard', async ({ page, browser }) => {
+  test.setTimeout(180_000);
+  const adminCtx = await browser.newContext();
+  const admin = await adminCtx.newPage();
+  await login(admin, 'admin@demo.local');
+  const operatorName = `E2E Turoperator ${Date.now()}`;
+  const op = await apiCall<{ id: string }>(admin, '/api/v1/suppliers', 'POST', { name: operatorName, kind: 'tour_operator', contactPerson: 'Aziz', phone: '+998901234567' });
+  expect(op.status).toBe(201);
+  const lead = await createLeadViaDemo(admin, `E2E Moliya ${Date.now()}`);
+
+  await login(page, 'rahbar@demo.local');
+  await page.goto(`/leads/${lead.id}`);
+  await page.getByLabel('Turoperator', { exact: true }).selectOption({ label: operatorName });
+  await expect(page.getByLabel('Turoperator', { exact: true })).toHaveValue(op.body.id);
+  await page.getByRole('button', { name: 'Buyurtma yaratish' }).click();
+  await expect(page.getByRole('heading', { name: /Buyurtma TR-\d{4}-\d{6}/ })).toBeVisible();
+
+  // Paket: sotuv 1 200, tannarx 1 000 -> foyda 200 (avtomatik; qo'lda tahrirlanmaydi)
+  await page.getByLabel('Sotuv narxi (mijozga, selling price)').fill('1200.00');
+  await page.getByLabel('Tannarx (turoperatordan, net price)').fill('1000.00');
+  await page.getByRole('button', { name: 'Saqlash', exact: true }).click();
+  const finance = page.locator('section', { has: page.getByRole('heading', { name: 'Foyda hisobi (valyutalar alohida)' }) });
+  await expect(finance.getByText('200 $', { exact: true }).first()).toBeVisible();
+  await expect(finance.getByText('Dastlabki foyda = sotuv narxi − tannarx')).toBeVisible();
+
+  // Paketga kiritilgan mehmonxona: jamiga qo'shilmaydi
+  await page.getByLabel('Tavsif').fill('Hilton Dubai');
+  await page.getByLabel('Mehmonxona nomi').fill('Hilton');
+  await page.getByLabel('Kirish sanasi').fill('2026-12-01');
+  await page.getByLabel('Chiqish sanasi').fill('2026-12-08');
+  await page.getByLabel('Ovqatlanish turi').selectOption('BB');
+  await page.locator('form.service-form').getByLabel('Sotuv narxi').fill('600.00');
+  await page.locator('form.service-form').getByLabel('Tannarx').fill('500.00');
+  await page.getByLabel('Paket narxiga kiritilgan').check();
+  await page.getByRole('button', { name: 'Xizmatni saqlash' }).click();
+  await expect(page.getByText('Paketga kiritilgan — jamiga qo‘shilmaydi')).toBeVisible();
+  await expect(finance.getByText('200 $', { exact: true }).first()).toBeVisible(); // o'zgarmadi
+
+  // Paketdan tashqari viza: +100 sotuv, +60 tannarx -> foyda 240
+  await page.getByLabel('Qator turi').selectOption('visa');
+  await page.getByLabel('Tavsif').fill('Viza');
+  await page.locator('form.service-form').getByLabel('Sotuv narxi').fill('100.00');
+  await page.locator('form.service-form').getByLabel('Tannarx').fill('60.00');
+  await page.getByRole('button', { name: 'Xizmatni saqlash' }).click();
+  await expect(finance.getByText('240 $', { exact: true }).first()).toBeVisible();
+  await expect(finance.getByText('1 300 $', { exact: true }).first()).toBeVisible();
+
+  // Sotuv yopiladi (amoCRM'da), dashboard shu turoperator bo'yicha 240 foydani ko'rsatadi
+  const won = await apiCall(admin, '/api/v1/demo/amo-native-edit', 'POST', { leadId: lead.id, stage: 'WON' });
+  expect(won.status).toBe(202);
+  await adminCtx.close();
+  await page.goto('/dashboard');
+  await page.getByRole('combobox', { name: 'Turoperator', exact: true }).selectOption(op.body.id);
+  const block = page.locator('section.finance-block');
+  await expect(block.getByText('Dastlabki foyda').first()).toBeVisible({ timeout: 60_000 });
+  await expect(block.getByText('240 $', { exact: true }).first()).toBeVisible({ timeout: 60_000 });
 });

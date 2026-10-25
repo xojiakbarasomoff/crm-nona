@@ -13,6 +13,7 @@ interface U {
   amoUserId: string | null;
   mfaEnabled: boolean;
   lastLoginAt: string | null;
+  extraCapabilities?: string[];
 }
 
 export default function UsersPage() {
@@ -82,6 +83,7 @@ export default function UsersPage() {
                   <th>amoCRM ID</th>
                   <th>MFA</th>
                   <th>Oxirgi kirish</th>
+                  <th>Tannarx va foyda</th>
                   <th />
                 </tr>
               </thead>
@@ -99,6 +101,22 @@ export default function UsersPage() {
                     <td>{u.amoUserId ?? '—'}</td>
                     <td>{u.mfaEnabled ? 'Ha' : '—'}</td>
                     <td>{fmtDateTime(u.lastLoginAt)}</td>
+                    <td>
+                      {u.role === 'MANAGER' ? (
+                        <label className="check">
+                          <input
+                            type="checkbox"
+                            style={{ width: 'auto' }}
+                            aria-label={`Tannarx va foydani ko‘rish: ${u.fullName}`}
+                            checked={!!u.extraCapabilities?.includes('finance.cost.view')}
+                            onChange={(e) => void act(() => api(`/api/v1/users/${u.id}/finance-access`, { method: 'PATCH', body: { enabled: e.target.checked } }))}
+                          />{' '}
+                          Ko‘ra oladi
+                        </label>
+                      ) : (
+                        <span className="muted">{u.role === 'HEAD' || u.role === 'ADMIN' ? 'Standart ruxsat' : '—'}</span>
+                      )}
+                    </td>
                     <td>
                       {u.status === 'active' && (
                         <button

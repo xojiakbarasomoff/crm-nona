@@ -26,6 +26,8 @@ export interface UserActor {
   companyId: string;
   role: Role;
   email: string;
+  /** Shaxsiy qo'shimcha huquqlar (users.extra_capabilities): hozircha faqat 'finance.cost.view'. */
+  extraCapabilities?: string[];
   sessionId?: string;
   requestId?: string;
   ip?: string | null;

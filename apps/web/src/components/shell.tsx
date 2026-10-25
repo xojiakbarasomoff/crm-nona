@@ -62,6 +62,7 @@ export function Shell({ children }: { children: ReactNode }) {
     ['/dashboard', 'Boshqaruv paneli', true],
     ['/leads', 'Lidlar', true],
     ['/orders', 'Buyurtmalar', true],
+    ['/suppliers', 'Turoperatorlar', true],
     ['/flights', 'Reyslar', true],
     ['/reminders', 'Eslatmalar', true],
     ['/duplicates', 'Dublikatlar', true],

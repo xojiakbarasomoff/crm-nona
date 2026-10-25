@@ -1,12 +1,13 @@
 import type { IntegrationConnection, OutboxOperation, Prisma, WebhookInbox } from '@crm/database';
 import { decryptSecret } from '@crm/database';
-import { backoffDelayMs, decideRetry, formatMoney, type ErrorClass } from '@crm/domain';
+import { backoffDelayMs, decideRetry, formatMoney, singleCurrencySelling, type ErrorClass } from '@crm/domain';
 import { ProviderError, type AmoCrmSignal, type AmoRestClient, type ChatsOutgoingReply, type MetaEvent } from '@crm/integrations';
 import { audit } from '../audit';
 import { integrationActor, systemActor, type CoreDeps } from '../context';
 import { headRecipients, notify, publishEvent } from '../events';
 import { ConnectionPausedError, IntakeService, connectionToken } from './intake.service';
 import { LeadsService } from './leads.service';
+import { orderFinance } from './orders.service';
 
 type HandlerResult = { kind: 'done'; result?: Record<string, unknown> } | { kind: 'retry_later'; delayMs: number; reason: string };
 
@@ -479,10 +480,12 @@ export class ProcessingService {
     const maps = await this.d.prisma.integrationMapping.findMany({ where: { companyId: op.companyId, entityType: 'custom_field' } });
     const field = (k: string) => maps.find((m) => m.localId === k)?.externalId;
     const next = await this.d.prisma.flightSegment.findFirst({ where: { orderId, active: true, departureAtUtc: { gte: this.d.clock.now() } }, orderBy: { departureAtUtc: 'asc' } });
+    // amoCRM'ga faqat SOTUV jami (yagona valyutada) yuboriladi; tannarx va foyda tashqi tizimga chiqmaydi.
+    const eff = singleCurrencySelling(orderFinance(order, await this.d.prisma.orderService.findMany({ where: { orderId, removedAt: null } })));
     const values: Array<[string, string | null]> = [
       ['travel_order_id', order.orderNo],
       ['travel_order_url', `${this.d.config.appPublicUrl}/orders/${order.id}`],
-      ['local_amount', order.agreedAmountMinor !== null && order.currency ? `${formatMoney({ amountMinor: order.agreedAmountMinor, currency: order.currency })} ${order.currency}` : null],
+      ['local_amount', eff ? `${formatMoney({ amountMinor: eff.amountMinor, currency: eff.currency })} ${eff.currency}` : order.agreedAmountMinor !== null && order.currency ? `${formatMoney({ amountMinor: order.agreedAmountMinor, currency: order.currency })} ${order.currency}` : null],
       ['next_departure_at', next?.departureAtUtc?.toISOString() ?? null],
       ['next_flight_no', next ? `${next.marketingCarrier} ${next.flightNumber}` : null],
       ['next_check_state', next?.checkState ?? null],
@@ -491,7 +494,8 @@ export class ProcessingService {
     const customFields = values.filter(([k, v]) => field(k) && v).map(([k, v]) => ({ fieldId: field(k)!, value: v! }));
     const company = await this.d.prisma.company.findUniqueOrThrow({ where: { id: op.companyId } });
     const priceCurrency = ((company.settings ?? {}) as { amoPriceCurrency?: string }).amoPriceCurrency;
-    const price = priceCurrency && order.currency === priceCurrency && order.agreedAmountMinor !== null ? Number(order.agreedAmountMinor / 100n) : undefined;
+    const priceMinor = eff ? (eff.currency === priceCurrency ? eff.amountMinor : null) : priceCurrency && order.currency === priceCurrency ? order.agreedAmountMinor : null;
+    const price = priceCurrency && priceMinor !== null ? Number(priceMinor / 100n) : undefined;
     if (!customFields.length && price === undefined) return { kind: 'done', result: { skipped: 'no_mapped_fields' } };
     await this.amo(conn).updateLead(lead.amoLeadId, { customFields, ...(price !== undefined ? { price } : {}) });
     await this.d.prisma.order.update({ where: { id: orderId }, data: { amoSummaryState: 'synced' } });
