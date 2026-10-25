@@ -90,6 +90,12 @@ export class PlatformController {
     send(res, 200, await this.core.instagram.status(actor.companyId));
   }
 
+  @Get('api/v1/integrations/instagram/subscription')
+  async igSubscription(@Actor() actor: UserActor, @Res() res: Response) {
+    requireCapOrThrow(actor, 'integrations.manage');
+    send(res, 200, await this.core.instagram.subscriptionCheck(actor));
+  }
+
   @Post('api/v1/integrations/instagram/oauth/start')
   async igStart(@Actor() actor: UserActor, @Res() res: Response) {
     send(res, 200, await this.core.instagram.start(actor));

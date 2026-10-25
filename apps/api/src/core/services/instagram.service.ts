@@ -67,6 +67,34 @@ export class InstagramService {
     };
   }
 
+  /**
+   * Diagnostika (faqat o'qish): Meta'dan akkauntning haqiqiy `subscribed_apps` holatini so'raydi.
+   * Token ham, javob tanasi ham qaytarilmaydi — faqat ilova nomi va obuna maydonlari.
+   */
+  async subscriptionCheck(actor: UserActor) {
+    requireCap(actor, 'integrations.manage');
+    const m = this.d.config.meta;
+    const conns = await this.d.prisma.integrationConnection.findMany({ where: { companyId: actor.companyId, provider: 'META_DIRECT', mode: 'live', disconnectedAt: null, credentialsEnc: { not: null } } });
+    const out: Array<{ accountId: string; httpStatus: number | null; apps: Array<{ name: string | null; id: string | null; fields: string[] }>; error: string | null }> = [];
+    for (const conn of conns) {
+      const creds = JSON.parse(decryptSecret(conn.credentialsEnc!, this.d.encryptionKey)) as StoredInstagramCreds;
+      try {
+        const url = `https://graph.instagram.com/${m.graphVersion}/${conn.accountId}/subscribed_apps?access_token=${encodeURIComponent(creds.accessToken)}`;
+        const res = await this.fetchImpl(url, { method: 'GET' });
+        const body = (await res.json().catch(() => ({}))) as { data?: Array<{ id?: string; name?: string; subscribed_fields?: string[] }>; error?: { message?: string; code?: number } };
+        out.push({
+          accountId: conn.accountId,
+          httpStatus: res.status,
+          apps: (body.data ?? []).map((a) => ({ name: a.name ?? null, id: a.id ?? null, fields: a.subscribed_fields ?? [] })),
+          error: body.error ? `code=${body.error.code ?? '?'}` : null,
+        });
+      } catch (err) {
+        out.push({ accountId: conn.accountId, httpStatus: null, apps: [], error: (err as Error).name });
+      }
+    }
+    return { graphVersion: m.graphVersion || null, connections: out };
+  }
+
   async start(actor: UserActor) {
     requireCap(actor, 'integrations.manage');
     const cfg = this.cfg();

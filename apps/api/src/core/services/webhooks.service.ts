@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { parseAmoCrmWebhook, parseChatsWebhook, parseMetaWebhook, verifyChallenge, verifyChatsWebhook, verifyMetaSignature } from '@crm/integrations';
 import type { CoreDeps } from '../context';
 import { AppError } from '../errors';
@@ -22,6 +22,18 @@ export class WebhooksService {
     // Hujjat (Meta, Set up Instagram Webhooks): imzo ilovaning App Secret'i bilan; bitta, sozlangan qiymat. Zaxira sir yo'q.
     if (!verifyMetaSignature(rawBody, signature, this.d.config.meta.appSecret)) {
       await this.d.redis.incr('metrics:signature_failures').catch(() => undefined);
+      // Diagnostika (hodisa BARIBIR rad etiladi): sarlavha shakli va Instagram app secret bilan mos kelish-kelmasligi. Sirlar logga chiqmaydi.
+      const igSecret = this.d.config.meta.instagram.appSecret;
+      const hex = signature?.startsWith('sha256=') ? signature.slice(7) : null;
+      this.d.logger.warn(
+        {
+          signatureHeaderPresent: !!signature,
+          signatureHeaderFormatOk: !!hex && /^[0-9a-f]{64}$/i.test(hex),
+          bodyBytes: rawBody.length,
+          wouldMatchInstagramAppSecret: !!(hex && igSecret && createHmac('sha256', igSecret).update(rawBody).digest('hex') === hex.toLowerCase()),
+        },
+        'meta webhook signature rejected',
+      );
       throw new AppError(401, 'INVALID_SIGNATURE', 'Invalid signature');
     }
     let body: unknown;
