@@ -206,3 +206,21 @@ export const OP_STATUS_LABELS: Record<string, string> = {
   cancelled: 'Рейс отменён',
   departed: 'Вылетел',
 };
+
+/** Последние фильтры списка лидов: карточка возвращает к тому же списку («К списку лидов»). */
+const LEADS_QUERY_KEY = 'crm:leads-query';
+export function rememberLeadsQuery(qs: string) {
+  try {
+    sessionStorage.setItem(LEADS_QUERY_KEY, qs);
+  } catch {
+    /* хранилище недоступно — вернёмся к списку без фильтров */
+  }
+}
+export function leadsListHref(): string {
+  try {
+    const qs = sessionStorage.getItem(LEADS_QUERY_KEY);
+    return qs ? `/leads?${qs}` : '/leads';
+  } catch {
+    return '/leads';
+  }
+}

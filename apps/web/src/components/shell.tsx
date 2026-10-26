@@ -118,7 +118,7 @@ export function Shell({ children }: { children: ReactNode }) {
           </div>
         </aside>
         <main className="content">
-          {me.appMode === 'demo' && pathname !== '/dashboard' && (
+          {me.appMode === 'demo' && pathname !== '/dashboard' && !pathname.startsWith('/leads') && (
             <div className="demo-banner" role="note">
               Входящие сообщения Instagram — {me.liveStatus?.instagramDirectInboundVerified ? 'подключены' : 'не проверены'}. Ответы из CRM — {me.liveStatus?.instagramDirectOutboundVerified ? 'проверены' : 'не проверены'}. Рекламные формы — {me.liveStatus?.leadAdsVerified ? 'получение заявок проверено' : 'не проверены'}.
               {canDo(me, 'integrations.manage') && (

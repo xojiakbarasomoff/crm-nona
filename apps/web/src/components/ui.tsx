@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { fmtDate, localToDmyHm, parseDmy, parseDmyHm, type ApiError, type Loadable } from '../lib/api';
+import { Icon } from './icons';
 
 export function Loading({ label = 'Загрузка…' }: { label?: string }) {
   return (
@@ -52,8 +53,38 @@ export function StaleNotice({ error, loadedAt }: { error: ApiError; loadedAt: Da
   );
 }
 
-export function Badge({ tone = 'neutral', children }: { tone?: 'neutral' | 'ok' | 'warn' | 'bad' | 'info'; children: ReactNode }) {
-  return <span className={`badge ${tone}`}>{children}</span>;
+export function Badge({ tone = 'neutral', children, className }: { tone?: 'neutral' | 'ok' | 'warn' | 'bad' | 'info'; children: ReactNode; className?: string }) {
+  return <span className={`badge ${tone}${className ? ` ${className}` : ''}`}>{children}</span>;
+}
+
+/** Круглый значок с начальными буквами имени (без загрузки фото). */
+export function Initials({ name, size = 'md' }: { name: string; size?: 'md' | 'lg' }) {
+  const letters =
+    name
+      .replace(/^@/, '')
+      .replace(/\(.*?\)/g, '')
+      .trim()
+      .split(/[\s._]+/)
+      .filter(Boolean)
+      .map((w) => w[0])
+      .slice(0, 2)
+      .join('')
+      .toUpperCase() || '?';
+  return (
+    <span className={`initials ${size}`} aria-hidden="true">
+      {letters}
+    </span>
+  );
+}
+
+/** Отдельная иконка-ссылка на профиль Instagram (не путать с открытием карточки лида). */
+export function InstagramIconLink({ username }: { username: string | null | undefined }) {
+  if (!username || !/^[A-Za-z0-9._]{1,30}$/.test(username)) return null;
+  return (
+    <a className="ig-icon" href={`https://www.instagram.com/${encodeURIComponent(username)}/`} target="_blank" rel="noopener noreferrer" aria-label={`Профиль @${username} в Instagram`} title={`Открыть @${username} в Instagram`}>
+      <Icon name="instagram" size={18} />
+    </a>
+  );
 }
 
 /** Ссылка на профиль клиента в Instagram (username — только буквы, цифры, точка и подчёркивание; иначе ссылка не показывается). */
@@ -212,14 +243,15 @@ export function FormError({ error }: { error: ApiError | null }) {
   );
 }
 
-export function Section({ title, actions, children }: { title: string; actions?: ReactNode; children: ReactNode }) {
+export function Section({ title, actions, children, footer, className }: { title: ReactNode; actions?: ReactNode; children: ReactNode; footer?: ReactNode; className?: string }) {
   return (
-    <section className="card">
+    <section className={`card${className ? ` ${className}` : ''}`}>
       <header className="card-head">
         <h2>{title}</h2>
         {actions}
       </header>
       {children}
+      {footer && <footer className="card-foot">{footer}</footer>}
     </section>
   );
 }

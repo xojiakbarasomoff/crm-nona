@@ -1,13 +1,13 @@
 'use client';
 
-import Link from 'next/link';
-import { useParams } from 'next/navigation';
-import { useEffect, useRef, useState } from 'react';
+import { useParams, useRouter } from 'next/navigation';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import {
   api,
   fmtDateTime,
   isoToTashkentLocal,
   LEAD_STATUS_LABELS,
+  leadsListHref,
   LEAD_STATUS_TONE,
   LEAD_TYPE_LABELS,
   newKey,
@@ -21,7 +21,8 @@ import {
   type ApiError,
 } from '../../../../lib/api';
 import { CURRENCIES, fmtMoney, profitPreview } from '../../../../lib/format';
-import { Async, Badge, Field, FormError, InstagramLink, LocalDateTimeField, Section } from '../../../../components/ui';
+import { Async, Badge, Field, FormError, Initials, InstagramIconLink, LocalDateTimeField, Section } from '../../../../components/ui';
+import { Icon } from '../../../../components/icons';
 import { canDo, canWrite, useMe } from '../../../../components/shell';
 import { Attachments } from '../../../../components/attachments';
 import { ContactEditForm } from '../../../../components/manual-lead';
@@ -82,6 +83,7 @@ const statusOf = (stage: string) => (stage === 'NEW' ? 'Новый' : stage === 
 export default function LeadPage() {
   const { id } = useParams<{ id: string }>();
   const me = useMe();
+  const router = useRouter();
   const state = useApi<LeadDetail>(`/api/v1/leads/${id}`, { pollMs: 15_000 });
   const team = useApi<{ items: Array<{ id: string; fullName: string; role: string }> }>('/api/v1/team');
   const [error, setError] = useState<ApiError | null>(null);
@@ -107,15 +109,33 @@ export default function LeadPage() {
         const displayName = c?.fullName && c.fullName !== 'Instagram mijoz' ? c.fullName : c?.instagramUsername ? `@${c.instagramUsername}` : l.name;
         return (
           <>
-            <p className="muted">
-              <Link href="/leads">← Лиды</Link>
-            </p>
-            <div className="lead-head">
-              <h1>{displayName}</h1>
-              <Badge tone={LEAD_STATUS_TONE[d.status]}>{LEAD_STATUS_LABELS[d.status]}</Badge>
-              <Badge>{SOURCE_GROUP_LABELS[sourceGroupOf(l.firstSource)]}</Badge>
-              <Badge tone="info">{LEAD_TYPE_LABELS[l.leadType] ?? l.leadType}</Badge>
-            </div>
+            <button className="btn ghost back" type="button" onClick={() => router.push(leadsListHref())}>
+              <Icon name="arrowLeft" size={18} />К списку лидов
+            </button>
+            <header className="lead-head">
+              <Initials name={displayName} size="lg" />
+              <div className="lead-head-text">
+                <h1>{displayName}</h1>
+                <div className="lead-head-meta">
+                  <span className="badge-group" aria-label="Статус">
+                    <Badge tone={LEAD_STATUS_TONE[d.status]} className="status">
+                      {LEAD_STATUS_LABELS[d.status]}
+                    </Badge>
+                  </span>
+                  <span className="meta-item">
+                    <span className="meta-label">Источник</span> {SOURCE_GROUP_LABELS[sourceGroupOf(l.firstSource)]}
+                  </span>
+                  <span className="meta-item">
+                    <span className="meta-label">Тип</span> {LEAD_TYPE_LABELS[l.leadType] ?? l.leadType}
+                  </span>
+                  {c?.instagramUsername && (
+                    <span className="meta-item">
+                      @{c.instagramUsername} <InstagramIconLink username={c.instagramUsername} />
+                    </span>
+                  )}
+                </div>
+              </div>
+            </header>
             <FormError error={error} />
             <div className="split even">
               <div>
@@ -152,7 +172,9 @@ export default function LeadPage() {
                       <dd>
                         {c.instagramUsername ? (
                           <>
-                            @{c.instagramUsername} <InstagramLink username={c.instagramUsername} withHandle={false} />
+                            <span className="inline-ig">
+                              @{c.instagramUsername} <InstagramIconLink username={c.instagramUsername} />
+                            </span>
                             {c.instagramName ? <span className="muted"> · {c.instagramName}</span> : null}
                           </>
                         ) : (
@@ -175,7 +197,7 @@ export default function LeadPage() {
                   )}
                 </Section>
                 <LeadForm
-                  key={`${l.id}:${l.version}`}
+                  key={l.id}
                   d={d}
                   canStatus={works && editable}
                   canBasics={editable}
@@ -184,6 +206,10 @@ export default function LeadPage() {
                   ownerName={userName(l.ownerId)}
                   onStatus={(status) => run(() => api(`/api/v1/leads/${id}/status`, { method: 'PATCH', body: { version: l.version, status } }))}
                   onBasics={(body) => run(() => api(`/api/v1/leads/${id}/basics`, { method: 'PATCH', body }))}
+                  onSaveNote={async (note) => {
+                    await api(`/api/v1/leads/${id}/basics`, { method: 'PATCH', body: { note } });
+                    await state.reload();
+                  }}
                   onReassign={(userId) => run(() => api(`/api/v1/leads/${id}/assignee`, { method: 'PATCH', body: { userId, reason: 'Решение администратора' } }))}
                 />
               </div>
@@ -198,7 +224,7 @@ export default function LeadPage() {
                 <LeadFormAnswers inquiries={d.inquiries ?? []} />
               </div>
             </div>
-            <DirectChat leadId={l.id} conversations={d.conversations} canReply={works && editable} onSent={() => void state.reload()} />
+            <DirectChat leadId={l.id} clientName={displayName} conversations={d.conversations} canReply={works && editable} onSent={state.reload} />
             <details className="lead-more">
               <summary>История и файлы</summary>
               <Section title="История">
@@ -232,6 +258,7 @@ function LeadForm({
   ownerName,
   onStatus,
   onBasics,
+  onSaveNote,
   onReassign,
 }: {
   d: LeadDetail;
@@ -242,13 +269,51 @@ function LeadForm({
   ownerName: string;
   onStatus: (s: string) => void;
   onBasics: (b: { leadType?: string; note?: string | null }) => void;
+  onSaveNote: (note: string | null) => Promise<void>;
   onReassign: (userId: string) => void;
 }) {
   const l = d.lead;
-  const [note, setNote] = useState(l.note ?? '');
+  const saved = l.note ?? '';
+  const [note, setNote] = useState(saved);
+  const [noteState, setNoteState] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [noteError, setNoteError] = useState<ApiError | null>(null);
+  const dirty = note.trim() !== saved.trim();
+  // Заметку обновили с сервера (другой сотрудник, опрос) — подставляем, только если здесь ничего не правят.
+  const lastSaved = useRef(saved);
+  useEffect(() => {
+    if (lastSaved.current !== saved) {
+      setNote((cur) => (cur.trim() === lastSaved.current.trim() ? saved : cur));
+      lastSaved.current = saved;
+    }
+  }, [saved]);
+  const saveNote = async () => {
+    setNoteState('saving');
+    setNoteError(null);
+    try {
+      await onSaveNote(note.trim() || null);
+      setNoteState('saved');
+    } catch (e) {
+      setNoteError(e as ApiError);
+      setNoteState('idle');
+    }
+  };
   return (
-    <Section title="Лид">
-      <div className="row">
+    <Section
+      title="Лид"
+      footer={
+        canBasics ? (
+          <>
+            <span className="foot-status" role="status" aria-live="polite">
+              {noteState === 'saving' ? 'Сохраняем…' : noteState === 'saved' && !dirty ? <span className="ok-text">Заметки сохранены</span> : dirty ? 'Есть несохранённые изменения' : 'Изменений нет'}
+            </span>
+            <button className="btn" type="button" disabled={!dirty || noteState === 'saving'} onClick={() => void saveNote()}>
+              {noteState === 'saving' ? 'Сохранение…' : 'Сохранить заметки'}
+            </button>
+          </>
+        ) : null
+      }
+    >
+      <div className="form-grid">
         <Field label="Источник">
           <input value={`${SOURCE_GROUP_LABELS[sourceGroupOf(l.firstSource)]}${sourceGroupOf(l.firstSource) === 'ADS' ? ` (${SOURCE_LABELS[l.firstSource] ?? l.firstSource})` : ''}`} readOnly aria-readonly="true" />
         </Field>
@@ -270,8 +335,6 @@ function LeadForm({
             ))}
           </select>
         </Field>
-      </div>
-      <div className="row">
         <Field label="Ответственный">
           {canReassign ? (
             <select value={l.ownerId ?? ''} onChange={(e) => e.target.value && e.target.value !== l.ownerId && onReassign(e.target.value)}>
@@ -291,13 +354,19 @@ function LeadForm({
         </Field>
       </div>
       <Field label="Заметки">
-        <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={4} maxLength={4000} disabled={!canBasics} placeholder="Пожелания клиента, договорённости…" />
+        <textarea
+          value={note}
+          onChange={(e) => {
+            setNote(e.target.value);
+            setNoteState('idle');
+          }}
+          rows={4}
+          maxLength={4000}
+          disabled={!canBasics}
+          placeholder="Пожелания клиента, договорённости…"
+        />
       </Field>
-      {canBasics && (
-        <button className="btn" type="button" disabled={note === (l.note ?? '')} onClick={() => onBasics({ note: note.trim() || null })}>
-          Сохранить заметки
-        </button>
-      )}
+      <FormError error={noteError} />
     </Section>
   );
 }
@@ -392,7 +461,7 @@ function SaleBlock({ leadId, sale, readOnly, onSaved }: { leadId: string; sale: 
               ))}
             </select>
           </Field>
-          <div className="row">
+          <div className="money-grid">
             <Field label="Цена продажи" error={error?.fieldErrors.amount}>
               <input value={f.amount} onChange={(e) => set('amount', e.target.value)} inputMode="decimal" pattern="\d+(\.\d{1,2})?" placeholder="Не указана" />
             </Field>
@@ -408,18 +477,18 @@ function SaleBlock({ leadId, sale, readOnly, onSaved }: { leadId: string; sale: 
                 ))}
               </select>
             </Field>
-            {!costHidden && (
-              <Field label="Прибыль (цена − себестоимость)">
-                <input value={profit !== null ? fmtMoney(profit, f.currency) : 'Неизвестна'} readOnly aria-readonly="true" className={profit?.startsWith('-') ? 'neg' : ''} />
-              </Field>
-            )}
           </div>
+          {!costHidden && (
+            <div className="profit-box" aria-live="polite">
+              <span className="profit-label">Прибыль</span>
+              <strong className={profit?.startsWith('-') ? 'neg' : profit ? 'pos' : 'muted'}>{profit !== null ? fmtMoney(profit, f.currency) : 'Неизвестна'}</strong>
+              <span className="hint">Цена продажи − себестоимость{profit === null ? ' · укажите обе суммы' : ''}</span>
+            </div>
+          )}
           {costHidden && <p className="hint">Себестоимость и прибыль видит администратор (или сотрудник с отдельным разрешением).</p>}
-          <div className="row">
-            <Field label="Дата и время вылета" hint="Время Ташкента (UTC+5)" error={error?.fieldErrors.departureAt}>
-              <LocalDateTimeField value={f.departureAt} onValue={(v) => set('departureAt', v)} />
-            </Field>
-          </div>
+          <Field label="Дата и время вылета" hint="Время Ташкента (UTC+5)" error={error?.fieldErrors.departureAt}>
+            <LocalDateTimeField value={f.departureAt} onValue={(v) => set('departureAt', v)} />
+          </Field>
           <Field label="Примечание" hint="Номер рейса, маршрут, что продано — вручную">
             <textarea value={f.departureNote} onChange={(e) => set('departureNote', e.target.value)} rows={2} maxLength={1000} placeholder="Например: HY-601 Ташкент → Стамбул" />
           </Field>
@@ -449,11 +518,13 @@ function SaleBlock({ leadId, sale, readOnly, onSaved }: { leadId: string; sale: 
           )}
           <FormError error={error} />
           {!readOnly && (
-            <div className="row">
+            <div className="card-foot">
+              <span className="foot-status" role="status" aria-live="polite">
+                {busy ? 'Сохраняем…' : saved ? <span className="ok-text">Продажа сохранена</span> : ''}
+              </span>
               <button className="btn" type="submit" disabled={busy}>
-                Сохранить продажу
+                {busy ? 'Сохранение…' : 'Сохранить продажу'}
               </button>
-              {saved && <span className="ok-text">Сохранено</span>}
             </div>
           )}
         </fieldset>
@@ -462,108 +533,224 @@ function SaleBlock({ leadId, sale, readOnly, onSaved }: { leadId: string; sale: 
   );
 }
 
-const OUT_STATE: Record<string, [string, 'neutral' | 'ok' | 'warn' | 'bad' | 'info']> = {
-  queued: ['Отправляется…', 'warn'],
-  sending: ['Отправляется…', 'warn'],
-  accepted: ['Отправлено (принято Instagram)', 'ok'],
+/** Состояние ответа — только то, что подтверждено: «принято Instagram» ≠ «доставлено» ≠ «прочитано». */
+const OUT_STATE: Record<string, [string, 'pending' | 'ok' | 'bad']> = {
+  queued: ['Отправляется…', 'pending'],
+  sending: ['Отправляется…', 'pending'],
+  accepted: ['Принято Instagram', 'ok'],
   delivered: ['Доставлено', 'ok'],
   read: ['Прочитано', 'ok'],
   failed: ['Не отправлено', 'bad'],
   unknown: ['Результат неизвестен — проверьте в Instagram, повторно не отправляется', 'bad'],
 };
 
+/** Вложения Instagram: ссылка на них не хранится, поэтому показываем понятную подпись без выдуманного превью. */
+const ATTACHMENT_LABELS: Record<string, string> = {
+  ig_post: 'Публикация Instagram',
+  share: 'Публикация Instagram',
+  ig_reel: 'Reels из Instagram',
+  reel: 'Reels из Instagram',
+  story_mention: 'Упоминание в истории',
+  story_reply: 'Ответ на историю',
+  image: 'Фото',
+  video: 'Видео',
+  audio: 'Голосовое сообщение',
+  file: 'Файл',
+  unsupported: 'Сообщение этого типа Instagram не передаёт',
+};
+
+const TZ = 'Asia/Tashkent';
+const dayKey = (iso: string) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date(iso));
+const hhmm = (iso: string) => new Intl.DateTimeFormat('ru-RU', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(iso));
+function dayLabel(key: string) {
+  const today = dayKey(new Date().toISOString());
+  const yesterday = dayKey(new Date(Date.now() - 86_400_000).toISOString());
+  if (key === today) return 'Сегодня';
+  if (key === yesterday) return 'Вчера';
+  const [y, m, d] = key.split('-');
+  return `${d}.${m}.${y}`;
+}
+
 /** «Переписка Instagram»: только сообщения этого клиента; ответ уходит через официальный API Instagram. */
-function DirectChat({ leadId, conversations, canReply, onSent }: { leadId: string; conversations: Conversation[]; canReply: boolean; onSent: () => void }) {
+function DirectChat({ leadId, clientName, conversations, canReply, onSent }: { leadId: string; clientName: string; conversations: Conversation[]; canReply: boolean; onSent: () => Promise<void> }) {
   const [text, setText] = useState('');
   const [error, setError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
+  const [unseen, setUnseen] = useState(0);
+  const sendingRef = useRef(false);
   const keyRef = useRef<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const atBottomRef = useRef(true);
+  const prevCount = useRef(0);
   const conv = conversations[0] ?? null;
   const messages = conversations.flatMap((c) => c.messages).sort((a, b) => (a.providerAt ?? a.createdAt).localeCompare(b.providerAt ?? b.createdAt));
   const pending = messages.some((m) => m.direction === 'outbound' && (m.state === 'queued' || m.state === 'sending'));
-  useEffect(() => {
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
-  }, [messages.length]);
+  const toBottom = useCallback(() => {
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+    setUnseen(0);
+  }, []);
+  // Новые сообщения: прокручиваем вниз, только если читатель уже внизу; иначе показываем кнопку «Новые сообщения».
+  useLayoutEffect(() => {
+    const added = messages.length - prevCount.current;
+    if (prevCount.current === 0 || atBottomRef.current) toBottom();
+    else if (added > 0) setUnseen((n) => n + added);
+    prevCount.current = messages.length;
+  }, [messages.length, toBottom]);
   useEffect(() => {
     if (!pending) return;
-    const t = setInterval(onSent, 3000);
+    const t = setInterval(() => void onSent(), 3000);
     return () => clearInterval(t);
   }, [pending, onSent]);
   const send = async () => {
-    if (!text.trim()) return;
+    const body = text.trim();
+    if (!body || sendingRef.current) return; // защита от двойной отправки (Enter + клик)
+    sendingRef.current = true;
     setBusy(true);
     setError(null);
     keyRef.current ??= newKey(); // повтор после сбоя сети — тот же ключ, второй раз не отправится
     try {
-      await api(`/api/v1/leads/${leadId}/messages`, { method: 'POST', body: { text: text.trim() }, idempotencyKey: keyRef.current });
+      await api(`/api/v1/leads/${leadId}/messages`, { method: 'POST', body: { text: body }, idempotencyKey: keyRef.current });
       keyRef.current = null;
       setText('');
-      onSent();
+      atBottomRef.current = true;
+      await onSent();
     } catch (e) {
-      setError(e as ApiError);
+      setError(e as ApiError); // текст остаётся в поле
     } finally {
+      sendingRef.current = false;
       setBusy(false);
     }
   };
+  const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      void send();
+    }
+  };
+  const peer = conv?.peerUsername ?? null;
+  let lastDay = '';
   return (
-    <Section title="Переписка Instagram" actions={conv?.peerUsername ? <InstagramLink username={conv.peerUsername} /> : null}>
+    <section className="card chat-card" aria-label="Переписка Instagram">
+      <header className="chat-head">
+        <Initials name={peer ? `@${peer}` : clientName} />
+        <div className="chat-head-text">
+          <h2>Переписка Instagram</h2>
+          <span className="muted">{peer ? `@${peer}` : clientName}</span>
+        </div>
+        {peer && (
+          <a className="btn ghost small-ghost" href={`https://www.instagram.com/${encodeURIComponent(peer)}/`} target="_blank" rel="noopener noreferrer">
+            <Icon name="instagram" size={16} />
+            Профиль
+          </a>
+        )}
+      </header>
       {!conv ? (
-        <p className="muted">Клиент не писал в Instagram Direct. Переписка появится автоматически, когда он напишет @nonatravel.uz.</p>
+        <p className="chat-empty muted">Клиент не писал в Instagram Direct. Переписка появится автоматически, когда он напишет @nonatravel.uz.</p>
       ) : (
         <>
-          <div className="chat" ref={listRef} aria-live="polite">
-            {messages.length === 0 && <p className="muted">Сообщений пока нет.</p>}
-            {messages.map((m) => {
-              const out = m.direction === 'outbound';
-              const st = out ? OUT_STATE[m.state] : null;
-              return (
-                <div key={m.id} className={`msg ${out ? 'out' : 'in'}`}>
-                  <div className="msg-meta">
-                    {out ? (m.isEcho ? 'NONA (из Instagram)' : 'NONA') : 'Клиент'} · {fmtDateTime(m.providerAt ?? m.createdAt)}
-                  </div>
-                  <div>{m.contentPurgedAt ? <i className="muted">Текст удалён по сроку хранения</i> : m.content ?? <i className="muted">[{m.type}]</i>}</div>
-                  {st && !m.isEcho && (
-                    <div className="msg-state">
-                      <Badge tone={st[1]}>{st[0]}</Badge>
-                      {m.state === 'failed' && m.error ? <span className="err-text"> {m.error}</span> : null}
+          <div className="chat-wrap">
+            <div
+              className="chat"
+              ref={listRef}
+              role="log"
+              aria-live="polite"
+              tabIndex={0}
+              onScroll={(e) => {
+                const el = e.currentTarget;
+                atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+                if (atBottomRef.current) setUnseen(0);
+              }}
+            >
+              {messages.length === 0 && <p className="chat-empty muted">Сообщений пока нет.</p>}
+              {messages.map((m) => {
+                const at = m.providerAt ?? m.createdAt;
+                const day = dayKey(at);
+                const sep = day !== lastDay;
+                lastDay = day;
+                const out = m.direction === 'outbound';
+                const st = out ? OUT_STATE[m.state] : null;
+                const label = ATTACHMENT_LABELS[m.type] ?? (m.type !== 'text' ? 'Вложение' : null);
+                return (
+                  <div key={m.id} className="chat-item">
+                    {sep && (
+                      <div className="day-sep">
+                        <span>{dayLabel(day)}</span>
+                      </div>
+                    )}
+                    <div className={`bubble ${out ? 'out' : 'in'}`}>
+                      {out && m.isEcho && <span className="bubble-from">Отправлено из приложения Instagram</span>}
+                      {m.contentPurgedAt ? (
+                        <i className="bubble-note">Текст удалён по сроку хранения</i>
+                      ) : m.content ? (
+                        <p className="bubble-text">{m.content}</p>
+                      ) : null}
+                      {!m.contentPurgedAt && label && (
+                        <span className="attach-card">
+                          <Icon name={m.type === 'ig_post' || m.type === 'share' || m.type.includes('reel') ? 'instagram' : 'file'} size={16} />
+                          <span>
+                            {label}
+                            {m.type !== 'unsupported' && <small>Откройте переписку в Instagram, чтобы посмотреть</small>}
+                          </span>
+                        </span>
+                      )}
+                      <span className="bubble-meta">
+                        <time dateTime={at}>{hhmm(at)}</time>
+                        {st && <span className={`msg-st ${st[1]}`}>{st[0]}</span>}
+                      </span>
+                      {out && m.state === 'failed' && m.error && <span className="bubble-error">{m.error}</span>}
                     </div>
-                  )}
-                </div>
-              );
-            })}
+                  </div>
+                );
+              })}
+            </div>
+            {unseen > 0 && (
+              <button type="button" className="new-msgs" onClick={toBottom}>
+                Новые сообщения: {unseen} ↓
+              </button>
+            )}
           </div>
-          {canReply &&
-            (conv.reply.allowed ? (
+          {canReply ? (
+            conv.reply.allowed ? (
               <form
-                className="reply"
+                className="composer"
                 onSubmit={(e) => {
                   e.preventDefault();
                   void send();
                 }}
               >
-                <textarea
-                  value={text}
-                  onChange={(e) => {
-                    setText(e.target.value);
-                    keyRef.current = null;
-                  }}
-                  rows={2}
-                  maxLength={1000}
-                  placeholder="Ответ клиенту в Instagram…"
-                  aria-label="Текст ответа"
-                />
+                <div className="composer-field">
+                  <textarea
+                    value={text}
+                    onChange={(e) => {
+                      setText(e.target.value);
+                      keyRef.current = null;
+                    }}
+                    onKeyDown={onKey}
+                    rows={2}
+                    maxLength={1000}
+                    placeholder="Ответ клиенту в Instagram…"
+                    aria-label="Текст ответа"
+                    aria-describedby="composer-hint"
+                  />
+                  <span id="composer-hint" className="hint">
+                    Enter — отправить · Shift+Enter — новая строка
+                  </span>
+                </div>
                 <button className="btn" type="submit" disabled={busy || !text.trim()}>
-                  Отправить
+                  {busy ? 'Отправка…' : 'Отправить'}
                 </button>
               </form>
             ) : (
-              <div className="state stale">Ответить сейчас нельзя: {conv.reply.message}</div>
-            ))}
-          {conv.reply.mode && conv.reply.mode !== 'live' && <p className="hint">Это демонстрационное подключение: сообщения не уходят в настоящий Instagram.</p>}
+              <div className="state stale composer-note">Ответить сейчас нельзя: {conv.reply.message}</div>
+            )
+          ) : (
+            <p className="composer-note muted">Отвечать клиенту могут администратор и ответственный менеджер.</p>
+          )}
+          {conv.reply.mode && conv.reply.mode !== 'live' && <p className="hint composer-note">Это демонстрационное подключение: сообщения не уходят в настоящий Instagram.</p>}
           <FormError error={error} />
         </>
       )}
-    </Section>
+    </section>
   );
 }
