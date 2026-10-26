@@ -267,7 +267,6 @@ fieldset.plain { border: 0; padding: 0; margin: 0; min-width: 0; }
 input.neg { color: var(--bad); }
 details.lead-more { margin-top: 16px; }
 details.lead-more > summary { cursor: pointer; font-weight: 600; margin-bottom: 10px; }
-.departures tr.due td { background: var(--bad-bg); }
 @media (max-width: 900px) { .split.even { grid-template-columns: 1fr; } }
 .check input[type='checkbox'] { width: auto; flex: 0 0 auto; margin: 0; }
 .check { margin: 8px 0; cursor: pointer; }
@@ -372,3 +371,12 @@ fieldset.plain > .field { margin-bottom: 14px; }
   .composer .btn { width: 100%; margin-bottom: 0; }
   .card-foot .btn { width: 100%; }
 }
+
+/* ---- Dashboard: таблицы в стиле списка лидов, срочные вылеты ---- */
+.table-card-head { padding: 14px 22px 0; margin-bottom: 10px; }
+.table-card-state { margin: 0 22px 20px; }
+.departures tr.urgent td { background: var(--bad-bg); }
+.departures tr.urgent td:first-child { box-shadow: inset 4px 0 0 var(--bad); }
+.departures tr.urgent:hover td { background: #ffe0d3; }
+.urgent-flag { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: #fff; color: var(--bad); border: 1px solid var(--bad-line); font-size: 0.8rem; font-weight: 700; white-space: nowrap; }
+.urgent-count { color: var(--bad); }

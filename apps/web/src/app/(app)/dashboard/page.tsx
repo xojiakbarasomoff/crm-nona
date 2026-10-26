@@ -2,9 +2,9 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState, type MouseEvent } from 'react';
 import { LEAD_STATUS_LABELS, LEAD_STATUS_TONE, SALE_SERVICE_LABELS, SOURCE_GROUP_LABELS, SOURCE_LABELS, fmtDate, fmtDateTime, isoToDmy, parseDmy, sourceGroupOf, statusOfStage, useApi } from '../../../lib/api';
-import { Async, Badge, DateInput, Field, InstagramLink } from '../../../components/ui';
+import { Async, Badge, DateInput, Field, InstagramIconLink, Initials } from '../../../components/ui';
 import { Icon, type IconName } from '../../../components/icons';
 import { money } from '../../../lib/format';
 import { canDo, useMe } from '../../../components/shell';
@@ -166,58 +166,103 @@ export default function DashboardPage() {
   );
 }
 
-const REMINDER_LABELS: Record<Departure['reminder']['state'], string> = { off: 'Выключено', scheduled: 'Запланировано', due: 'Пора напомнить', done: 'Выполнено', departed: 'Вылет прошёл' };
+const REMINDER_LABELS: Record<Departure['reminder']['state'], string> = { off: 'Не включено', scheduled: 'Запланировано', due: 'Пора проверить вылет', done: 'Выполнено', departed: 'Вылет прошёл' };
 
-/** «Ближайшие вылеты»: 15 будущих вылетов, ближайшие первыми; наступившие напоминания выделены. */
+/** «через 2 дн. 5 ч» — сколько осталось до вылета. */
+function timeLeft(iso: string, now: number): string {
+  const ms = new Date(iso).getTime() - now;
+  if (ms <= 0) return 'вылет наступил';
+  const h = Math.floor(ms / 3_600_000);
+  const d = Math.floor(h / 24);
+  if (d >= 1) return `через ${d} дн.${h % 24 ? ` ${h % 24} ч` : ''}`;
+  if (h >= 1) return `через ${h} ч`;
+  return `через ${Math.max(1, Math.round(ms / 60_000))} мин.`;
+}
+
+/** Напоминание наступило (по сохранённому времени: 3 дня до вылета или своё), а вылет ещё впереди. */
+const isUrgent = (r: Departure) => r.reminder.state === 'due' || (r.reminder.state === 'scheduled' && !!r.reminder.dueAt && new Date(r.reminder.dueAt).getTime() <= Date.now());
+
+/** «Ближайшие вылеты»: 15 будущих вылетов по времени вылета (не по дате создания лида и не по фильтру отчёта). */
 function DeparturesCard({ rows, error }: { rows: Departure[] | null; error: string | null }) {
+  const router = useRouter();
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(t);
+  }, []);
+  const urgentCount = rows?.filter(isUrgent).length ?? 0;
   return (
-    <section className="card panel" aria-label="Ближайшие вылеты">
-      <header className="card-head">
+    <section className="card table-card departures-card" aria-label="Ближайшие вылеты">
+      <header className="card-head table-card-head">
         <h2>Ближайшие вылеты</h2>
-        <span className="muted">время Ташкента · ближайшие 15</span>
+        <span className="muted">
+          {urgentCount > 0 ? <b className="urgent-count">Пора проверить: {urgentCount} · </b> : null}
+          ближайшие 15 · время Ташкента
+        </span>
       </header>
-      {error && <div className="state error">{error}</div>}
-      {rows && rows.length === 0 && <div className="state empty">Ближайших вылетов нет. Дата вылета указывается в блоке «Продажа» карточки лида.</div>}
+      {error && <div className="state error table-card-state">{error}</div>}
+      {rows && rows.length === 0 && <div className="state empty table-card-state">Ближайших вылетов пока нет. Дата и время вылета указываются в блоке «Продажа» карточки лида.</div>}
       {rows && rows.length > 0 && (
         <div className="table-wrap">
-          <table className="departures">
+          <table className="leads-table departures">
             <thead>
               <tr>
                 <th>Клиент</th>
                 <th>Вылет</th>
-                <th>Услуга</th>
+                <th>Осталось</th>
                 <th>Рейс / маршрут</th>
                 <th>Ответственный</th>
                 <th>Напоминание</th>
-                <th />
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
-                <tr key={r.orderId} className={r.reminder.state === 'due' ? 'due' : ''}>
-                  <td>
-                    {r.client}
-                    {r.instagramUsername ? (
-                      <div>
-                        <InstagramLink username={r.instagramUsername} />
+              {rows.map((r) => {
+                const urgent = isUrgent(r);
+                const name = r.client && r.client !== 'Instagram mijoz' ? r.client : r.instagramUsername ? `@${r.instagramUsername}` : 'Клиент';
+                const service = r.serviceType ? (r.serviceType === 'other' && r.soldWhat ? r.soldWhat : SALE_SERVICE_LABELS[r.serviceType]) : null;
+                return (
+                  <tr
+                    key={r.orderId}
+                    className={`lead-row${urgent ? ' urgent' : ''}`}
+                    onClick={(e: MouseEvent) => {
+                      if (!(e.target as HTMLElement).closest('a, button')) router.push(`/leads/${r.leadId}`);
+                    }}
+                  >
+                    <td>
+                      <div className="lead-cell">
+                        <Initials name={name} />
+                        <div className="lead-cell-text">
+                          <Link href={`/leads/${r.leadId}`} className="lead-name">
+                            {name}
+                          </Link>
+                          {r.instagramUsername && name !== `@${r.instagramUsername}` ? <div className="lead-sub">@{r.instagramUsername}</div> : null}
+                        </div>
+                        {r.instagramUsername && <InstagramIconLink username={r.instagramUsername} />}
                       </div>
-                    ) : null}
-                  </td>
-                  <td>
-                    <b>{fmtDateTime(r.departureAt)}</b>
-                  </td>
-                  <td>{r.serviceType ? (r.serviceType === 'other' && r.soldWhat ? r.soldWhat : SALE_SERVICE_LABELS[r.serviceType]) : '—'}</td>
-                  <td>{r.departureNote ?? '—'}</td>
-                  <td>{r.owner ?? 'Не назначен'}</td>
-                  <td>
-                    <Badge tone={r.reminder.state === 'due' ? 'bad' : r.reminder.state === 'scheduled' ? 'info' : 'neutral'}>{REMINDER_LABELS[r.reminder.state]}</Badge>
-                    {r.reminder.dueAt && r.reminder.state === 'scheduled' ? <div className="muted">{fmtDateTime(r.reminder.dueAt, r.reminder.timezone)}</div> : null}
-                  </td>
-                  <td>
-                    <Link href={`/leads/${r.leadId}`}>Открыть лид</Link>
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td className="nowrap">
+                      <b>{fmtDateTime(r.departureAt)}</b>
+                    </td>
+                    <td className="nowrap">{timeLeft(r.departureAt, now)}</td>
+                    <td>
+                      {r.departureNote ?? '—'}
+                      {service ? <div className="lead-sub">{service}</div> : null}
+                    </td>
+                    <td>{r.owner ?? 'Не назначен'}</td>
+                    <td>
+                      {urgent ? (
+                        <span className="urgent-flag">
+                          <Icon name="alert" size={14} />
+                          Пора проверить вылет
+                        </span>
+                      ) : (
+                        <Badge tone={r.reminder.state === 'scheduled' ? 'info' : 'neutral'}>{REMINDER_LABELS[r.reminder.state]}</Badge>
+                      )}
+                      {r.reminder.dueAt && !urgent && r.reminder.state === 'scheduled' ? <div className="lead-sub">{fmtDateTime(r.reminder.dueAt, r.reminder.timezone)}</div> : null}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -240,56 +285,75 @@ interface DashLead {
 
 /** Лиды по фильтру (по дате создания): загрузка, ошибка и пустой результат показываются отдельно; результат прошлого периода не сохраняется. */
 function DashLeads({ query }: { query: string }) {
+  const router = useRouter();
   const res = useApi<{ total: number; truncated: boolean; items: DashLead[] }>(`/api/v1/dashboard/leads?${query}`, { reset: true });
   const team = useApi<{ items: Array<{ id: string; fullName: string }> }>('/api/v1/team');
   const owner = (id: string | null) => team.data?.items.find((u) => u.id === id)?.fullName ?? (id ? '—' : 'Не назначен');
   return (
-    <section className="card panel" aria-label="Лиды по фильтру">
-      <header className="card-head">
+    <section className="card table-card" aria-label="Лиды за период">
+      <header className="card-head table-card-head">
         <h2>Лиды за период</h2>
         <span className="muted">{res.data ? `Найдено лидов: ${res.data.total}${res.data.truncated ? ` (показаны первые ${res.data.items.length})` : ''}` : ''}</span>
       </header>
-      {res.loading && !res.data && <div className="state">Загрузка…</div>}
+      {res.loading && !res.data && <div className="state table-card-state">Загрузка…</div>}
       {res.error && !res.data && (
-        <div className="state error" role="alert">
+        <div className="state error table-card-state" role="alert">
           Ошибка запроса: {res.error.message}{' '}
           <button className="btn secondary" type="button" onClick={() => void res.reload()}>
             Повторить
           </button>
         </div>
       )}
-      {res.data && res.data.items.length === 0 && <div className="state empty">За выбранный период данных нет</div>}
+      {res.data && res.data.items.length === 0 && <div className="state empty table-card-state">За выбранный период данных нет</div>}
       {res.data && res.data.items.length > 0 && (
         <div className="table-wrap">
-          <table>
+          <table className="leads-table">
             <thead>
               <tr>
-                <th>Клиент / @username</th>
-                <th>Источник</th>
+                <th>Клиент</th>
                 <th>Статус</th>
+                <th>Источник</th>
                 <th>Ответственный</th>
                 <th>Создан</th>
-                <th>Карточка</th>
               </tr>
             </thead>
             <tbody>
-              {res.data.items.map((l) => (
-                <tr key={l.id}>
-                  <td>
-                    {l.instagramUsername ? <InstagramLink username={l.instagramUsername} /> : l.contactName ?? l.name}
-                    {l.telegramUsername ? <span className="muted"> · @{l.telegramUsername}</span> : null}
-                  </td>
-                  <td>{SOURCE_GROUP_LABELS[sourceGroupOf(l.source)]}</td>
-                  <td>
-                    <Badge tone={LEAD_STATUS_TONE[statusOfStage(l.stage)]}>{LEAD_STATUS_LABELS[statusOfStage(l.stage)]}</Badge>
-                  </td>
-                  <td>{owner(l.ownerId)}</td>
-                  <td>{fmtDateTime(l.createdAt)}</td>
-                  <td>
-                    <Link href={`/leads/${l.id}`}>{l.name}</Link>
-                  </td>
-                </tr>
-              ))}
+              {res.data.items.map((l) => {
+                const st = statusOfStage(l.stage);
+                const handle = l.instagramUsername ? `@${l.instagramUsername}` : null;
+                const name = l.contactName && l.contactName !== 'Instagram mijoz' ? l.contactName : (handle ?? l.name);
+                const sub = [handle && handle !== name ? handle : null, l.telegramUsername ? `Telegram @${l.telegramUsername}` : null].filter(Boolean).join(' · ');
+                return (
+                  <tr
+                    key={l.id}
+                    className="lead-row"
+                    onClick={(e: MouseEvent) => {
+                      if (!(e.target as HTMLElement).closest('a, button')) router.push(`/leads/${l.id}`);
+                    }}
+                  >
+                    <td>
+                      <div className="lead-cell">
+                        <Initials name={name} />
+                        <div className="lead-cell-text">
+                          <Link href={`/leads/${l.id}`} className="lead-name">
+                            {name}
+                          </Link>
+                          {sub ? <div className="lead-sub">{sub}</div> : null}
+                        </div>
+                        {l.instagramUsername && <InstagramIconLink username={l.instagramUsername} />}
+                      </div>
+                    </td>
+                    <td>
+                      <Badge tone={LEAD_STATUS_TONE[st]} className="status">
+                        {LEAD_STATUS_LABELS[st]}
+                      </Badge>
+                    </td>
+                    <td>{SOURCE_GROUP_LABELS[sourceGroupOf(l.source)]}</td>
+                    <td>{owner(l.ownerId)}</td>
+                    <td className="nowrap">{fmtDateTime(l.createdAt)}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
