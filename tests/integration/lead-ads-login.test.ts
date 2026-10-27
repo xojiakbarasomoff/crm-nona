@@ -86,7 +86,8 @@ describe('Lead Ads setup and signed webhook → visible CRM lead (local Graph fi
     expect(c.credentialsEnc).not.toContain('page-test-token');
     expect((await admin.get('/api/v1/integrations/lead-ads/status')).body.connections.find((x: { id: string }) => x.id === c.id).state).toBe('awaiting_test');
     await drain(core);
-    expect((await core.deps.prisma.outboxOperation.findFirstOrThrow({ where: { operationKey: { startsWith: `meta.backfill:${c.id}:` } } })).state).toBe('done');
+    // Connecting must not import historical leads on its own.
+    expect(await core.deps.prisma.outboxOperation.count({ where: { operationKey: { startsWith: `meta.backfill:${c.id}:` } } })).toBe(0);
   });
 
   it('imports a real-mode event through Graph in demo runtime, exposes form answers, and deduplicates retries', async () => {

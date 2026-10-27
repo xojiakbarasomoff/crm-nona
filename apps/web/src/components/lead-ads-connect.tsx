@@ -42,7 +42,7 @@ export function LeadAdsConnect({ onChange }: { onChange: () => Promise<void> }) 
     <FormError error={error} />
     {callback === 'denied' && <div className="state error">Разрешение Facebook не предоставлено. Формы не подключены.</div>}
     {callback === 'failed' && <div className="state error">{ERRORS[query?.get('reason') ?? ''] ?? 'Facebook не удалось подключить. Проверьте настройки приложения и доступ к странице, затем повторите подключение.'}</div>}
-    {saved && <div className="state" role="status">Формы подключены, загрузка недавних заявок запланирована. Отправьте тестовую заявку через Meta и проверьте её в лидах.</div>}
+    {saved && <div className="state" role="status">Формы подключены. Старые заявки автоматически не загружаются — в CRM попадут только новые заявки выбранных форм. Отправьте тестовую заявку через Meta и проверьте её в лидах.</div>}
     <Async state={status}>{s => <>
       {!s.configured && <div className="state error">Подключение рекламных форм ещё не настроено. Администратору нужно указать параметры Meta.</div>}
       {s.connections.map(c => <div className="state" key={c.id}>

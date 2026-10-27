@@ -4,7 +4,6 @@ import { buildLeadAdsAuthorizeUrl, hashState, LEAD_ADS_SCOPES, LeadAdsLoginClien
 import { audit } from '../audit';
 import type { CoreDeps, UserActor } from '../context';
 import { conflict, unprocessable } from '../errors';
-import { enqueueOutbox } from '../queue';
 import { requireCap } from '../scope';
 
 interface PendingPages { pages: LeadAdsPage[] }
@@ -92,7 +91,6 @@ export class LeadAdsService {
     const formIds = [...new Set(p.formIds)];
     if (!formIds.length || formIds.some(id => !available.some(f => f.id === id))) throw unprocessable('LEAD_ADS_FORM_INVALID', 'Выберите доступные рекламные формы этой страницы.');
     await client.subscribe(page.id, page.accessToken);
-    const now = this.d.clock.now();
     const id = await this.d.prisma.$transaction(async tx => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`lead_ads_page:${page.id}`}, 0))`;
       if (await tx.integrationConnection.findFirst({ where: { provider: 'META_LEADS', accountId: page.id, companyId: { not: actor.companyId }, disconnectedAt: null }, select: { id: true } })) throw conflict('LEAD_ADS_PAGE_IN_USE', 'Страница уже подключена к другой компании.');
@@ -101,8 +99,7 @@ export class LeadAdsService {
         create: { companyId: actor.companyId, provider: 'META_LEADS', mode: 'live', accountId: page.id, accountDomain: page.name, routeToken: randomBytes(24).toString('hex'), credentialsEnc: encryptSecret(JSON.stringify({ accessToken: page.accessToken }), this.d.encryptionKey), health: 'degraded', healthReason: 'awaiting_lead_ads_test', settings: { formIds, forms: available.filter(f => formIds.includes(f.id)).map(f => ({ id: f.id, name: f.name, status: f.status })), webhookSubscribed: true, instagramUsername: page.instagramUsername } },
         update: { mode: 'live', accountDomain: page.name, credentialsEnc: encryptSecret(JSON.stringify({ accessToken: page.accessToken }), this.d.encryptionKey), disconnectedAt: null, expiresAt: null, health: 'degraded', healthReason: 'awaiting_lead_ads_test', lastError: null, settings: { formIds, forms: available.filter(f => formIds.includes(f.id)).map(f => ({ id: f.id, name: f.name, status: f.status })), webhookSubscribed: true, instagramUsername: page.instagramUsername }, version: { increment: 1 } },
       });
-      // Recovers any lead submitted during the subscription/save transition; same dedupe keys as webhooks.
-      await enqueueOutbox(tx, { companyId: actor.companyId, connectionId: conn.id, operationKey: `meta.backfill:${conn.id}:${now.getTime()}`, target: 'meta', action: 'meta.backfill', payload: { connectionId: conn.id, since: new Date(now.getTime() - 7 * 86400_000).toISOString(), requestedBy: actor.id } });
+      // No automatic history import on connect: old leads are loaded only by an explicit admin backfill (/lead-ads/backfill).
       await audit(tx, actor, { entityType: 'integration', entityId: conn.id, action: 'lead_ads_connected', newValue: { pageId: page.id, formIds, mode: 'live' } });
       return conn.id;
     });
