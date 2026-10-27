@@ -380,3 +380,9 @@ fieldset.plain > .field { margin-bottom: 14px; }
 .departures tr.urgent:hover td { background: #ffe0d3; }
 .urgent-flag { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: #fff; color: var(--bad); border: 1px solid var(--bad-line); font-size: 0.8rem; font-weight: 700; white-space: nowrap; }
 .urgent-count { color: var(--bad); }
+
+/* ---- «Таргет»: клиент из рекламы (данные Meta) ---- */
+.badge.target { background: #fff3e0; color: #9a4d00; border-color: #f3c995; font-size: 0.72rem; padding: 2px 8px; flex-shrink: 0; }
+.check-filter { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; font-weight: 500; cursor: pointer; white-space: nowrap; }
+.check-filter input { width: 18px; height: 18px; margin: 0; accent-color: var(--bordo-700); }
+.table-card-head .check-filter { min-height: 0; font-size: 0.9rem; }

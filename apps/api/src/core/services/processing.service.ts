@@ -78,6 +78,8 @@ export class ProcessingService {
           return this.intake.processIgMessage({ ...evt, timestamp: new Date(evt.timestamp) }, receivedAt, row.correlationId);
         case 'ig_read':
           return this.intake.processIgRead({ ...evt, timestamp: new Date(evt.timestamp) });
+        case 'ig_referral':
+          return this.intake.processIgReferral({ ...evt, timestamp: new Date(evt.timestamp) });
         default:
           return 'ignored';
       }

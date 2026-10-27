@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, type MouseEvent } from 'react';
 import { LEAD_STATUS_LABELS, LEAD_STATUS_TONE, SALE_SERVICE_LABELS, SOURCE_GROUP_LABELS, SOURCE_LABELS, fmtDate, fmtDateTime, isoToDmy, parseDmy, sourceGroupOf, statusOfStage, useApi } from '../../../lib/api';
-import { Async, Badge, DateInput, Field, InstagramIconLink, Initials } from '../../../components/ui';
+import { Async, Badge, DateInput, Field, InstagramIconLink, Initials, TargetBadge } from '../../../components/ui';
 import { Icon, type IconName } from '../../../components/icons';
 import { money } from '../../../lib/format';
 import { canDo, useMe } from '../../../components/shell';
@@ -281,18 +281,25 @@ interface DashLead {
   contactName: string | null;
   instagramUsername: string | null;
   telegramUsername: string | null;
+  fromAd: boolean;
 }
 
 /** Лиды по фильтру (по дате создания): загрузка, ошибка и пустой результат показываются отдельно; результат прошлого периода не сохраняется. */
 function DashLeads({ query }: { query: string }) {
   const router = useRouter();
-  const res = useApi<{ total: number; truncated: boolean; items: DashLead[] }>(`/api/v1/dashboard/leads?${query}`, { reset: true });
+  // «Только из рекламы» сужает только эту таблицу (вместе с периодом и фильтрами отчёта); KPI не меняются.
+  const [fromAd, setFromAd] = useState(false);
+  const res = useApi<{ total: number; truncated: boolean; items: DashLead[] }>(`/api/v1/dashboard/leads?${query}${fromAd ? '&fromAd=true' : ''}`, { reset: true });
   const team = useApi<{ items: Array<{ id: string; fullName: string }> }>('/api/v1/team');
   const owner = (id: string | null) => team.data?.items.find((u) => u.id === id)?.fullName ?? (id ? '—' : 'Не назначен');
   return (
     <section className="card table-card" aria-label="Лиды за период">
       <header className="card-head table-card-head">
         <h2>Лиды за период</h2>
+        <label className="check-filter">
+          <input type="checkbox" checked={fromAd} onChange={(e) => setFromAd(e.target.checked)} />
+          Только из рекламы
+        </label>
         <span className="muted">{res.data ? `Найдено лидов: ${res.data.total}${res.data.truncated ? ` (показаны первые ${res.data.items.length})` : ''}` : ''}</span>
       </header>
       {res.loading && !res.data && <div className="state table-card-state">Загрузка…</div>}
@@ -341,6 +348,7 @@ function DashLeads({ query }: { query: string }) {
                           {sub ? <div className="lead-sub">{sub}</div> : null}
                         </div>
                         {l.instagramUsername && <InstagramIconLink username={l.instagramUsername} />}
+                        <TargetBadge show={l.fromAd} />
                       </div>
                     </td>
                     <td>

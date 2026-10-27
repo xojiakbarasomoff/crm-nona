@@ -65,7 +65,7 @@ export class WebhooksService {
     const correlationId = randomUUID();
     let stored = 0;
     for (const e of events) {
-      const accountKey = e.kind === 'leadgen' ? e.pageId : e.kind === 'ig_message' || e.kind === 'ig_read' ? e.businessAccountId : 'unknown';
+      const accountKey = e.kind === 'leadgen' ? e.pageId : e.kind === 'ig_message' || e.kind === 'ig_read' || e.kind === 'ig_referral' ? e.businessAccountId : 'unknown';
       const provider = e.kind === 'leadgen' ? 'META_LEADS' : 'META_DIRECT';
       let conn = accountKey !== 'unknown' ? await this.d.prisma.integrationConnection.findFirst({ where: { provider, accountId: accountKey, disconnectedAt: null }, select: { id: true, companyId: true, accountId: true } }) : null;
       // Instagram Login'da webhook account ID `user_id` yoki shu akkauntning app-scoped `id` si bilan kelishi mumkin: faqat shu ulanishning o'z ID'lari.
@@ -82,7 +82,7 @@ export class WebhooksService {
         continue;
       }
       // Qayta ishlash ulanishni `accountId` bo'yicha topadi: app-scoped ID bilan kelgan hodisa kanonik akkaunt ID'siga keltiriladi.
-      const canonical = conn && (e.kind === 'ig_message' || e.kind === 'ig_read') && e.businessAccountId !== conn.accountId ? { ...e, businessAccountId: conn.accountId } : e;
+      const canonical = conn && (e.kind === 'ig_message' || e.kind === 'ig_read' || e.kind === 'ig_referral') && e.businessAccountId !== conn.accountId ? { ...e, businessAccountId: conn.accountId } : e;
       if (await storeInboxEvent(this.d.prisma, this.d.encryptionKey, { provider: 'meta', connectionKey: conn?.accountId ?? accountKey, companyId: conn?.companyId ?? null, externalEventId: e.key, eventType: e.kind, payload: canonical, correlationId })) stored++;
       if (conn) await this.d.prisma.integrationConnection.update({ where: { id: conn.id }, data: { lastWebhookAt: this.d.clock.now() } }).catch(() => undefined);
     }

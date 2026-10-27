@@ -57,6 +57,16 @@ export function Badge({ tone = 'neutral', children, className }: { tone?: 'neutr
   return <span className={`badge ${tone}${className ? ` ${className}` : ''}`}>{children}</span>;
 }
 
+/** «Таргет»: клиент пришёл в Direct из рекламы — только по данным Meta (referral ADS / ad_id). Источник Instagram Direct не меняется. */
+export function TargetBadge({ show }: { show: boolean | null | undefined }) {
+  if (!show) return null;
+  return (
+    <span className="badge target" title="Клиент пришёл из рекламы (по данным Meta)">
+      Таргет
+    </span>
+  );
+}
+
 /** Круглый значок с начальными буквами имени (без загрузки фото). */
 export function Initials({ name, size = 'md' }: { name: string; size?: 'md' | 'lg' }) {
   const letters =

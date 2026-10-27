@@ -30,7 +30,33 @@ export interface IgMessageEvent {
   isEcho: boolean;
   isUnsupported: boolean;
   timestamp: Date;
-  referral: { source: string | null; type: string | null; adId: string | null; ref: string | null } | null;
+  referral: IgReferral | null;
+}
+
+/** Meta `referral` (click-to-Direct reklama va boshqa kirish nuqtalari). Vaqtinchalik media URL'lari saqlanmaydi. */
+export type IgReferral = {
+  source: string | null;
+  type: string | null;
+  adId: string | null;
+  ref: string | null;
+  adTitle?: string | null;
+  postId?: string | null;
+  productId?: string | null;
+};
+
+/** Xabarsiz alohida kelgan referral (masalan, mavjud suhbatda reklama orqali qayta ochilganda). */
+export interface IgReferralEvent {
+  kind: 'ig_referral';
+  key: string;
+  businessAccountId: string;
+  scopedPeerId: string;
+  timestamp: Date;
+  referral: IgReferral;
+}
+
+/** Faqat rasmiy reklama dalili: source=ADS yoki ad_id. Boshqa referral (ig.me havola, mahsulot) reklama hisoblanmaydi. */
+export function isAdReferral(r: IgReferral | null | undefined): r is IgReferral {
+  return !!r && ((r.source ?? '').toUpperCase() === 'ADS' || !!r.adId);
 }
 
 export interface IgReadEvent {
@@ -49,10 +75,14 @@ export interface UnsupportedEvent {
   field: string;
 }
 
-export type MetaEvent = LeadgenEvent | IgMessageEvent | IgReadEvent | UnsupportedEvent;
+export type MetaEvent = LeadgenEvent | IgMessageEvent | IgReadEvent | IgReferralEvent | UnsupportedEvent;
 
 type Json = Record<string, unknown>;
 const str = (v: unknown): string | null => (typeof v === 'string' && v ? v : typeof v === 'number' ? String(v) : null);
+const parseReferral = (raw: Json): IgReferral => {
+  const ctx = (raw.ads_context_data ?? {}) as Json;
+  return { source: str(raw.source), type: str(raw.type), adId: str(raw.ad_id), ref: str(raw.ref), adTitle: str(ctx.ad_title), postId: str(ctx.post_id), productId: str(ctx.product_id) };
+};
 const tsToDate = (v: unknown): Date | null => {
   if (typeof v !== 'number' && typeof v !== 'string') return null;
   const n = Number(v);
@@ -114,14 +144,20 @@ export function parseMetaWebhook(body: unknown): MetaEvent[] {
           isEcho,
           isUnsupported: message.is_unsupported === true || (!text && attachments.length === 0),
           timestamp,
-          referral: referralRaw
-            ? {
-                source: str(referralRaw.source),
-                type: str(referralRaw.type),
-                adId: str(referralRaw.ad_id),
-                ref: str(referralRaw.ref),
-              }
-            : null,
+          referral: referralRaw ? parseReferral(referralRaw) : null,
+        });
+        continue;
+      }
+      const referralOnly = m.referral as Json | undefined;
+      if (referralOnly && sender && recipient) {
+        const referral = parseReferral(referralOnly);
+        events.push({
+          kind: 'ig_referral',
+          key: `ig_referral:${recipient}:${sender}:${timestamp.getTime()}:${referral.adId ?? referral.ref ?? ''}`,
+          businessAccountId: recipient,
+          scopedPeerId: sender,
+          timestamp,
+          referral,
         });
         continue;
       }

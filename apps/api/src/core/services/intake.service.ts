@@ -1,7 +1,7 @@
 import type { Channel, IntegrationConnection, Lead, Prisma, Tx } from '@crm/database';
 import { decryptSecret } from '@crm/database';
 import { normalizeEmail, normalizePhone, type CompanyPhoneRule } from '@crm/domain';
-import type { IgMessageEvent, IgReadEvent, LeadgenEvent, MetaLeadData } from '@crm/integrations';
+import { isAdReferral, type IgMessageEvent, type IgReadEvent, type IgReferral, type IgReferralEvent, type LeadgenEvent, type MetaLeadData } from '@crm/integrations';
 import { audit } from '../audit';
 import { integrationActor, type CoreDeps } from '../context';
 import { headRecipients, notify, publishEvent } from '../events';
@@ -324,6 +324,10 @@ export class IntakeService {
         }
       }
 
+      // Reklama dalili: xabar bilan kelgani saqlanadi; oldin alohida kelgan (kutilayotgan) dalillar shu lidga bog'lanadi.
+      if (isAdReferral(evt.referral)) await this.recordAdReferral(tx, conn, evt.scopedPeerId, `msg:${evt.mid || evt.key}`, evt.referral, evt.timestamp);
+      if (leadId) await this.applyAdReferrals(tx, conn, evt.scopedPeerId, leadId, actor);
+
       const text = evt.isUnsupported ? UNSUPPORTED_MEDIA_TEXT : evt.text;
       await tx.message.create({
         data: {
@@ -395,6 +399,47 @@ export class IntakeService {
       await tx.conversation.update({ where: { id: conversation.id }, data: { lastHumanReplyAt: evt.timestamp, ...(conversation.firstHumanReplyAt ? {} : { firstHumanReplyAt: evt.timestamp }) } });
     });
     return 'echo';
+  }
+
+  /**
+   * Xabarsiz kelgan reklama referral'i: yangi kontakt/lid yaratmaydi. Suhbat va faol lid bo'lsa, shu lidga bog'lanadi;
+   * aks holda saqlanib, mijozning keyingi xabari qaysi lidga tushsa, o'shanga bog'lanadi.
+   */
+  async processIgReferral(evt: IgReferralEvent): Promise<'processed' | 'duplicate' | 'ignored'> {
+    const conn = await this.connection('META_DIRECT', evt.businessAccountId);
+    if (!conn || !isAdReferral(evt.referral)) return 'ignored';
+    assertConnectionActive(conn);
+    const actor = integrationActor(conn.companyId, 'instagram_direct');
+    const out = await this.d.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`conv:${conn.id}:${evt.scopedPeerId}`}, 0))`;
+      if (!(await this.recordAdReferral(tx, conn, evt.scopedPeerId, `ref:${evt.key}`, evt.referral, evt.timestamp))) return { state: 'duplicate' as const, conversationId: null };
+      const conversation = await tx.conversation.findUnique({ where: { connectionId_scopedPeerId: { connectionId: conn.id, scopedPeerId: evt.scopedPeerId } } });
+      const lead = conversation?.leadId ? await tx.lead.findUnique({ where: { id: conversation.leadId } }) : null;
+      // Yopilgan lid qayta tasniflanmaydi: keyingi xabar yangi lid ochsa, dalil o'shanga bog'lanadi.
+      if (lead && !lead.deletedAt && lead.stage !== 'WON' && lead.stage !== 'LOST') await this.applyAdReferrals(tx, conn, evt.scopedPeerId, lead.id, actor);
+      return { state: 'processed' as const, conversationId: conversation?.id ?? null };
+    }, INTAKE_TX);
+    if (out.conversationId) await publishEvent(this.d.redis, { companyId: conn.companyId, entityType: 'conversation', entityId: out.conversationId, kind: 'message' });
+    return out.state;
+  }
+
+  /** Dalilni bir marta saqlaydi (connection + hodisa kaliti bo'yicha); takroriy yetkazishda false. */
+  private async recordAdReferral(tx: Tx, conn: IntegrationConnection, scopedPeerId: string, eventKey: string, referral: IgReferral, at: Date): Promise<boolean> {
+    const res = await tx.igAdReferral.createMany({
+      data: [{ companyId: conn.companyId, connectionId: conn.id, scopedPeerId, eventKey, adId: referral.adId, referral, occurredAt: at }],
+      skipDuplicates: true,
+    });
+    return res.count === 1;
+  }
+
+  /** Kutilayotgan dalillarni lidga bog'laydi. Lidda dalil bo'lmasa, eng birinchisi yoziladi; mavjud dalil, manba va tarix o'zgarmaydi. */
+  private async applyAdReferrals(tx: Tx, conn: IntegrationConnection, scopedPeerId: string, leadId: string, actor: ReturnType<typeof integrationActor>) {
+    const pending = await tx.igAdReferral.findMany({ where: { connectionId: conn.id, scopedPeerId, appliedAt: null }, orderBy: { occurredAt: 'asc' } });
+    if (!pending.length) return;
+    const first = pending[0]!;
+    const marked = await tx.lead.updateMany({ where: { id: leadId, adReferralAt: null }, data: { adReferralAt: first.occurredAt, adReferral: first.referral as Prisma.InputJsonValue } });
+    await tx.igAdReferral.updateMany({ where: { id: { in: pending.map((r) => r.id) } }, data: { leadId, appliedAt: this.d.clock.now() } });
+    if (marked.count) await audit(tx, actor, { entityType: 'lead', entityId: leadId, action: 'ad_referral_detected', newValue: { adId: first.adId, source: (first.referral as { source?: string | null }).source ?? null } });
   }
 
   async processIgRead(evt: IgReadEvent): Promise<'processed' | 'ignored'> {

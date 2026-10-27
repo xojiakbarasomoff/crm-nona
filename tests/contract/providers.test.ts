@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assertAdaptersAllowed,
   classifyStatus,
+  isAdReferral,
   MockAdapterInProductionError,
   normalizeLead,
   parseMetaWebhook,
@@ -51,6 +52,26 @@ describe('Meta webhook parsing', () => {
     expect(echo).toMatchObject({ isEcho: true, scopedPeerId: '990000000000001', key: 'ig_echo:aWdfZAG1faXRlbTpEEMO3' });
     expect(reel?.isUnsupported).toBe(false);
     expect(reel?.attachments[0]?.type).toBe('ig_reel');
+  });
+
+  it('reads ad metadata from a message referral and a standalone referral; only ADS/ad_id counts as an ad', () => {
+    const at = 1_790_000_000_000;
+    const events = parseMetaWebhook({
+      object: 'instagram',
+      entry: [{ id: '17840000000000001', messaging: [
+        { sender: { id: '990000000000007' }, recipient: { id: '17840000000000001' }, timestamp: at, message: { mid: 'm_ad', text: 'Narx?', referral: { source: 'ADS', type: 'OPEN_THREAD', ad_id: '120000000000801', ads_context_data: { ad_title: 'Dubai', photo_url: 'https://cdn/x.jpg', post_id: '180000000000009' } } } },
+        { sender: { id: '990000000000008' }, recipient: { id: '17840000000000001' }, timestamp: at, referral: { source: 'ADS', type: 'OPEN_THREAD', ad_id: '120000000000802' } },
+        { sender: { id: '990000000000009' }, recipient: { id: '17840000000000001' }, timestamp: at, referral: { source: 'SHORTLINK', type: 'OPEN_THREAD', ref: 'bio' } },
+      ] }],
+    });
+    expect(events.map((e) => e.kind)).toEqual(['ig_message', 'ig_referral', 'ig_referral']);
+    const [msg, standalone, shortlink] = events as [Extract<(typeof events)[number], { kind: 'ig_message' }>, Extract<(typeof events)[number], { kind: 'ig_referral' }>, Extract<(typeof events)[number], { kind: 'ig_referral' }>];
+    expect(msg.referral).toEqual({ source: 'ADS', type: 'OPEN_THREAD', adId: '120000000000801', ref: null, adTitle: 'Dubai', postId: '180000000000009', productId: null });
+    expect(standalone).toMatchObject({ businessAccountId: '17840000000000001', scopedPeerId: '990000000000008', key: `ig_referral:17840000000000001:990000000000008:${at}:120000000000802` });
+    expect(isAdReferral(msg.referral)).toBe(true);
+    expect(isAdReferral(standalone.referral)).toBe(true);
+    expect(isAdReferral(shortlink.referral)).toBe(false);
+    expect(isAdReferral(null)).toBe(false);
   });
 
   it('normalizes the lead object without guessing platform', () => {

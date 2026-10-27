@@ -530,6 +530,9 @@ model Lead {
   stateHash          String?   @map("state_hash")
   /// Tanlangan turoperator (yetkazib beruvchi). Reklama manbasi — firstSource — bilan aralashmaydi.
   tourOperatorId     String?   @map("tour_operator_id") @db.Uuid
+  /// Reklama dalili (Instagram Direct: Meta referral source=ADS yoki ad_id). Birinchi dalil saqlanadi, keyin o'zgartirilmaydi; firstSource'ga tegmaydi.
+  adReferralAt       DateTime? @map("ad_referral_at") @db.Timestamptz(3)
+  adReferral         Json?     @map("ad_referral")
   deletedAt          DateTime? @map("deleted_at") @db.Timestamptz(3)
   version            Int       @default(1)
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -543,7 +546,28 @@ model Lead {
   @@index([companyId, contactId])
   @@index([companyId, createdAt])
   @@index([companyId, tourOperatorId])
+  @@index([companyId, adReferralAt])
   @@map("leads")
+}
+
+/// Instagram Direct reklama dalillari (referral). Xabar ichida yoki alohida webhook bilan kelishi mumkin; suhbat/lid ma'lum bo'lgach
+/// o'sha lidga bog'lanadi. Yangi kontakt yoki lid yaratmaydi.
+model IgAdReferral {
+  id           String    @id @default(uuid()) @db.Uuid
+  companyId    String    @map("company_id") @db.Uuid
+  connectionId String    @map("connection_id") @db.Uuid
+  scopedPeerId String    @map("scoped_peer_id")
+  eventKey     String    @map("event_key")
+  adId         String?   @map("ad_id")
+  referral     Json
+  occurredAt   DateTime  @map("occurred_at") @db.Timestamptz(3)
+  leadId       String?   @map("lead_id") @db.Uuid
+  appliedAt    DateTime? @map("applied_at") @db.Timestamptz(3)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([connectionId, eventKey])
+  @@index([connectionId, scopedPeerId])
+  @@map("ig_ad_referrals")
 }
 
 model LeadEvent {

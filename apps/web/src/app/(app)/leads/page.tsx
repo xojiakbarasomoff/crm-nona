@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, type MouseEvent } from 'react';
 import { LEAD_STATUS_LABELS, LEAD_STATUS_TONE, LEAD_TYPE_LABELS, SOURCE_GROUP_LABELS, fmtDateTime, rememberLeadsQuery, sourceGroupOf, statusOfStage, useApi } from '../../../lib/api';
-import { Async, Badge, Field, InstagramIconLink, Initials } from '../../../components/ui';
+import { Async, Badge, Field, InstagramIconLink, Initials, TargetBadge } from '../../../components/ui';
 import { NewLeadForm } from '../../../components/manual-lead';
 
 interface LeadRow {
@@ -18,11 +18,12 @@ interface LeadRow {
   slaBreachedAt: string | null;
   firstHumanActionAt: string | null;
   contactInstagramUsername: string | null;
+  fromAd: boolean;
 }
 
-const FILTER_KEYS = ['status', 'sourceGroup', 'leadType', 'search'] as const;
+const FILTER_KEYS = ['status', 'sourceGroup', 'leadType', 'fromAd', 'search'] as const;
 type Filters = Record<(typeof FILTER_KEYS)[number], string>;
-const EMPTY: Filters = { status: '', sourceGroup: '', leadType: '', search: '' };
+const EMPTY: Filters = { status: '', sourceGroup: '', leadType: '', fromAd: '', search: '' };
 
 export default function LeadsPage() {
   const router = useRouter();
@@ -82,6 +83,12 @@ export default function LeadsPage() {
             </select>
           </Field>
         ))}
+        <Field label="Реклама">
+          <span className="check-filter">
+            <input type="checkbox" checked={f?.fromAd === 'true'} onChange={(e) => set('fromAd', e.target.checked ? 'true' : '')} />
+            Только из рекламы
+          </span>
+        </Field>
         <Field label="Поиск">
           <input type="search" value={f?.search ?? ''} onChange={(e) => set('search', e.target.value)} placeholder="Имя, телефон или @username" />
         </Field>
@@ -124,6 +131,7 @@ export default function LeadsPage() {
                               )}
                             </div>
                             {ig && <InstagramIconLink username={ig} />}
+                            <TargetBadge show={l.fromAd} />
                           </div>
                         </td>
                         <td>

@@ -170,7 +170,7 @@ export class LeadsService {
 
   // ---------------- Web actions ----------------
 
-  async list(actor: UserActor, q: { stage?: Stage; status?: LeadStatus; sourceGroup?: LeadSourceGroup; leadType?: LeadType; ownerId?: string; source?: Channel; search?: string; cursor?: string; limit: number }) {
+  async list(actor: UserActor, q: { stage?: Stage; status?: LeadStatus; sourceGroup?: LeadSourceGroup; leadType?: LeadType; ownerId?: string; source?: Channel; search?: string; fromAd?: 'true'; cursor?: string; limit: number }) {
     const search = q.search?.trim() ?? '';
     // Qidiruv: lid nomi, mijoz ismi/familiyasi, telefon, Instagram va Telegram username (@ bilan yoki usiz). Foydalanuvchi ko'ra oladigan
     // BARCHA lidlar bo'yicha (leadWhere ko'rinish doirasini beradi) — faqat yuklangan sahifa emas.
@@ -196,12 +196,13 @@ export class LeadsService {
       ...(q.source ? { firstSource: q.source } : q.sourceGroup ? { firstSource: { in: channelsOfSourceGroup(q.sourceGroup) } } : {}),
       ...(q.leadType ? { leadType: q.leadType } : {}),
       ...(q.ownerId && actor.role !== 'MANAGER' ? { ownerId: q.ownerId } : {}),
-      ...(searchOr.length ? { OR: searchOr } : {}),
+      // «Только из рекламы»: Direct'da Meta reklama dalili bor lidlar yoki lid-forma (Lead Ads) lidlari; dalilsiz lidlar kirmaydi.
+      AND: [...(searchOr.length ? [{ OR: searchOr }] : []), ...(q.fromAd ? [{ OR: [{ adReferralAt: { not: null } }, { firstSource: { in: channelsOfSourceGroup('ADS') } }] }] : [])],
     });
     // List view: only the columns the table needs (less mapping work per row).
     const rows = await this.d.prisma.lead.findMany({
       where,
-      select: { id: true, name: true, stage: true, leadType: true, firstSource: true, createdAt: true, ownerId: true, anomaly: true, slaBreachedAt: true, firstHumanActionAt: true, contactId: true, version: true },
+      select: { id: true, name: true, stage: true, leadType: true, firstSource: true, createdAt: true, ownerId: true, anomaly: true, slaBreachedAt: true, firstHumanActionAt: true, contactId: true, version: true, adReferralAt: true },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: q.limit + 1,
       ...(q.cursor ? { cursor: { id: q.cursor }, skip: 1 } : {}),
@@ -210,7 +211,7 @@ export class LeadsService {
     // Instagram username kontaktda alohida; ro'yxat/karta uchun bitta so'rov bilan qo'shiladi.
     const contacts = await this.d.prisma.contact.findMany({ where: { companyId: actor.companyId, id: { in: [...new Set(page.map((r) => r.contactId))] } }, select: { id: true, instagramUsername: true } });
     const uname = new Map(contacts.map((c) => [c.id, c.instagramUsername]));
-    const items = page.map((r) => ({ ...r, status: statusOfStage(r.stage), contactInstagramUsername: uname.get(r.contactId) ?? null }));
+    const items = page.map(({ adReferralAt, ...r }) => ({ ...r, status: statusOfStage(r.stage), fromAd: !!adReferralAt, contactInstagramUsername: uname.get(r.contactId) ?? null }));
     return { items, nextCursor: rows.length > q.limit ? items[items.length - 1]!.id : null };
   }
 

@@ -21,7 +21,7 @@ import {
   type ApiError,
 } from '../../../../lib/api';
 import { CURRENCIES, fmtMoney, profitPreview } from '../../../../lib/format';
-import { Async, Badge, Field, FormError, Initials, InstagramIconLink, LocalDateTimeField, Section } from '../../../../components/ui';
+import { Async, Badge, Field, FormError, Initials, InstagramIconLink, LocalDateTimeField, Section, TargetBadge } from '../../../../components/ui';
 import { Icon } from '../../../../components/icons';
 import { canDo, canWrite, useMe } from '../../../../components/shell';
 import { Attachments } from '../../../../components/attachments';
@@ -70,7 +70,7 @@ interface Conversation {
 interface LeadDetail {
   inquiries: FormInquiry[];
   status: string;
-  lead: { id: string; name: string; stage: string; leadType: string; version: number; ownerId: string | null; firstSource: string; contactId: string; createdAt: string; note: string | null };
+  lead: { id: string; name: string; stage: string; leadType: string; version: number; ownerId: string | null; firstSource: string; contactId: string; createdAt: string; note: string | null; adReferralAt: string | null; adReferral: { adId?: string | null; adTitle?: string | null; source?: string | null } | null };
   events: Array<{ id: string; kind: string; oldStage: string | null; newStage: string | null; oldOwnerId: string | null; newOwnerId: string | null; reason: string | null; effectiveAt: string }>;
   contact: { id: string; fullName: string | null; firstName: string | null; lastName: string | null; primaryPhone: string | null; telegramUsername: string | null; instagramUsername: string | null; instagramName: string | null } | null;
   sale: Sale | null;
@@ -128,9 +128,14 @@ export default function LeadPage() {
                   <span className="meta-item">
                     <span className="meta-label">Тип</span> {LEAD_TYPE_LABELS[l.leadType] ?? l.leadType}
                   </span>
-                  {c?.instagramUsername && (
+                  {(c?.instagramUsername || l.adReferralAt) && (
                     <span className="meta-item">
-                      @{c.instagramUsername} <InstagramIconLink username={c.instagramUsername} />
+                      {c?.instagramUsername ? (
+                        <>
+                          @{c.instagramUsername} <InstagramIconLink username={c.instagramUsername} />
+                        </>
+                      ) : null}
+                      <TargetBadge show={!!l.adReferralAt} />
                     </span>
                   )}
                 </div>
@@ -181,6 +186,16 @@ export default function LeadPage() {
                           '—'
                         )}
                       </dd>
+                      {l.adReferralAt ? (
+                        <>
+                          <dt>Реклама</dt>
+                          <dd>
+                            {l.adReferral?.adTitle ?? 'Объявление Meta'}
+                            {l.adReferral?.adId ? <span className="muted"> · ID {l.adReferral.adId}</span> : null}
+                            <span className="muted"> · {fmtDateTime(l.adReferralAt)}</span>
+                          </dd>
+                        </>
+                      ) : null}
                       <dt>Telegram</dt>
                       <dd>
                         {c.telegramUsername ? (
