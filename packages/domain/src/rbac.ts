@@ -18,6 +18,8 @@ export type Capability =
   | 'dashboard.company'
   | 'reminders.assign_others'
   | 'leads.reopen'
+  /** O'chirilgan (soft delete) lidni ko'rish va tiklash. */
+  | 'leads.restore'
   | 'integrations.replay'
   | 'reference.view_full'
   | 'suppliers.manage'
@@ -38,6 +40,7 @@ const MATRIX: Record<Role, ReadonlySet<Capability>> = {
     'dashboard.company',
     'reminders.assign_others',
     'leads.reopen',
+    'leads.restore',
     'integrations.replay',
     'reference.view_full',
     'suppliers.manage',

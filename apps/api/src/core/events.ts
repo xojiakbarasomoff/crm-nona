@@ -11,6 +11,8 @@ export interface ChangeEvent {
   entityId: string;
   /** Owner at the time of the event; informative only, never trusted for access. */
   ownerId?: string | null;
+  /** Lid boshqa xodimga o'tkazilganda oldingi mas'ul: uning ro'yxati va hisoblagichlari ham darhol yangilanadi (faqat ID signal). */
+  formerOwnerId?: string | null;
   userId?: string | null;
   kind: string;
   at: string;
@@ -18,8 +20,12 @@ export interface ChangeEvent {
 
 export const eventsChannel = (companyId: string) => `events:${companyId}`;
 
+/** Dashboard keshi kaliti shu versiyani o'z ichiga oladi: biznes ma'lumoti o'zgarsa, eski hisoblagich qaytarilmaydi. */
+export const dashboardVersionKey = (companyId: string) => `dashver:${companyId}`;
+
 export async function publishEvent(redis: Redis, e: Omit<ChangeEvent, 'at'>): Promise<void> {
   try {
+    if (e.entityType !== 'notification') await redis.incr(dashboardVersionKey(e.companyId));
     await redis.publish(eventsChannel(e.companyId), JSON.stringify({ ...e, at: new Date().toISOString() }));
   } catch {
     // SSE is best effort: the UI falls back to 30 s polling.

@@ -7,6 +7,7 @@ import { audit } from '../audit';
 import type { CoreDeps, UserActor } from '../context';
 import { AppError, conflict, forbidden, notFound, tooMany, unauthorized, unprocessable } from '../errors';
 import { requireCap } from '../scope';
+import { syncPoolMembership } from './assignment.service';
 import { reassignLeadLocal } from './leads.service';
 import { generateTotpSecret, otpauthUrl, verifyTotp } from '../totp';
 
@@ -181,6 +182,7 @@ export class AuthService {
       const used = await tx.userInvite.updateMany({ where: { id: invite.id, usedAt: null }, data: { usedAt: now } });
       if (used.count !== 1) throw unprocessable('INVITE_INVALID', 'Ссылка активации уже использована');
       const user = await tx.user.update({ where: { id: invite.userId }, data: { passwordHash, status: 'active', version: { increment: 1 } } });
+      await syncPoolMembership(tx, user.companyId, user.id);
       await audit(tx, { type: 'user', id: user.id, companyId: user.companyId, role: user.role, email: user.email }, { entityType: 'user', entityId: user.id, action: 'activated' });
     });
   }
@@ -192,6 +194,7 @@ export class AuthService {
       if (!user) throw notFound('Пользователь');
       if (user.id === actor.id) throw forbidden('Нельзя изменить собственную роль');
       await tx.user.update({ where: { id: user.id }, data: { role, version: { increment: 1 } } });
+      await syncPoolMembership(tx, actor.companyId, user.id);
       await tx.session.updateMany({ where: { userId: user.id, revokedAt: null }, data: { revokedAt: this.d.clock.now() } });
       await audit(tx, actor, { entityType: 'user', entityId: user.id, action: 'role_changed', oldValue: { role: user.role }, newValue: { role } });
     });

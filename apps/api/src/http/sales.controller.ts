@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Inject, Param, Patch, Post, Put, Query, Req, Res } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Inject, Param, Patch, Post, Put, Query, Req, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import {
   AssigneeSchema,
@@ -129,6 +129,18 @@ export class SalesController {
   async assignee(@Actor() actor: UserActor, @Param('id', uuid) id: string, @Body() body: unknown, @Res() res: Response) {
     const input = parse(AssigneeSchema, body);
     send(res, 200, await this.core.leads.requestReassign(actor, id, input.userId, input.reason));
+  }
+
+  /** «Удалить лид»: soft delete. Администратор — любой лид компании, менеджер — только свой, Пользователь — нет. */
+  @Delete('leads/:id')
+  async removeLead(@Actor() actor: UserActor, @Param('id', uuid) id: string, @Res() res: Response) {
+    send(res, 200, await this.core.leads.remove(actor, id));
+  }
+
+  /** Восстановление удалённого лида (только администратор). */
+  @Post('leads/:id/restore')
+  async restoreLead(@Actor() actor: UserActor, @Param('id', uuid) id: string, @Res() res: Response) {
+    send(res, 200, await this.core.leads.restore(actor, id));
   }
 
   @Post('leads/:id/reopen')

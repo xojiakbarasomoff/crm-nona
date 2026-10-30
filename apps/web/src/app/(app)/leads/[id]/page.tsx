@@ -70,14 +70,15 @@ interface Conversation {
 interface LeadDetail {
   inquiries: FormInquiry[];
   status: string;
-  lead: { id: string; name: string; stage: string; leadType: string; version: number; ownerId: string | null; firstSource: string; contactId: string; createdAt: string; note: string | null; adReferralAt: string | null; adReferral: { adId?: string | null; adTitle?: string | null; source?: string | null } | null };
+  financeKept: { orders: number; payments: number };
+  lead: { id: string; name: string; stage: string; leadType: string; version: number; ownerId: string | null; firstSource: string; contactId: string; createdAt: string; note: string | null; deletedAt: string | null; adReferralAt: string | null; adReferral: { adId?: string | null; adTitle?: string | null; source?: string | null } | null };
   events: Array<{ id: string; kind: string; oldStage: string | null; newStage: string | null; oldOwnerId: string | null; newOwnerId: string | null; reason: string | null; effectiveAt: string }>;
   contact: { id: string; fullName: string | null; firstName: string | null; lastName: string | null; primaryPhone: string | null; telegramUsername: string | null; instagramUsername: string | null; instagramName: string | null } | null;
   sale: Sale | null;
   conversations: Conversation[];
 }
 
-const EVENT_LABELS: Record<string, string> = { created: 'Лид создан', stage_change: 'Смена статуса', reopened: 'Статус изменён', owner_change: 'Смена ответственного' };
+const EVENT_LABELS: Record<string, string> = { created: 'Лид создан', stage_change: 'Смена статуса', reopened: 'Статус изменён', owner_change: 'Смена ответственного', deleted: 'Лид удалён', restored: 'Лид восстановлен' };
 const statusOf = (stage: string) => (stage === 'NEW' ? 'Новый' : stage === 'WON' ? 'Продано' : stage === 'LOST' ? 'Отменён' : stage === 'NO_ANSWER' ? 'Нет ответа' : 'В работе');
 
 export default function LeadPage() {
@@ -88,6 +89,7 @@ export default function LeadPage() {
   const team = useApi<{ items: Array<{ id: string; fullName: string; role: string }> }>('/api/v1/team');
   const [error, setError] = useState<ApiError | null>(null);
   const [editingContact, setEditingContact] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const works = canWrite(me); // статус, продажа, ответ клиенту — Администратор и Менеджер
   const run = async (fn: () => Promise<unknown>) => {
     setError(null);
@@ -105,7 +107,10 @@ export default function LeadPage() {
       {(d) => {
         const l = d.lead;
         const c = d.contact;
-        const editable = me.role === 'ADMIN' || l.ownerId === me.id;
+        const deleted = !!l.deletedAt;
+        // O'chirilgan lid faqat ko'rish uchun ochiladi (administrator tiklashi mumkin).
+        const editable = !deleted && (me.role === 'ADMIN' || l.ownerId === me.id);
+        const canDelete = works && editable;
         const displayName = c?.fullName && c.fullName !== 'Instagram mijoz' ? c.fullName : c?.instagramUsername ? `@${c.instagramUsername}` : l.name;
         return (
           <>
@@ -140,7 +145,33 @@ export default function LeadPage() {
                   )}
                 </div>
               </div>
+              {canDelete && (
+                <button className="btn secondary small lead-delete" type="button" onClick={() => setConfirmDelete(true)}>
+                  Удалить лид
+                </button>
+              )}
             </header>
+            {deleted && (
+              <div className="state error deleted-banner" role="status">
+                <span>Лид удалён {fmtDateTime(l.deletedAt)}. Он скрыт из списков, поиска и панели управления; переписка и финансовые записи сохранены.</span>
+                {canDo(me, 'leads.restore') && (
+                  <button className="btn small" type="button" onClick={() => run(() => api(`/api/v1/leads/${id}/restore`, { method: 'POST' }))}>
+                    Восстановить
+                  </button>
+                )}
+              </div>
+            )}
+            {confirmDelete && (
+              <DeleteLeadDialog
+                name={displayName}
+                finance={d.financeKept}
+                onCancel={() => setConfirmDelete(false)}
+                onConfirm={async () => {
+                  await api(`/api/v1/leads/${id}`, { method: 'DELETE' });
+                  router.push(leadsListHref());
+                }}
+              />
+            )}
             <FormError error={error} />
             <div className="split even">
               <div>
@@ -216,7 +247,7 @@ export default function LeadPage() {
                   d={d}
                   canStatus={works && editable}
                   canBasics={editable}
-                  canReassign={canDo(me, 'leads.reassign')}
+                  canReassign={canDo(me, 'leads.reassign') && !deleted}
                   team={team.data?.items ?? []}
                   ownerName={userName(l.ownerId)}
                   onStatus={(status) => run(() => api(`/api/v1/leads/${id}/status`, { method: 'PATCH', body: { version: l.version, status } }))}
@@ -767,5 +798,55 @@ function DirectChat({ leadId, clientName, conversations, canReply, onSent }: { l
         </>
       )}
     </section>
+  );
+}
+
+/** Подтверждение удаления: лид уходит в корзину (soft delete), связанные записи не удаляются. */
+function DeleteLeadDialog({ name, finance, onCancel, onConfirm }: { name: string; finance: { orders: number; payments: number }; onCancel: () => void; onConfirm: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<ApiError | null>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    cancelRef.current?.focus();
+    const onKey = (e: globalThis.KeyboardEvent) => e.key === 'Escape' && !busy && onCancel();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [busy, onCancel]);
+  return (
+    <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && !busy && onCancel()}>
+      <div className="modal card" role="dialog" aria-modal="true" aria-labelledby="delete-lead-title">
+        <h2 id="delete-lead-title">Удалить лид «{name}»?</h2>
+        <p>Лид исчезнет из списка лидов, поиска, счётчиков панели управления и ближайших вылетов. Администратор сможет восстановить его.</p>
+        <p className="muted">Клиент, переписка в Instagram и история изменений сохраняются.</p>
+        {finance.orders > 0 || finance.payments > 0 ? (
+          <p className="modal-note">
+            С лидом связаны финансовые записи (продаж: {finance.orders}, платежей: {finance.payments}). Они <b>не удаляются</b> и остаются в базе без изменений.
+          </p>
+        ) : null}
+        <FormError error={error} />
+        <div className="modal-actions">
+          <button ref={cancelRef} className="btn secondary" type="button" disabled={busy} onClick={onCancel}>
+            Отмена
+          </button>
+          <button
+            className="btn danger"
+            type="button"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              setError(null);
+              try {
+                await onConfirm();
+              } catch (e) {
+                setError(e as ApiError);
+                setBusy(false);
+              }
+            }}
+          >
+            {busy ? 'Удаление…' : 'Удалить лид'}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

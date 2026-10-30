@@ -1,5 +1,6 @@
 import type { Role } from '@crm/database';
 import type { CoreDeps, UserActor } from '../context';
+import { syncPoolMembership } from './assignment.service';
 import { AuthService } from './auth.service';
 
 export interface AccountSpec {
@@ -53,6 +54,7 @@ export class AccountsService {
         ? await prisma.user.update({ where: { id: existing.id }, data: { login, fullName: a.fullName, role: a.role, status: 'active', blockedAt: null, passwordHash, mfaEnabled: false, mfaSecretEnc: null, version: { increment: 1 } } })
         : await prisma.user.create({ data: { companyId, login, email, fullName: a.fullName, role: a.role, status: 'active', passwordHash } });
       await prisma.auditLog.create({ data: { companyId, actorType: 'system', entityType: 'user', entityId: row.id, action: existing ? 'account_updated' : 'account_created', newValue: { login, role: a.role }, correlationId: row.id } });
+      await prisma.$transaction((tx) => syncPoolMembership(tx, companyId, row.id));
       out.push({ login, role: a.role, id: row.id, created: !existing });
     }
     const admin = out.find((o) => o.role === 'ADMIN');

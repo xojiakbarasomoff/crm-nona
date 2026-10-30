@@ -24,7 +24,8 @@ describe('assignment (AC10, AC11)', () => {
     const managers = await p().user.findMany({ where: { role: 'MANAGER', status: 'active', email: { endsWith: '@demo.local' } } });
     const pool = await p().managerPool.findFirstOrThrow({ where: { isDefault: true } });
     await p().managerPoolMember.updateMany({ where: { poolId: pool.id }, data: { schedule: null as never, available: true } });
-    const memberIds = (await p().managerPoolMember.findMany({ where: { poolId: pool.id } })).map((m) => m.userId);
+    // Faqat faol xodimlar teng taqsimlanadi (boshqa fayllarda yaratilib bloklangan menejer navbatda qolishi mumkin).
+    const memberIds = (await p().managerPoolMember.findMany({ where: { poolId: pool.id } })).map((m) => m.userId).filter((uid) => managers.some((u) => u.id === uid));
     const before = await p().lead.groupBy({ by: ['ownerId'], where: { assignmentReason: 'round_robin' }, _count: true });
     const batch = `${Date.now()}`;
     await Promise.all(Array.from({ length: 100 }, (_, i) => sendLeadAds(app, core, { fullName: `RR ${batch} ${i}`, phone: `+99893${String(1_000_000 + i).padStart(7, '0')}${batch.slice(-1)}`.slice(0, 13), platform: 'ig' })));

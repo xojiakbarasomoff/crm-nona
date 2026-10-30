@@ -298,6 +298,7 @@ export class PlatformController {
     if (can(actor.role, 'records.view_all')) return true;
     switch (e.entityType) {
       case 'lead':
+        if (e.formerOwnerId === actor.id) return true;
         return !!(await p.lead.findFirst({ where: { id: e.entityId, companyId: actor.companyId, ownerId: actor.id }, select: { id: true } }));
       case 'order':
         return !!(await p.order.findFirst({ where: { id: e.entityId, companyId: actor.companyId, ownerId: actor.id }, select: { id: true } }));

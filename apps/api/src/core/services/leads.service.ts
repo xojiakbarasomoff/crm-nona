@@ -170,7 +170,9 @@ export class LeadsService {
 
   // ---------------- Web actions ----------------
 
-  async list(actor: UserActor, q: { stage?: Stage; status?: LeadStatus; sourceGroup?: LeadSourceGroup; leadType?: LeadType; ownerId?: string; source?: Channel; search?: string; fromAd?: 'true'; cursor?: string; limit: number }) {
+  async list(actor: UserActor, q: { stage?: Stage; status?: LeadStatus; sourceGroup?: LeadSourceGroup; leadType?: LeadType; ownerId?: string; source?: Channel; search?: string; fromAd?: 'true'; deleted?: 'true'; cursor?: string; limit: number }) {
+    // «Удалённые»: faqat administrator (tiklash huquqi) ko'radi; boshqalar uchun so'rov rad etiladi.
+    if (q.deleted) requireCap(actor, 'leads.restore');
     const search = q.search?.trim() ?? '';
     // Qidiruv: lid nomi, mijoz ismi/familiyasi, telefon, Instagram va Telegram username (@ bilan yoki usiz). Foydalanuvchi ko'ra oladigan
     // BARCHA lidlar bo'yicha (leadWhere ko'rinish doirasini beradi) — faqat yuklangan sahifa emas.
@@ -198,11 +200,12 @@ export class LeadsService {
       ...(q.ownerId && actor.role !== 'MANAGER' ? { ownerId: q.ownerId } : {}),
       // «Только из рекламы»: Direct'da Meta reklama dalili bor lidlar yoki lid-forma (Lead Ads) lidlari; dalilsiz lidlar kirmaydi.
       AND: [...(searchOr.length ? [{ OR: searchOr }] : []), ...(q.fromAd ? [{ OR: [{ adReferralAt: { not: null } }, { firstSource: { in: channelsOfSourceGroup('ADS') } }] }] : [])],
+      ...(q.deleted ? { deletedAt: { not: null } } : {}),
     });
     // List view: only the columns the table needs (less mapping work per row).
     const rows = await this.d.prisma.lead.findMany({
       where,
-      select: { id: true, name: true, stage: true, leadType: true, firstSource: true, createdAt: true, ownerId: true, anomaly: true, slaBreachedAt: true, firstHumanActionAt: true, contactId: true, version: true, adReferralAt: true },
+      select: { id: true, name: true, stage: true, leadType: true, firstSource: true, createdAt: true, ownerId: true, anomaly: true, slaBreachedAt: true, firstHumanActionAt: true, contactId: true, version: true, adReferralAt: true, deletedAt: true },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: q.limit + 1,
       ...(q.cursor ? { cursor: { id: q.cursor }, skip: 1 } : {}),
@@ -216,7 +219,11 @@ export class LeadsService {
   }
 
   async get(actor: UserActor, id: string) {
-    const lead = assertFound(await this.d.prisma.lead.findFirst({ where: leadWhere(actor, { id }) }), 'Лид');
+    // Administrator o'chirilgan lid kartasini ham ochadi (tiklash uchun); boshqalar uchun o'chirilgan lid 404.
+    const lead = assertFound(
+      await this.d.prisma.lead.findFirst({ where: can(actor.role, 'leads.restore') ? { companyId: actor.companyId, id } : leadWhere(actor, { id }) }),
+      'Лид',
+    );
     const [events, offers, orders, contact, inquiries] = await Promise.all([
       this.d.prisma.leadEvent.findMany({ where: { companyId: actor.companyId, leadId: id }, orderBy: { effectiveAt: 'asc' } }),
       this.d.prisma.offer.findMany({ where: { companyId: actor.companyId, leadId: id }, orderBy: { version: 'desc' } }),
@@ -230,8 +237,10 @@ export class LeadsService {
     const op = operatorId ? await this.d.prisma.supplier.findFirst({ where: { id: operatorId, companyId: actor.companyId } }) : null;
     const { SaleService } = await import('./sale.service');
     const [sale, conversations] = await Promise.all([new SaleService(this.d).view(actor, lead), this.conversationsFor(actor, lead)]);
+    const financeKept = await this.financeLinks(this.d.prisma as unknown as Tx, actor.companyId, id);
     return {
       lead,
+      financeKept,
       status: statusOfStage(lead.stage),
       events,
       offers,
@@ -420,12 +429,12 @@ export class LeadsService {
       const current = assertFound(await tx.lead.findFirst({ where: leadWhere(actor, { id }) }), 'Лид');
       const target = await tx.user.findFirst({ where: { id: toUserId, companyId: actor.companyId, status: 'active' } });
       if (!target) throw unprocessable('ASSIGNEE_INVALID', 'Выбранный сотрудник неактивен', { toUserId: 'invalid' });
-      if (current.ownerId === toUserId) return current;
+      if (current.ownerId === toUserId) return { lead: current, formerOwnerId: null };
       await reassignLeadLocal(tx, actor, current, toUserId, reason, this.d.clock.now());
-      return tx.lead.findUniqueOrThrow({ where: { id } });
+      return { lead: await tx.lead.findUniqueOrThrow({ where: { id } }), formerOwnerId: current.ownerId };
     });
-    await publishEvent(this.d.redis, { companyId: actor.companyId, entityType: 'lead', entityId: id, ownerId: lead.ownerId, kind: 'updated' });
-    return lead;
+    await publishEvent(this.d.redis, { companyId: actor.companyId, entityType: 'lead', entityId: id, ownerId: lead.lead.ownerId, formerOwnerId: lead.formerOwnerId, kind: 'updated' });
+    return lead.lead;
   }
 
   async requestReopen(actor: UserActor, id: string, reason: string, toStage: Stage = 'CONTACTED') {
@@ -439,6 +448,49 @@ export class LeadsService {
       return tx.lead.findUniqueOrThrow({ where: { id } });
     });
     await publishEvent(this.d.redis, { companyId: actor.companyId, entityType: 'lead', entityId: id, ownerId: lead.ownerId, kind: 'updated' });
+    return lead;
+  }
+
+  /** Bog'liq moliyaviy yozuvlar soni (o'chirish oynasida «saqlanadi» deb ko'rsatiladi). */
+  private async financeLinks(tx: Tx, companyId: string, leadId: string) {
+    const orders = await tx.order.findMany({ where: { companyId, leadId }, select: { id: true } });
+    const payments = orders.length ? await tx.payment.count({ where: { companyId, orderId: { in: orders.map((o) => o.id) } } }) : 0;
+    return { orders: orders.length, payments };
+  }
+
+  /**
+   * Lidni o'chirish — faqat soft delete (`deleted_at`): lid odatiy ro'yxat, qidiruv, dashboard va yaqin uchishlardan chiqadi,
+   * administrator tiklay oladi. Kontakt, Instagram yozishmalari, buyurtmalar, to'lovlar va audit jismonan o'chirilmaydi.
+   * Administrator — kompaniyadagi istalgan lid; menejer — faqat o'ziga biriktirilgan lid; Пользователь — yo'q.
+   */
+  async remove(actor: UserActor, id: string) {
+    requireCap(actor, 'leads.work');
+    const result = await this.d.prisma.$transaction(async (tx) => {
+      const lead = assertFound(await tx.lead.findFirst({ where: leadWhere(actor, { id }) }), 'Лид');
+      if (!canEditRecord(actor, lead.ownerId)) throw forbidden();
+      const now = this.d.clock.now();
+      const finance = await this.financeLinks(tx, actor.companyId, id);
+      await tx.lead.update({ where: { id }, data: { deletedAt: now, stateHash: leadStateHash({ stage: lead.stage, ownerId: lead.ownerId, deletedAt: now }), version: { increment: 1 } } });
+      await tx.leadEvent.create({ data: { companyId: lead.companyId, leadId: id, kind: 'deleted', origin: 'local', actorId: actor.id, effectiveAt: now, observedAt: now } });
+      await audit(tx, actor, { entityType: 'lead', entityId: id, action: 'deleted', oldValue: { stage: lead.stage, ownerId: lead.ownerId, deletedAt: null }, newValue: { deletedAt: now.toISOString(), financeKept: finance } });
+      return { ownerId: lead.ownerId, finance };
+    });
+    await publishEvent(this.d.redis, { companyId: actor.companyId, entityType: 'lead', entityId: id, ownerId: result.ownerId, kind: 'deleted' });
+    return { id, deleted: true, financeKept: result.finance };
+  }
+
+  /** O'chirilgan lidni tiklash (faqat administrator). Lid avvalgi holati va mas'uli bilan qaytadi. */
+  async restore(actor: UserActor, id: string) {
+    requireCap(actor, 'leads.restore');
+    const lead = await this.d.prisma.$transaction(async (tx) => {
+      const current = assertFound(await tx.lead.findFirst({ where: { id, companyId: actor.companyId, deletedAt: { not: null } } }), 'Удалённый лид');
+      const now = this.d.clock.now();
+      const updated = await tx.lead.update({ where: { id }, data: { deletedAt: null, stateHash: leadStateHash({ stage: current.stage, ownerId: current.ownerId }), version: { increment: 1 } } });
+      await tx.leadEvent.create({ data: { companyId: current.companyId, leadId: id, kind: 'restored', origin: 'local', actorId: actor.id, effectiveAt: now, observedAt: now } });
+      await audit(tx, actor, { entityType: 'lead', entityId: id, action: 'restored', oldValue: { deletedAt: current.deletedAt?.toISOString() ?? null }, newValue: { deletedAt: null } });
+      return updated;
+    });
+    await publishEvent(this.d.redis, { companyId: actor.companyId, entityType: 'lead', entityId: id, ownerId: lead.ownerId, kind: 'restored' });
     return lead;
   }
 

@@ -79,10 +79,16 @@ describe('переход на рабочие аккаунты: закрытие 
       expect(await p().auditLog.count()).toBeGreaterThanOrEqual(auditBefore);
       const saved = await p().$queryRawUnsafe<Array<{ kind: string; entity_id: string }>>(`SELECT kind, entity_id FROM _backup_cutover_20261026 WHERE kind = 'lead_owner' AND entity_id = '${lead.id}'`);
       expect(saved).toHaveLength(1);
-      // новые лиды теперь идут дежурному администратору
+      // новые лиды получает рабочий менеджер из основной очереди (а не дежурный администратор)
+      const realMgr = await p().user.findUniqueOrThrow({ where: { login: ACCOUNTS.find((a) => a.role === 'MANAGER')!.login } });
       const fresh = await newLead(app, core);
-      expect(fresh.ownerId).toBe(nozima.id);
-      expect(fresh.assignmentReason).toBe('duty_fallback');
+      expect(fresh.ownerId).toBe(realMgr.id);
+      expect(fresh.assignmentReason).toBe('round_robin');
+      // дежурный администратор — только запасной вариант, когда в очереди никого нет
+      await p().managerPoolMember.updateMany({ where: { userId: realMgr.id }, data: { available: false } });
+      const fallback = await newLead(app, core);
+      expect(fallback.ownerId).toBe(nozima.id);
+      expect(fallback.assignmentReason).toBe('duty_fallback');
       // новый администратор входит по логину; повторное закрытие безопасно и ничего не меняет
       expect((await request(app.getHttpServer()).post('/api/v1/auth/login').send({ email: ACCOUNTS[0]!.login, password: ACCOUNTS[0]!.password })).status).toBe(200);
       expect((await core.accounts.closeLegacy()).closed).toEqual([]);

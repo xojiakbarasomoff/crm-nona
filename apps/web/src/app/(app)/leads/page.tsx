@@ -6,6 +6,7 @@ import { useEffect, useState, type MouseEvent } from 'react';
 import { LEAD_STATUS_LABELS, LEAD_STATUS_TONE, LEAD_TYPE_LABELS, SOURCE_GROUP_LABELS, fmtDateTime, rememberLeadsQuery, sourceGroupOf, statusOfStage, useApi } from '../../../lib/api';
 import { Async, Badge, Field, InstagramIconLink, Initials, TargetBadge } from '../../../components/ui';
 import { NewLeadForm } from '../../../components/manual-lead';
+import { canDo, useMe } from '../../../components/shell';
 
 interface LeadRow {
   id: string;
@@ -19,20 +20,25 @@ interface LeadRow {
   firstHumanActionAt: string | null;
   contactInstagramUsername: string | null;
   fromAd: boolean;
+  deletedAt: string | null;
 }
 
-const FILTER_KEYS = ['status', 'sourceGroup', 'leadType', 'fromAd', 'search'] as const;
+const FILTER_KEYS = ['status', 'sourceGroup', 'leadType', 'fromAd', 'deleted', 'search'] as const;
 type Filters = Record<(typeof FILTER_KEYS)[number], string>;
-const EMPTY: Filters = { status: '', sourceGroup: '', leadType: '', fromAd: '', search: '' };
+const EMPTY: Filters = { status: '', sourceGroup: '', leadType: '', fromAd: '', deleted: '', search: '' };
 
 export default function LeadsPage() {
   const router = useRouter();
+  const me = useMe();
+  const canRestore = canDo(me, 'leads.restore');
   // Фильтры живут в адресе (/leads?status=…): возврат из карточки и обновление страницы их не сбрасывают.
   const [f, setF] = useState<Filters | null>(null);
   useEffect(() => {
     const p = new URLSearchParams(window.location.search);
-    setF(Object.fromEntries(FILTER_KEYS.map((k) => [k, p.get(k) ?? ''])) as Filters);
-  }, []);
+    const next = Object.fromEntries(FILTER_KEYS.map((k) => [k, p.get(k) ?? ''])) as Filters;
+    if (!canRestore) next.deleted = '';
+    setF(next);
+  }, [canRestore]);
   const filterQs = f ? new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString() : '';
   useEffect(() => {
     if (!f) return;
@@ -89,6 +95,14 @@ export default function LeadsPage() {
             Только из рекламы
           </span>
         </Field>
+        {canRestore && (
+          <Field label="Корзина">
+            <span className="check-filter">
+              <input type="checkbox" checked={f?.deleted === 'true'} onChange={(e) => set('deleted', e.target.checked ? 'true' : '')} />
+              Удалённые лиды
+            </span>
+          </Field>
+        )}
         <Field label="Поиск">
           <input type="search" value={f?.search ?? ''} onChange={(e) => set('search', e.target.value)} placeholder="Имя, телефон или @username" />
         </Field>
@@ -132,6 +146,7 @@ export default function LeadsPage() {
                             </div>
                             {ig && <InstagramIconLink username={ig} />}
                             <TargetBadge show={l.fromAd} />
+                            {l.deletedAt ? <Badge tone="bad">Удалён</Badge> : null}
                           </div>
                         </td>
                         <td>

@@ -42,7 +42,7 @@ export const ChangeRoleSchema = z.object({ role: z.enum(['ADMIN', 'MANAGER', 'US
 export const BlockUserSchema = z.object({ successorId: id.nullable() }).strict();
 
 export const PaginationQuery = z.object({ cursor: id.optional(), limit: z.coerce.number().int().min(1).max(200).default(50) });
-export const LeadListQuery = PaginationQuery.extend({ stage: STAGE.optional(), status: z.enum(['NEW', 'IN_PROGRESS', 'SOLD', 'CANCELLED', 'NO_ANSWER']).optional(), sourceGroup: z.enum(['DIRECT', 'ADS', 'MANUAL']).optional(), leadType: z.enum(['NEW', 'REFERRAL', 'REPEAT']).optional(), ownerId: id.optional(), source: CHANNEL.optional(), search: z.string().max(100).optional(), fromAd: z.enum(['true']).optional() }).strict();
+export const LeadListQuery = PaginationQuery.extend({ stage: STAGE.optional(), status: z.enum(['NEW', 'IN_PROGRESS', 'SOLD', 'CANCELLED', 'NO_ANSWER']).optional(), sourceGroup: z.enum(['DIRECT', 'ADS', 'MANUAL']).optional(), leadType: z.enum(['NEW', 'REFERRAL', 'REPEAT']).optional(), ownerId: id.optional(), source: CHANNEL.optional(), search: z.string().max(100).optional(), fromAd: z.enum(['true']).optional(), deleted: z.enum(['true']).optional() }).strict();
 
 export const RequirementsSchema = z
   .object({

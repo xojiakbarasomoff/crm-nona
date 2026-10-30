@@ -386,3 +386,14 @@ fieldset.plain > .field { margin-bottom: 14px; }
 .check-filter { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; font-weight: 500; cursor: pointer; white-space: nowrap; }
 .check-filter input { width: 18px; height: 18px; margin: 0; accent-color: var(--bordo-700); }
 .table-card-head .check-filter { min-height: 0; font-size: 0.9rem; }
+
+/* Удаление лида: кнопка в шапке карточки, подтверждение и баннер удалённого лида. */
+.lead-head .lead-delete { margin-left: auto; flex: none; }
+.deleted-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.modal-backdrop { position: fixed; inset: 0; z-index: 50; background: rgba(30, 10, 20, 0.45); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.modal { width: min(480px, 100%); margin: 0; }
+.modal h2 { margin: 0 0 10px; font-size: 1.15rem; overflow-wrap: anywhere; }
+.modal p { margin: 0 0 10px; }
+.modal-note { background: var(--bad-bg); color: var(--bad); border: 1px solid var(--bad-line); border-radius: 10px; padding: 10px 12px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+

@@ -31,6 +31,7 @@ import {
 import { audit } from '../audit';
 import type { CoreDeps, UserActor } from '../context';
 import { unprocessable } from '../errors';
+import { dashboardVersionKey } from '../events';
 import { canCost, requireCap } from '../scope';
 import { loadRefunds, orderFinance } from './orders.service';
 
@@ -100,7 +101,8 @@ export class DashboardService {
   /** Short Redis cache per scope+filters; the payload carries generatedAt so staleness is visible. */
   async compute(actor: UserActor, f: DashboardFilters) {
     const scopeKey = `${can(actor.role, 'dashboard.company') ? 'company' : `user:${actor.id}`}:cost${canCost(actor) ? 1 : 0}`;
-    const key = `dash:${actor.companyId}:${scopeKey}:${sha256Hex(stableStringify(f))}`;
+    const ver = (await this.d.redis.get(dashboardVersionKey(actor.companyId)).catch(() => null)) ?? '0';
+    const key = `dash:${actor.companyId}:${ver}:${scopeKey}:${sha256Hex(stableStringify(f))}`;
     const cached = await this.d.redis.get(key).catch(() => null);
     if (cached) return JSON.parse(cached) as Awaited<ReturnType<DashboardService['computeFresh']>>;
     // Single-flight: concurrent identical requests share one computation (no cache stampede).

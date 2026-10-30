@@ -2,7 +2,7 @@ import type { Prisma } from '@crm/database';
 import { can, normalizePhone, type CompanyPhoneRule } from '@crm/domain';
 import { audit } from '../audit';
 import type { CoreDeps, UserActor } from '../context';
-import { notify } from '../events';
+import { notify, publishEvent } from '../events';
 import { AppError, forbidden, unprocessable } from '../errors';
 import { assertFound, canEditRecord, leadWhere } from '../scope';
 import { LeadsService } from './leads.service';
@@ -130,7 +130,7 @@ export class ManualLeadService {
     }
 
     const now = this.d.clock.now();
-    return this.d.prisma.$transaction(async (tx) => {
+    const created = await this.d.prisma.$transaction(async (tx) => {
       let contactId: string;
       let createdContact = false;
       if (input.existingContactId) {
@@ -173,6 +173,9 @@ export class ManualLeadService {
       await audit(tx, actor, { entityType: 'lead', entityId: lead.id, action: 'manual_created', newValue: { contactId, newContact: createdContact, source: 'manual' } });
       return result;
     });
+    // Mas'ulning ro'yxati, dashboardi va bildirishnomalari sahifani qayta ochmasdan yangilanadi.
+    await publishEvent(this.d.redis, { companyId: actor.companyId, entityType: 'lead', entityId: created.id, ownerId: created.ownerId, kind: 'created' });
+    return created;
   }
 
   /** Lid kartasidagi mijozni tahrirlash: ism, familiya, telefon, Telegram. Instagram identifikatorlari va yozishmalar o'zgarmaydi. */

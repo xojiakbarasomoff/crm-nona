@@ -144,6 +144,9 @@ describe('роли на сервере', () => {
     const mine = await newLead(app, core);
     await p().lead.update({ where: { id: mine.id }, data: { ownerId: mgrId } });
     const other = await newLead(app, core);
+    // Menejer endi navbatda: «begona» lid aniq boshqa xodimga biriktiriladi.
+    const otherOwner = await p().user.findFirstOrThrow({ where: { role: 'MANAGER', status: 'active', id: { not: mgrId } } });
+    await p().lead.update({ where: { id: other.id }, data: { ownerId: otherOwner.id } });
     const list = (await mgr.get('/api/v1/leads')).body.items as Array<{ id: string }>;
     expect(list.map((l) => l.id)).toContain(mine.id);
     expect(list.map((l) => l.id)).not.toContain(other.id);
