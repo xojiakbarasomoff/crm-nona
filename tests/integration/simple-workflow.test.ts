@@ -183,7 +183,7 @@ describe('переписка Instagram в карточке лида', () => {
     expect(await p().message.count({ where: { conversationId: conv.id, direction: 'outbound', content: 'Ha, bor' } })).toBe(1);
   });
 
-  it('окно ответа закрыто → сообщение сохраняется как неотправленное с понятной причиной, в Instagram ничего не уходит', async () => {
+  it('срок ответа истёк → CRM не блокирует ответ человека, сообщение уходит на решение Instagram', async () => {
     const sender = `57${Date.now()}`;
     await sendDirect(app, core, { sender, text: 'Eski xabar' });
     await drain(core);
@@ -192,8 +192,7 @@ describe('переписка Instagram в карточке лида', () => {
     const lead = await p().lead.findFirstOrThrow({ where: { contactId: conv.contactId } });
     const r = await admin.post(`/api/v1/leads/${lead.id}/messages`, { text: 'Kech javob' }, { 'Idempotency-Key': `reply-${randomUUID()}` });
     expect(r.status).toBe(201);
-    expect(r.body.state).toBe('failed');
-    expect(r.body.error).toMatch(/Окно ответа закрыто/);
-    expect(await p().outboxOperation.count({ where: { operationKey: `direct.send:${r.body.id}` } })).toBe(0);
+    expect(r.body.state).toBe('queued');
+    expect(await p().outboxOperation.count({ where: { operationKey: `direct.send:${r.body.id}` } })).toBe(1);
   });
 });

@@ -32,7 +32,7 @@ export async function replyDecision(d: CoreDeps, actor: UserActor, lead: Pick<Le
     cfg,
   );
   return decision.allowed
-    ? { allowed: true as const, tag: decision.tag, mode: conn?.mode ?? null, reason: null, message: null }
+    ? { allowed: true as const, tag: decision.tag, mode: conn?.mode ?? null, reason: decision.warning ? ('outside_window' as const) : null, message: decision.warning ?? null }
     : { allowed: false as const, tag: null, mode: conn?.mode ?? null, reason: decision.reason, message: decision.message };
 }
 

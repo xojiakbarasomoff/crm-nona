@@ -125,23 +125,22 @@ describe('messaging policy (AC07)', () => {
     senderMayReply: true,
     recipientScopedIdVerified: true,
   };
-  it('allows inside window, blocks outside with reason', () => {
+  it('allows inside window; outside it a human reply is still allowed, with a warning and no tag', () => {
     expect(decideOutbound(base, cfg)).toEqual({ allowed: true, tag: null });
     const r = decideOutbound({ ...base, now: d('2026-10-04T00:00:00Z') }, cfg);
-    expect(r).toMatchObject({ allowed: false, reason: 'window_closed' });
+    expect(r).toMatchObject({ allowed: true, tag: null, warning: expect.stringContaining('2 дн. 0 ч.') });
   });
   it('Human Agent only with permission and only for human replies', () => {
     const late = { ...base, now: d('2026-10-04T00:00:00Z') };
     expect(decideOutbound(late, { ...cfg, humanAgentPermissionGranted: true })).toEqual({ allowed: true, tag: 'HUMAN_AGENT' });
     expect(decideOutbound({ ...late, purpose: 'automated_reminder' }, { ...cfg, humanAgentPermissionGranted: true })).toMatchObject({ allowed: false, reason: 'automated_not_allowed' });
   });
-  it('Click-to-Direct window counts from the ad message, needs no tag and ends after its limit', () => {
+  it('Click-to-Direct window counts from the ad message: no warning inside it, a warning after its limit', () => {
     const adCfg = { ...cfg, adWindowHours: 168 };
     const adReferralAt = d('2026-10-02T00:00:00Z');
     expect(decideOutbound({ ...base, now: d('2026-10-06T18:00:00Z'), adReferralAt }, adCfg)).toEqual({ allowed: true, tag: null });
-    expect(decideOutbound({ ...base, now: d('2026-10-06T18:00:00Z') }, adCfg)).toMatchObject({ allowed: false, reason: 'window_closed', message: expect.stringContaining('4 дн. 18 ч.') });
-    expect(decideOutbound({ ...base, now: d('2026-10-09T00:00:01Z'), adReferralAt }, adCfg)).toMatchObject({ allowed: false, reason: 'window_closed' });
-    expect(decideOutbound({ ...base, now: d('2026-10-06T18:00:00Z'), adReferralAt }, cfg)).toMatchObject({ allowed: false, reason: 'window_closed' });
+    expect(decideOutbound({ ...base, now: d('2026-10-06T18:00:00Z') }, adCfg)).toMatchObject({ allowed: true, warning: expect.stringContaining('4 дн. 18 ч.') });
+    expect(decideOutbound({ ...base, now: d('2026-10-09T00:00:01Z'), adReferralAt }, adCfg)).toMatchObject({ allowed: true, warning: expect.any(String) });
   });
 });
 

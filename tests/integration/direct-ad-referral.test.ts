@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { signMetaBody } from '@crm/integrations';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { ProviderError, signMetaBody } from '@crm/integrations';
 import type { Core } from '../../apps/api/src/core';
 import { alwaysOnDuty, DEMO_IG_BUSINESS_ID, drain, login, makeApp, makeCore, sendDirect, type Session } from './helpers';
 
@@ -60,7 +60,7 @@ describe('Instagram Direct: reklamadan kelgan mijoz («Таргет»)', () => {
     expect(detail.body.lead.adReferral.adId).toBe('120000000000701');
   });
 
-  it('javob oynasi: reklamadan kelgan mijozga 114 soatda CRM javob beradi, oddiy mijozga va 7 kundan keyin — yo‘q', async () => {
+  it('javob oynasi: CRM bloklamaydi; muddatdan keyin ogohlantiradi, Instagram rad etsa faqat shu xabar yuborilmaydi', async () => {
     const HOUR = 3600_000;
     const age = async (sender: string, hours: number, field: 'lastInboundAt' | 'adReferralAt') => {
       const conv = await p().conversation.findFirstOrThrow({ where: { scopedPeerId: sender } });
@@ -84,23 +84,38 @@ describe('Instagram Direct: reklamadan kelgan mijoz («Таргет»)', () => {
 
     await age(fromAd, 169, 'lastInboundAt');
     await age(fromAd, 169, 'adReferralAt');
-    expect((await admin.get(`/api/v1/leads/${adLead}`)).body.conversations[0].reply).toMatchObject({ allowed: false, reason: 'window_closed' });
+    expect((await admin.get(`/api/v1/leads/${adLead}`)).body.conversations[0].reply).toMatchObject({ allowed: true, reason: 'outside_window' });
 
     const plain = peer('w2');
     await sendDirect(app, core, { sender: plain, text: 'Salom' });
     await drain(core);
     const plainLead = await age(plain, 114, 'lastInboundAt');
-    const closed = (await admin.get(`/api/v1/leads/${plainLead}`)).body.conversations[0].reply;
-    expect(closed).toMatchObject({ allowed: false, reason: 'window_closed' });
-    expect(closed.message).toContain('4 дн. 18 ч.');
-    const rejected = await reply(plainLead, 'Kech javob');
-    expect(rejected.body.state).toBe('failed');
-    expect(await p().outboxOperation.count({ where: { operationKey: `direct.send:${rejected.body.id}` } })).toBe(0);
+    const late = (await admin.get(`/api/v1/leads/${plainLead}`)).body.conversations[0].reply;
+    expect(late).toMatchObject({ allowed: true, tag: null, reason: 'outside_window' });
+    expect(late.message).toContain('4 дн. 18 ч.');
+
+    // Instagram rad etsa (400 yoki 403): faqat shu xabar «failed», ulanish to'xtamaydi, «dead» signal yo'q.
+    const direct = core.deps.adapters.metaDirect;
+    const lateConv = await p().conversation.findFirstOrThrow({ where: { scopedPeerId: plain } });
+    for (const [cls, status] of [['validation', 400], ['forbidden', 403]] as const) {
+      const spy = vi.spyOn(direct, 'sendText').mockRejectedValueOnce(new ProviderError(`HTTP ${status}: outside window`, cls, status));
+      const refused = await reply(plainLead, `Kech javob ${status}`);
+      expect(refused.body.state).toBe('queued');
+      await drain(core);
+      spy.mockRestore();
+      const msg = await p().message.findUniqueOrThrow({ where: { id: refused.body.id } });
+      expect(msg.state).toBe('failed');
+      expect(msg.error).toContain('Ответьте в приложении Instagram');
+      const op = await p().outboxOperation.findFirstOrThrow({ where: { operationKey: `direct.send:${refused.body.id}` } });
+      expect(op.state).toBe('done');
+      const conn = await p().integrationConnection.findUniqueOrThrow({ where: { id: lateConv.connectionId } });
+      expect(conn.health).not.toBe('paused');
+    }
 
     // Karta holati yuborish bilan bir xil suhbatga qaraydi: birinchi — mijoz oxirgi yozgan suhbat.
     const conv = await p().conversation.findFirstOrThrow({ where: { scopedPeerId: plain } });
     await p().conversation.create({ data: { companyId: conv.companyId, connectionId: conv.connectionId, businessAccountId: conv.businessAccountId, scopedPeerId: `${plain}9`, contactId: conv.contactId, leadId: conv.leadId, lastInboundAt: new Date() } });
-    expect((await admin.get(`/api/v1/leads/${plainLead}`)).body.conversations[0].reply.allowed).toBe(true);
+    expect((await admin.get(`/api/v1/leads/${plainLead}`)).body.conversations[0].reply.reason).toBeNull();
   });
 
   it('reklama dalili yo‘q: belgi qo‘yilmaydi (taxmin qilinmaydi)', async () => {

@@ -247,6 +247,13 @@ export class ProcessingService {
       if (conn.mode === 'live') await markLiveVerified(this.d.prisma, conn.id, 'outbound', this.d.clock.now());
       return { kind: 'done', result: { providerMessageId: r.messageId } };
     } catch (err) {
+      // Javob oynasidan keyingi rad javobi faqat shu xabarga tegishli: ulanish to'xtatilmaydi, adminlarga «dead» signal ketmaydi.
+      const elapsedH = conv.lastInboundAt ? (this.d.clock.now().getTime() - conv.lastInboundAt.getTime()) / 3_600_000 : 0;
+      if (err instanceof ProviderError && (err.errorClass === 'validation' || err.errorClass === 'forbidden') && elapsedH > this.d.config.meta.standardWindowHours) {
+        await this.d.prisma.message.update({ where: { id: msg.id }, data: { state: 'failed', error: 'Instagram не принял сообщение: срок ответа через CRM истёк. Ответьте в приложении Instagram.' } });
+        this.d.logger.warn({ operationId: op.id, errorClass: err.errorClass, status: err.status, err: err.message.slice(0, 300) }, 'direct reply refused outside messaging window');
+        return { kind: 'done', result: { refusedOutsideWindow: true, status: err.status } };
+      }
       if (err instanceof ProviderError && err.errorClass !== 'unknown_outcome' && err.errorClass !== 'transient' && err.errorClass !== 'rate_limited') {
         await this.d.prisma.message.update({ where: { id: msg.id }, data: { state: 'failed', error: err.message.slice(0, 300) } });
       } else if (err instanceof ProviderError && err.errorClass !== 'unknown_outcome') {

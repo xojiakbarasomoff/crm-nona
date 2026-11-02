@@ -27,10 +27,10 @@ export interface OutboundContext {
 }
 
 export type PolicyDecision =
-  | { allowed: true; tag: null | 'HUMAN_AGENT' }
+  | { allowed: true; tag: null | 'HUMAN_AGENT'; warning?: string }
   | {
       allowed: false;
-      reason: 'no_permission' | 'connection_down' | 'recipient_unverified' | 'no_customer_message' | 'window_closed' | 'automated_not_allowed';
+      reason: 'no_permission' | 'connection_down' | 'recipient_unverified' | 'no_customer_message' | 'automated_not_allowed';
       message: string;
     };
 
@@ -50,11 +50,8 @@ export function decideOutbound(ctx: OutboundContext, cfg: MessagingPolicyConfig)
   if (cfg.humanAgentPermissionGranted && cfg.humanAgentWindowHours && elapsedH <= cfg.humanAgentWindowHours) {
     return { allowed: true, tag: 'HUMAN_AGENT' };
   }
-  return {
-    allowed: false,
-    reason: 'window_closed',
-    message: `Окно ответа закрыто: с последнего сообщения клиента прошло ${formatElapsed(elapsedH)}.`,
-  };
+  // CRM does not block a human reply after the window: Meta decides, and a refusal stays on that one message.
+  return { allowed: true, tag: null, warning: `С последнего сообщения клиента прошло ${formatElapsed(elapsedH)}.` };
 }
 
 function formatElapsed(hours: number): string {
