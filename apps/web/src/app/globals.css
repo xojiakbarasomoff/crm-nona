@@ -359,6 +359,9 @@ fieldset.plain > .field { margin-bottom: 14px; }
 .composer textarea { min-height: 48px; max-height: 180px; resize: vertical; line-height: 1.45; }
 .composer .btn { margin-bottom: 26px; }
 .composer-note { margin: 0; padding: 14px 22px; border-top: 1px solid var(--line); border-radius: 0; }
+.composer-closed { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px; }
+.composer-closed > div { flex: 1 1 320px; }
+.composer-closed > .btn { flex: none; }
 .chat-card > .state.error { margin: 0 22px 18px; }
 
 @media (max-width: 700px) {

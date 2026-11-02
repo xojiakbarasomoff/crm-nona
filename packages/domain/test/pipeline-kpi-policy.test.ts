@@ -135,6 +135,14 @@ describe('messaging policy (AC07)', () => {
     expect(decideOutbound(late, { ...cfg, humanAgentPermissionGranted: true })).toEqual({ allowed: true, tag: 'HUMAN_AGENT' });
     expect(decideOutbound({ ...late, purpose: 'automated_reminder' }, { ...cfg, humanAgentPermissionGranted: true })).toMatchObject({ allowed: false, reason: 'automated_not_allowed' });
   });
+  it('Click-to-Direct window counts from the ad message, needs no tag and ends after its limit', () => {
+    const adCfg = { ...cfg, adWindowHours: 168 };
+    const adReferralAt = d('2026-10-02T00:00:00Z');
+    expect(decideOutbound({ ...base, now: d('2026-10-06T18:00:00Z'), adReferralAt }, adCfg)).toEqual({ allowed: true, tag: null });
+    expect(decideOutbound({ ...base, now: d('2026-10-06T18:00:00Z') }, adCfg)).toMatchObject({ allowed: false, reason: 'window_closed', message: expect.stringContaining('4 дн. 18 ч.') });
+    expect(decideOutbound({ ...base, now: d('2026-10-09T00:00:01Z'), adReferralAt }, adCfg)).toMatchObject({ allowed: false, reason: 'window_closed' });
+    expect(decideOutbound({ ...base, now: d('2026-10-06T18:00:00Z'), adReferralAt }, cfg)).toMatchObject({ allowed: false, reason: 'window_closed' });
+  });
 });
 
 describe('sync and retry helpers', () => {

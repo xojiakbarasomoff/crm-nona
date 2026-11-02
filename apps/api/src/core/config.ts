@@ -34,6 +34,7 @@ const schema = z.object({
   /** Default: <APP_PUBLIC_URL>/api/v1/integrations/instagram/oauth/callback */
   INSTAGRAM_REDIRECT_URI: z.string().default(''),
   META_STANDARD_WINDOW_HOURS: z.coerce.number().default(24),
+  META_AD_WINDOW_HOURS: z.coerce.number().default(168),
   META_HUMAN_AGENT_WINDOW_HOURS: optionalNumber,
   META_HUMAN_AGENT_GRANTED: z.string().default('false'),
   STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
@@ -83,6 +84,7 @@ export interface AppConfig {
     directLogin: 'instagram_login' | 'facebook_login';
     instagram: { appId: string; appSecret: string; redirectUri: string };
     standardWindowHours: number;
+    adWindowHours: number;
     humanAgentWindowHours: number | null;
     humanAgentGranted: boolean;
   };
@@ -129,6 +131,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       directLogin: e.META_DIRECT_LOGIN,
       instagram: { appId: e.INSTAGRAM_APP_ID, appSecret: e.INSTAGRAM_APP_SECRET, redirectUri: e.INSTAGRAM_REDIRECT_URI || `${e.APP_PUBLIC_URL.replace(/\/$/, '')}/api/v1/integrations/instagram/oauth/callback` },
       standardWindowHours: e.META_STANDARD_WINDOW_HOURS,
+      adWindowHours: e.META_AD_WINDOW_HOURS,
       humanAgentWindowHours: e.META_HUMAN_AGENT_WINDOW_HOURS,
       humanAgentGranted: e.META_HUMAN_AGENT_GRANTED === 'true',
     },

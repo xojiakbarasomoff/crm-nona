@@ -254,9 +254,9 @@ export class LeadsService {
     };
   }
 
-  /** Переписка Instagram только этого клиента (по контакту лида), последние 200 сообщений каждой беседы. */
+  /** Переписка Instagram только этого клиента (по контакту лида), последние 200 сообщений каждой беседы. Порядок как при отправке: первой идёт беседа с последним сообщением клиента. */
   private async conversationsFor(actor: UserActor, lead: Lead) {
-    const convs = await this.d.prisma.conversation.findMany({ where: { companyId: actor.companyId, contactId: lead.contactId }, orderBy: { createdAt: 'asc' } });
+    const convs = await this.d.prisma.conversation.findMany({ where: { companyId: actor.companyId, contactId: lead.contactId }, orderBy: [{ lastInboundAt: { sort: 'desc', nulls: 'last' } }] });
     return Promise.all(
       convs.map(async (c) => {
         const rows = await this.d.prisma.message.findMany({

@@ -8,6 +8,8 @@
 
 export interface MessagingPolicyConfig {
   standardWindowHours: number;
+  /** Click-to-Direct: Meta keeps the standard window open up to this long from the first message after the ad click. */
+  adWindowHours?: number | null;
   humanAgentWindowHours: number | null;
   humanAgentPermissionGranted: boolean;
 }
@@ -17,6 +19,7 @@ export type OutboundPurpose = 'human_reply' | 'automated_reminder' | 'promotion'
 export interface OutboundContext {
   now: Date;
   lastCustomerMessageAt: Date | null;
+  adReferralAt?: Date | null;
   purpose: OutboundPurpose;
   connectionHealthy: boolean;
   senderMayReply: boolean;
@@ -41,12 +44,21 @@ export function decideOutbound(ctx: OutboundContext, cfg: MessagingPolicyConfig)
   }
   const elapsedH = (ctx.now.getTime() - ctx.lastCustomerMessageAt.getTime()) / 3_600_000;
   if (elapsedH <= cfg.standardWindowHours) return { allowed: true, tag: null };
+  if (ctx.adReferralAt && cfg.adWindowHours && (ctx.now.getTime() - ctx.adReferralAt.getTime()) / 3_600_000 <= cfg.adWindowHours) {
+    return { allowed: true, tag: null };
+  }
   if (cfg.humanAgentPermissionGranted && cfg.humanAgentWindowHours && elapsedH <= cfg.humanAgentWindowHours) {
     return { allowed: true, tag: 'HUMAN_AGENT' };
   }
   return {
     allowed: false,
     reason: 'window_closed',
-    message: `Окно ответа закрыто: с последнего сообщения клиента прошло ${Math.floor(elapsedH)} ч.`,
+    message: `Окно ответа закрыто: с последнего сообщения клиента прошло ${formatElapsed(elapsedH)}.`,
   };
+}
+
+function formatElapsed(hours: number): string {
+  const total = Math.floor(hours);
+  const days = Math.floor(total / 24);
+  return days ? `${days} дн. ${total % 24} ч.` : `${total} ч.`;
 }

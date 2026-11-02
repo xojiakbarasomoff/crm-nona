@@ -787,6 +787,16 @@ function DirectChat({ leadId, clientName, conversations, canReply, onSent }: { l
                   {busy ? 'Отправка…' : 'Отправить'}
                 </button>
               </form>
+            ) : conv.reply.reason === 'window_closed' ? (
+              <div className="state stale composer-note composer-closed">
+                <div>
+                  <strong>Из CRM ответить уже нельзя.</strong> {conv.reply.message} Instagram разрешает отвечать через CRM 24 часа после сообщения клиента (если клиент пришёл с рекламы — до 7 дней). Ответьте в Instagram с аккаунта @nonatravel.uz — ответ появится здесь. Когда клиент напишет снова, ответ из CRM откроется.
+                </div>
+                <a className="btn" href={peer ? `https://ig.me/m/${encodeURIComponent(peer)}` : 'https://www.instagram.com/direct/inbox/'} target="_blank" rel="noopener noreferrer">
+                  <Icon name="instagram" size={16} />
+                  Ответить в Instagram
+                </a>
+              </div>
             ) : (
               <div className="state stale composer-note">Ответить сейчас нельзя: {conv.reply.message}</div>
             )

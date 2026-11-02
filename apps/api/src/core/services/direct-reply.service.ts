@@ -10,18 +10,20 @@ import { SENDABLE_DEGRADED_REASONS } from './live-verification';
 
 const policyConfig = (d: CoreDeps): MessagingPolicyConfig => ({
   standardWindowHours: d.config.meta.standardWindowHours,
+  adWindowHours: d.config.meta.adWindowHours,
   humanAgentWindowHours: d.config.meta.humanAgentWindowHours,
   humanAgentPermissionGranted: d.config.meta.humanAgentGranted,
 });
 
 /** Можно ли сейчас ответить клиенту в этой беседе (правила Meta: окно ответа, подключение, права). */
-export async function replyDecision(d: CoreDeps, actor: UserActor, lead: Pick<Lead, 'ownerId'>, conv: Conversation, cfg: MessagingPolicyConfig = policyConfig(d)) {
+export async function replyDecision(d: CoreDeps, actor: UserActor, lead: Pick<Lead, 'ownerId' | 'adReferralAt'>, conv: Conversation, cfg: MessagingPolicyConfig = policyConfig(d)) {
   const conn = await d.prisma.integrationConnection.findUnique({ where: { id: conv.connectionId }, select: { health: true, healthReason: true, disconnectedAt: true, mode: true } });
   const healthy = !!conn && !conn.disconnectedAt && (conn.health === 'ok' || (conn.health === 'degraded' && !!conn.healthReason && SENDABLE_DEGRADED_REASONS.includes(conn.healthReason)));
   const decision = decideOutbound(
     {
       now: d.clock.now(),
       lastCustomerMessageAt: conv.lastInboundAt,
+      adReferralAt: lead.adReferralAt,
       purpose: 'human_reply',
       connectionHealthy: healthy,
       senderMayReply: can(actor.role, 'leads.work') && canEditRecord(actor, lead.ownerId),
