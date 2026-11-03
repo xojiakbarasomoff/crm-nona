@@ -68,7 +68,9 @@ export async function isolate(core: Core) {
 export async function makeApp(core: Core): Promise<INestApplication> {
   await isolate(core);
   const app = await createApp(core);
-  await app.init();
+  // One real listening socket: otherwise supertest starts and closes the same server for every request,
+  // and parallel requests (AC02, AC10) get ECONNRESET on Linux CI.
+  await app.listen(0, '127.0.0.1');
   return app;
 }
 
