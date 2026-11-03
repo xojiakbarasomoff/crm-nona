@@ -207,3 +207,23 @@ describe('lidni o‘chirish (soft delete) va tiklash', () => {
     expect((await admin.post(`/api/v1/leads/${foreign.id}/restore`)).status).toBe(200);
   });
 });
+
+describe('xodim ismini o‘zgartirish', () => {
+  it('administrator ismni o‘zgartiradi: ro‘yxat va «Ответственный» tanlovida yangi ism, audit yoziladi; boshqalar o‘zgartira olmaydi', async () => {
+    const staff = await newStaff('USER');
+    const r = await admin.patch(`/api/v1/users/${staff.id}/name`, { fullName: '  Шохсанам ' });
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({ id: staff.id, fullName: 'Шохсанам' });
+    const users = await admin.get('/api/v1/users');
+    expect(users.body.items.find((u: { id: string }) => u.id === staff.id).fullName).toBe('Шохсанам');
+    const owners = await admin.get('/api/v1/team');
+    expect(owners.body.items.find((u: { id: string }) => u.id === staff.id)?.fullName).toBe('Шохсанам');
+    const log = await p().auditLog.findFirstOrThrow({ where: { entityType: 'user', entityId: staff.id, action: 'renamed' } });
+    expect(log.oldValue).toEqual({ fullName: 'Yangi Xodim' });
+    expect((await admin.patch(`/api/v1/users/${staff.id}/name`, { fullName: '   ' })).status).toBe(422);
+    expect((await staff.session.patch(`/api/v1/users/${staff.id}/name`, { fullName: 'Boshqa' })).status).toBe(403);
+    // Login va sessiya o'zgarmaydi: xodim tizimda qoladi.
+    expect((await staff.session.get('/api/v1/me')).status).toBe(200);
+    expect((await admin.post(`/api/v1/users/${staff.id}/block`, { successorId: null })).status).toBe(200);
+  });
+});

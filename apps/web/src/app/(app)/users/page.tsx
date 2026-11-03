@@ -22,6 +22,7 @@ export default function UsersPage() {
   const [error, setError] = useState<ApiError | null>(null);
   const [invite, setInvite] = useState<string | null>(null);
   const [f, setF] = useState({ email: '', fullName: '', role: 'MANAGER' });
+  const [edit, setEdit] = useState<{ id: string; name: string } | null>(null);
   const act = async (fn: () => Promise<unknown>) => {
     setError(null);
     try {
@@ -88,7 +89,33 @@ export default function UsersPage() {
                 {d.items.map((u) => (
                   <tr key={u.id}>
                     <td>
-                      {u.fullName}
+                      {edit?.id === u.id ? (
+                        <form
+                          className="row-edit"
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            void act(async () => {
+                              await api(`/api/v1/users/${u.id}/name`, { method: 'PATCH', body: { fullName: edit.name } });
+                              setEdit(null);
+                            });
+                          }}
+                        >
+                          <input value={edit.name} onChange={(e) => setEdit({ id: u.id, name: e.target.value })} aria-label="Имя сотрудника" maxLength={200} required autoFocus />
+                          <button className="btn small" type="submit" disabled={!edit.name.trim()}>
+                            Сохранить
+                          </button>
+                          <button className="btn small ghost" type="button" onClick={() => setEdit(null)}>
+                            Отмена
+                          </button>
+                        </form>
+                      ) : (
+                        <>
+                          {u.fullName}{' '}
+                          <button className="link-btn" type="button" onClick={() => setEdit({ id: u.id, name: u.fullName })} aria-label={`Изменить имя: ${u.fullName}`}>
+                            Изменить
+                          </button>
+                        </>
+                      )}
                       <div className="muted">{u.login ?? u.email}</div>
                     </td>
                     <td>{ROLE_LABELS[u.role] ?? u.role}</td>

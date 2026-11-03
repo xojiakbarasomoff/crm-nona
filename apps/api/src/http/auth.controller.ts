@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Inject, Param, Patch, Post, Req, Res } from '@nestjs/common';
 import type { Response } from 'express';
-import { ActivateSchema, BlockUserSchema, ChangeRoleSchema, FinanceAccessSchema, InviteUserSchema, LoginSchema, MfaConfirmSchema } from '@crm/contracts';
+import { ActivateSchema, BlockUserSchema, ChangeRoleSchema, FinanceAccessSchema, InviteUserSchema, LoginSchema, MfaConfirmSchema, RenameUserSchema } from '@crm/contracts';
 import type { Core, UserActor } from '../core';
 import { Actor, AllowWithoutMfa, CORE, CSRF_COOKIE, parse, Public, send, SESSION_COOKIE, type AuthedRequest } from './common';
 
@@ -72,6 +72,11 @@ export class AuthController {
   async role(@Actor() actor: UserActor, @Param('id') id: string, @Body() body: unknown, @Res() res: Response) {
     await this.core.auth.changeRole(actor, id, parse(ChangeRoleSchema, body).role);
     send(res, 200, { ok: true });
+  }
+
+  @Patch('users/:id/name')
+  async rename(@Actor() actor: UserActor, @Param('id') id: string, @Body() body: unknown, @Res() res: Response) {
+    send(res, 200, await this.core.auth.renameUser(actor, id, parse(RenameUserSchema, body).fullName));
   }
 
   /** Menejerga tannarx va foydani ko'rish huquqini yoqish/o'chirish (faqat administrator). */

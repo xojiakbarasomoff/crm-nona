@@ -39,6 +39,7 @@ export const ActivateSchema = z.object({ token: z.string().min(20), password: z.
 export const MfaConfirmSchema = z.object({ code: z.string().regex(/^\d{6}$/) }).strict();
 export const InviteUserSchema = z.object({ email: z.string().email(), fullName: z.string().min(1).max(200), role: z.enum(['ADMIN', 'MANAGER', 'USER']) }).strict();
 export const ChangeRoleSchema = z.object({ role: z.enum(['ADMIN', 'MANAGER', 'USER']) }).strict();
+export const RenameUserSchema = z.object({ fullName: z.string().trim().min(1).max(200) }).strict();
 export const BlockUserSchema = z.object({ successorId: id.nullable() }).strict();
 
 export const PaginationQuery = z.object({ cursor: id.optional(), limit: z.coerce.number().int().min(1).max(200).default(50) });

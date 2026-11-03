@@ -200,6 +200,19 @@ export class AuthService {
     });
   }
 
+  /** Xodimning ko'rinadigan ismini o'zgartirish (faqat administrator). Login, rol va sessiyalarga tegmaydi. */
+  async renameUser(actor: UserActor, userId: string, fullName: string) {
+    requireCap(actor, 'users.manage');
+    return this.d.prisma.$transaction(async (tx) => {
+      const user = await tx.user.findFirst({ where: { id: userId, companyId: actor.companyId } });
+      if (!user) throw notFound('Пользователь');
+      if (user.fullName === fullName) return { id: user.id, fullName };
+      await tx.user.update({ where: { id: user.id }, data: { fullName, version: { increment: 1 } } });
+      await audit(tx, actor, { entityType: 'user', entityId: user.id, action: 'renamed', oldValue: { fullName: user.fullName }, newValue: { fullName } });
+      return { id: user.id, fullName };
+    });
+  }
+
   /**
    * Blocks a user immediately: all sessions revoked; open leads, orders, segments and reminders are
    * moved to the chosen successor with audit (TZ §6.2).
