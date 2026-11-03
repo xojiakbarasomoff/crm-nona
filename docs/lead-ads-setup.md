@@ -20,14 +20,14 @@ amoCRM kerak emas. Reklama budjeti, kampaniyalar yoki e’lonlarni bu kod yaratm
    `META_GRAPH_VERSION` bir xil Meta/Facebook ilovasiga mos bo‘lsin.
    `INSTAGRAM_APP_ID/SECRET` bilan almashtirmang: ular Direct uchun.
    `ENCRYPTION_KEY` mavjud qiymatini o‘zgartirmang.
-3. Meta ilovasi «Вход через Facebook для компаний» (Facebook Login for Business) bo‘lsa, scope e’tiborga olinmaydi: Конфигурации bo‘limida «User access token» konfiguratsiyasini yarating (ads_management, leads_retrieval, pages_manage_metadata, pages_read_engagement, pages_show_list) va uning ID’sini `META_LEADS_CONFIG_ID` ga qo‘ying.
+3. Meta ilovasi «Вход через Facebook для компаний» (Facebook Login for Business) bo‘lsa, scope e’tiborga olinmaydi: Конфигурации bo‘limida «User access token» konfiguratsiyasini yarating (ads_management, leads_retrieval, pages_manage_ads, pages_manage_metadata, pages_read_engagement, pages_show_list) va uning ID’sini `META_LEADS_CONFIG_ID` ga qo‘ying.
    `META_LEADS_REDIRECT_URI` default qiymati:
    `<APP_PUBLIC_URL>/api/v1/integrations/lead-ads/oauth/callback`.
    Railway’dagi aniq URL’ni Meta ilovasining Facebook Login valid OAuth redirect URI ro‘yxatiga qo‘shing.
 4. Meta App Dashboard’da Page webhook uchun `<APP_PUBLIC_URL>/webhooks/meta`, mavjud verify token
    va `leadgen` maydonini sozlang. Bu GET challenge hamda POST HMAC-SHA256 tekshiruvlari alohida.
 5. Facebook Login uchun `leads_retrieval`, `pages_manage_metadata`, `pages_show_list`,
-   `pages_read_engagement`, `ads_management` ruxsatlarini tayyorlang. Kompaniya tashqi foydalanuvchi
+   `pages_read_engagement`, `ads_management`, `pages_manage_ads` ruxsatlarini tayyorlang (`pages_manage_ads` siz Meta `leadgen_forms` ni bermaydi: «(#200) Requires pages_manage_ads permission»). Kompaniya tashqi foydalanuvchi
    bo‘lsa, kerakli App Review/access va Business sozlamalari haqiqiy akkaunt bilan tekshiriladi.
    Meta Business’dagi Page/ad account/Leads Access ruxsatlari ham kerak: OAuth’ning o‘zi ularni bermaydi.
 6. Administrator ulash tugmasini bosadi, Meta oynasida ruxsat beradi, to‘g‘ri Page va formalarni tanlaydi.

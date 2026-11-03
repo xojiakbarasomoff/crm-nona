@@ -10,7 +10,8 @@ export interface LeadAdsLoginConfig {
 }
 
 // Lead Ads uses Facebook Login and Page tokens, independently of Instagram Login for Direct.
-export const LEAD_ADS_SCOPES = ['pages_show_list', 'pages_read_engagement', 'pages_manage_metadata', 'leads_retrieval', 'ads_management'] as const;
+// pages_manage_ads: Meta requires it to read {page}/leadgen_forms ("(#200) Requires pages_manage_ads permission"); the CRM never changes ads.
+export const LEAD_ADS_SCOPES = ['pages_show_list', 'pages_read_engagement', 'pages_manage_metadata', 'leads_retrieval', 'ads_management', 'pages_manage_ads'] as const;
 export interface LeadAdsPage {
   id: string;
   name: string;
