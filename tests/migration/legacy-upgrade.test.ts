@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,7 +14,8 @@ import { createPrisma } from '../../packages/database/src';
  * faqat shu nomli baza o'chiriladi. `prisma migrate reset` ishlatilmaydi — faqat `migrate deploy`.
  */
 const root = join(__dirname, '..', '..');
-process.loadEnvFile?.(join(root, '.env'));
+// CI passes the variables through the environment; a local .env is optional.
+if (existsSync(join(root, '.env'))) process.loadEnvFile(join(root, '.env'));
 const base = process.env.TEST_DATABASE_URL;
 const redisUrl = process.env.TEST_REDIS_URL;
 const dbName = `crm_mig_${Date.now()}`;

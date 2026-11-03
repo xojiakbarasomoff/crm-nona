@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { INestApplication } from '@nestjs/common';
@@ -9,7 +10,8 @@ import { DEMO_ADMIN_TOTP_SECRET, DEMO_COMPANY_ID, DEMO_IG_BUSINESS_ID, DEMO_PAGE
 import { totpCode } from '../../apps/api/src/core/totp';
 import { signMetaBody, type DemoMetaLeadsClient, type FetchLike } from '@crm/integrations';
 
-process.loadEnvFile?.(join(__dirname, '..', '..', '.env'));
+// CI passes the variables through the environment; a local .env is optional.
+if (existsSync(join(__dirname, '..', '..', '.env'))) process.loadEnvFile(join(__dirname, '..', '..', '.env'));
 
 export { DEMO_COMPANY_ID, DEMO_IG_BUSINESS_ID, DEMO_PAGE_ID };
 
