@@ -44,8 +44,34 @@ describe('Facebook Login for Lead Ads (contract, not live-account verification)'
       return input.includes('after=cursor2') ? json({ data: [{ id: '2', name: 'Nona', access_token: 'page-2', instagram_business_account: { username: 'nonatravel.uz' } }] }) : json({ data: [{ id: '1', name: 'Other', access_token: 'page-1' }], paging: { next: 'https://untrusted.invalid/', cursors: { after: 'cursor2' } } });
     });
     expect(await client.pages('user-token')).toMatchObject([{ id: '1' }, { id: '2', instagramUsername: 'nonatravel.uz' }]);
-    expect(calls).toHaveLength(2);
+    expect(calls.filter(u => u.includes('/me/accounts'))).toHaveLength(2);
     expect(calls.every(u => new URL(u).origin === 'https://graph.facebook.com')).toBe(true);
+  });
+
+  it('adds a Page granted in the login dialog but missing from me/accounts (business task access), and only that Page', async () => {
+    const calls: Array<{ url: URL; auth: unknown }> = [];
+    const client = new LeadAdsLoginClient(cfg, async (input, init) => {
+      const u = new URL(input);
+      calls.push({ url: u, auth: (init?.headers as Record<string, string> | undefined)?.Authorization });
+      if (u.pathname.endsWith('/me/accounts')) return json({ data: [{ id: '1', name: 'Own', access_token: 'page-1' }] });
+      if (u.pathname.endsWith('/debug_token')) return json({ data: { granular_scopes: [{ scope: 'leads_retrieval', target_ids: ['1', '77'] }, { scope: 'pages_show_list', target_ids: ['77'] }, { scope: 'ads_management', target_ids: ['act_9'] }] } });
+      if (u.pathname.endsWith('/77')) return json({ id: '77', name: 'Nona travel', access_token: 'page-77' });
+      throw new Error(`unexpected ${u.pathname}`);
+    });
+    expect(await client.pages('user-token')).toEqual([
+      { id: '1', name: 'Own', accessToken: 'page-1', instagramUsername: null },
+      { id: '77', name: 'Nona travel', accessToken: 'page-77', instagramUsername: null },
+    ]);
+    const debug = calls.find(c => c.url.pathname.endsWith('/debug_token'))!;
+    expect(debug.auth).toBe('Bearer 1234|test-secret');
+    expect(debug.url.toString()).not.toContain('test-secret');
+    expect(calls.find(c => c.url.pathname.endsWith('/77'))?.auth).toBe('Bearer user-token');
+    expect(calls.some(c => c.url.pathname.includes('act_9'))).toBe(false);
+  });
+
+  it('keeps me/accounts Pages when debug_token is unavailable', async () => {
+    const client = new LeadAdsLoginClient(cfg, async input => (input.includes('/me/accounts') ? json({ data: [{ id: '1', name: 'Own', access_token: 'page-1' }] }) : new Response('{"error":{}}', { status: 400 })));
+    expect(await client.pages('user-token')).toMatchObject([{ id: '1' }]);
   });
 
   it('fails closed on an incomplete permission/collection response or repeated cursor', async () => {

@@ -71,11 +71,37 @@ export class LeadAdsLoginClient {
   }
 
   async pages(token: string): Promise<LeadAdsPage[]> {
-    return (await this.list('me/accounts', token, 'id,name,access_token')).flatMap(r => {
+    const toPage = (r: Json): LeadAdsPage[] => {
       if (typeof r.id !== 'string' || typeof r.access_token !== 'string' || !r.access_token) return [];
       const ig = r.instagram_business_account as Json | undefined;
       return [{ id: r.id, name: typeof r.name === 'string' ? r.name : r.id, accessToken: r.access_token, instagramUsername: typeof ig?.username === 'string' ? ig.username : null }];
-    });
+    };
+    const pages = (await this.list('me/accounts', token, 'id,name,access_token')).flatMap(toPage);
+    // Business-assigned (task) access to a Page is not listed in me/accounts; the Pages the person
+    // selected in the login dialog are still readable by ID, so they are taken from the token's granular scopes.
+    for (const id of await this.grantedPageIds(token)) {
+      if (pages.some(p => p.id === id)) continue;
+      try {
+        pages.push(...toPage(await requestJson<Json>(this.url(encodeURIComponent(id), { fields: 'id,name,access_token' }), { headers: { Authorization: `Bearer ${token}` } }, this.fetchImpl)));
+      } catch {
+        // A Page without a readable token is simply not offered.
+      }
+    }
+    return pages;
+  }
+
+  /** Page IDs from the token's granular scopes (debug_token with the app token); empty when Meta does not report them. */
+  private async grantedPageIds(token: string): Promise<string[]> {
+    try {
+      const r = await requestJson<Json>(this.url('debug_token', { input_token: token }), { headers: { Authorization: `Bearer ${this.c.appId}|${this.c.appSecret}` } }, this.fetchImpl);
+      const scopes = (r.data as Json | undefined)?.granular_scopes;
+      if (!Array.isArray(scopes)) return [];
+      const pageScopes = new Set(['pages_show_list', 'leads_retrieval', 'pages_manage_metadata', 'pages_read_engagement']);
+      const ids = scopes.flatMap(s => (pageScopes.has((s as Json).scope as string) && Array.isArray((s as Json).target_ids) ? ((s as Json).target_ids as unknown[]) : []));
+      return [...new Set(ids.filter((x): x is string => typeof x === 'string' && /^\d+$/.test(x)))];
+    } catch {
+      return [];
+    }
   }
 
   async forms(pageId: string, token: string): Promise<LeadAdsForm[]> {
