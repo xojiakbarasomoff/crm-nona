@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { join } from 'node:path';
 import { Redis } from 'ioredis';
@@ -17,7 +18,8 @@ declare module 'vitest' {
  * Requires `npm run dev:infra`.
  */
 export default async function setup(project: TestProject) {
-  process.loadEnvFile?.(join(__dirname, '..', '..', '.env'));
+  // CI passes the variables through the environment; a local .env is optional.
+  if (existsSync(join(__dirname, '..', '..', '.env'))) process.loadEnvFile(join(__dirname, '..', '..', '.env'));
   const base = process.env.TEST_DATABASE_URL;
   const redisUrl = process.env.TEST_REDIS_URL;
   if (!base || !redisUrl) throw new Error('TEST_DATABASE_URL and TEST_REDIS_URL must be set (see .env.example)');

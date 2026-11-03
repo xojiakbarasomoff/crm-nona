@@ -12,8 +12,7 @@ let base: string;
 beforeAll(async () => {
   core = makeCore();
   await alwaysOnDuty(core);
-  app = await makeApp(core);
-  await app.listen(0, '127.0.0.1');
+  app = await makeApp(core); // makeApp already listens on 127.0.0.1:0
   base = `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}`;
 });
 afterAll(async () => {

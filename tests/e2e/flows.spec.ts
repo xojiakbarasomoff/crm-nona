@@ -57,15 +57,35 @@ async function createLeadViaDemo(page: Page, name: string) {
   return (await apiCall<{ items: Array<{ id: string; ownerId: string }> }>(page, `/api/v1/leads?search=${encodeURIComponent(name)}`)).body.items[0]!;
 }
 
+/** Упрощённый процесс: статус «Продано» открывает блок «Продажа»; сохранение продажи создаёт заказ. Возвращает id заказа. */
+async function sellLead(page: Page, leadId: string) {
+  await page.goto(`/leads/${leadId}`);
+  await page.getByRole('combobox', { name: 'Статус' }).selectOption('SOLD');
+  await page.getByRole('button', { name: 'Сохранить продажу' }).click();
+  await expect(page.getByText(/Заказ TR-\d{4}-\d{6}/).first()).toBeVisible();
+  const detail = await apiCall<{ sale: { orderId: string } | null }>(page, `/api/v1/leads/${leadId}`);
+  expect(detail.body.sale?.orderId).toBeTruthy();
+  return detail.body.sale!.orderId;
+}
+
+/** Файлы лида находятся в свёрнутом блоке «История и файлы». */
+async function openLeadFiles(page: Page, leadId: string) {
+  await page.goto(`/leads/${leadId}`);
+  await page.getByText('История и файлы').click();
+}
+
 /** «ГГГГ-ММ-ДДTЧЧ:мм» → «ДД.ММ.ГГГГ ЧЧ:мм» (так вводятся дата и время в интерфейсе). */
 const dmyHm = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)} ${iso.slice(11, 16)}`;
 
 test('вход, предупреждение о подключениях и навигация по ролям', async ({ page }) => {
   await login(page, 'menejer.a@demo.local');
-  await expect(page.getByText(/Входящие сообщения Instagram/)).toBeVisible();
   await expect(page.getByRole('link', { name: 'Лиды' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Настройки' })).toHaveCount(0);
   await expect(page.getByRole('link', { name: 'Пользователи' })).toHaveCount(0);
   await expect(page.getByRole('link', { name: 'Дубликаты' })).toHaveCount(0);
+  // Предупреждение о состоянии подключений (демо-режим) показывается вне панели и лидов.
+  await page.goto('/notifications');
+  await expect(page.getByText(/Входящие сообщения Instagram/)).toBeVisible();
   await page.goto('/users');
   await expect(page.getByText(/Нет доступа/)).toBeVisible();
 });
@@ -81,7 +101,8 @@ test('неверный пароль показывает ошибку и не с
 
 test('администратор с MFA видит интеграции; менеджер не открывает чужой лид', async ({ page, browser }) => {
   await login(page, 'admin@demo.local');
-  await page.getByRole('link', { name: 'Интеграции' }).click();
+  await page.getByRole('link', { name: 'Настройки' }).click();
+  await page.getByRole('link', { name: /Интеграции/ }).click();
   await expect(page.getByRole('heading', { name: 'Интеграции' })).toBeVisible();
   await expect(page.getByText(/amocrm/i)).toHaveCount(0);
   const lead = await createLeadViaDemo(page, `E2E RBAC ${Date.now()}`);
@@ -106,7 +127,8 @@ test('заказ: лид → заказ → сегмент → подтверж�
 
   await page.goto(`/leads/${lead.id}`);
   await expect(page.getByRole('heading', { name: new RegExp(name) })).toBeVisible();
-  await page.getByRole('button', { name: 'Создать заказ' }).click();
+  const orderId = await sellLead(page, lead.id);
+  await page.goto(`/orders/${orderId}`);
   await expect(page.getByRole('heading', { name: /Заказ TR-\d{4}-\d{6}/ })).toBeVisible();
 
   await page.getByLabel('Имя и фамилия').fill('Ali Valiyev');
@@ -116,7 +138,7 @@ test('заказ: лид → заказ → сегмент → подтверж�
   const dep = new Date(Date.now() + 10 * 86400_000);
   const local = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tashkent', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(dep).replace(' ', 'T');
   await page.getByLabel('Откуда (IATA)').fill('TAS');
-  await page.getByLabel('Куда (IATA)').fill('IST');
+  await page.getByLabel('Куда (IATA)', { exact: true }).fill('IST');
   await page.getByLabel('Авиакомпания').fill('TK');
   await page.getByLabel('Номер рейса').fill('371');
   await page.getByLabel('Вылет (время аэропорта)').fill(dmyHm(local));
@@ -134,7 +156,7 @@ test('заказ: лид → заказ → сегмент → подтверж�
   await expect(page.getByText('Данные рейса проверены').first()).toBeVisible();
   await expect(page.getByText(/источник: вручную/)).toBeVisible();
 
-  await page.getByRole('link', { name: 'Рейсы' }).click();
+  await page.goto('/flights');
   await expect(page.getByRole('heading', { name: 'Рейсы' })).toBeVisible();
   await expect(page.getByText('TK 371').first()).toBeVisible();
 });
@@ -151,7 +173,7 @@ test('вложение: загрузка в карточке лида, пров�
   await adminCtx.close();
 
   await login(page, 'admin2@demo.local');
-  await page.goto(`/leads/${lead.id}`);
+  await openLeadFiles(page, lead.id);
   await page.getByLabel('Загрузить файл').setInputFiles({ name: 'shartnoma.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\n% e2e test\n%%EOF') });
   await expect(page.getByText('shartnoma.pdf')).toBeVisible();
   await expect(page.getByText('Ожидает проверки на вирусы')).toBeVisible();
@@ -169,9 +191,14 @@ test('вложение: замаскированный исполняемый ф
   const lead = await createLeadViaDemo(admin, `E2E Spoof ${Date.now()}`);
   await adminCtx.close();
   await login(page, 'admin2@demo.local');
-  await page.goto(`/leads/${lead.id}`);
+  await openLeadFiles(page, lead.id);
+  // Исполняемый файл под видом PDF: содержимое не распознаётся как разрешённый тип.
   await page.getByLabel('Загрузить файл').setInputFiles({ name: 'rasm.pdf', mimeType: 'application/pdf', buffer: Buffer.from('MZ\x90\x00 not a pdf') });
+  await expect(page.getByText(/Тип файла не разрешён/)).toBeVisible();
+  // Разрешённый тип, но другой: PNG с расширением и типом PDF.
+  await page.getByLabel('Загрузить файл').setInputFiles({ name: 'rasm2.pdf', mimeType: 'application/pdf', buffer: Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32)]) });
   await expect(page.getByText(/Содержимое файла не соответствует/)).toBeVisible();
+  await expect(page.getByText('Документы не загружены')).toBeVisible();
 });
 
 test('финансы: туроператор → продажа/себестоимость → автоматическая прибыль → услуга в пакете не считается дважды', async ({ page, browser }) => {
@@ -187,10 +214,15 @@ test('финансы: туроператор → продажа/себестои
 
   await login(page, 'admin2@demo.local');
   await page.goto(`/leads/${lead.id}`);
-  await page.getByLabel('Туроператор', { exact: true }).selectOption({ label: operatorName });
-  await expect(page.getByLabel('Туроператор', { exact: true })).toHaveValue(op.body.id);
-  await page.getByRole('button', { name: 'Создать заказ' }).click();
+  await page.getByRole('combobox', { name: 'Статус' }).selectOption('SOLD');
+  await page.getByRole('combobox', { name: 'Туроператор', exact: true }).selectOption({ label: operatorName });
+  await expect(page.getByRole('combobox', { name: 'Туроператор', exact: true })).toHaveValue(op.body.id);
+  await page.getByRole('button', { name: 'Сохранить продажу' }).click();
+  await expect(page.getByText(/Заказ TR-\d{4}-\d{6}/).first()).toBeVisible();
+  const orderId = (await apiCall<{ sale: { orderId: string } }>(page, `/api/v1/leads/${lead.id}`)).body.sale.orderId;
+  await page.goto(`/orders/${orderId}`);
   await expect(page.getByRole('heading', { name: /Заказ TR-\d{4}-\d{6}/ })).toBeVisible();
+  await expect(page.getByLabel('Туроператор (поставщик)')).toHaveValue(op.body.id);
 
   // Пакет: продажа 1 200, себестоимость 1 000 -> прибыль 200 (автоматически; вручную не редактируется)
   await page.getByLabel('Цена продажи (для клиента)').fill('1200.00');
@@ -224,18 +256,24 @@ test('финансы: туроператор → продажа/себестои
 
   // Панель управления: фильтры «Найти» / «Сбросить»
   await page.goto('/dashboard');
-  await page.getByRole('combobox', { name: 'Туроператор', exact: true }).selectOption(op.body.id);
+  await page.getByLabel('Источник').selectOption({ index: 1 });
   await page.getByRole('button', { name: 'Найти' }).click();
-  await expect(page.getByRole('heading', { name: 'Воронка продаж' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Лиды за период' })).toBeVisible();
   await page.getByRole('button', { name: 'Сбросить' }).click();
+  await expect(page.getByLabel('Источник')).toHaveValue('');
 });
 
-test('роль «Пользователь» видит данные, но кнопок изменения нет, а сервер отклоняет запись', async ({ page }) => {
+test('роль «Пользователь»: может завести свой лид, остальные изменения сервер отклоняет', async ({ page }) => {
   await login(page, 'user@demo.local');
   await page.goto('/leads');
   await expect(page.getByRole('heading', { name: 'Лиды' })).toBeVisible();
-  await expect(page.getByRole('button', { name: /Создать лид/ })).toHaveCount(0);
-  const r = await apiCall<{ error: { code: string } }>(page, '/api/v1/leads', 'POST', { firstName: 'X' });
-  expect(r.status).toBe(403);
-  expect(r.body.error.code).toBe('READ_ONLY_ROLE');
+  // По правилам роли (USER_WRITE_ALLOWLIST) создание своего лида разрешено.
+  await expect(page.getByRole('button', { name: /Создать лид/ })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Настройки' })).toHaveCount(0);
+  const supplier = await apiCall<{ error: { code: string } }>(page, '/api/v1/suppliers', 'POST', { name: 'X', kind: 'tour_operator' });
+  expect(supplier.status).toBe(403);
+  expect(supplier.body.error.code).toBe('READ_ONLY_ROLE');
+  const del = await apiCall<{ error: { code: string } }>(page, '/api/v1/leads/00000000-0000-4000-8000-000000000000', 'DELETE');
+  expect(del.status).toBe(403);
+  expect(del.body.error.code).toBe('READ_ONLY_ROLE');
 });

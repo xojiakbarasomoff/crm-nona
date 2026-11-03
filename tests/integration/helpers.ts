@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { INestApplication } from '@nestjs/common';
@@ -9,7 +10,8 @@ import { DEMO_ADMIN_TOTP_SECRET, DEMO_COMPANY_ID, DEMO_IG_BUSINESS_ID, DEMO_PAGE
 import { totpCode } from '../../apps/api/src/core/totp';
 import { signMetaBody, type DemoMetaLeadsClient, type FetchLike } from '@crm/integrations';
 
-process.loadEnvFile?.(join(__dirname, '..', '..', '.env'));
+// CI passes the variables through the environment; a local .env is optional.
+if (existsSync(join(__dirname, '..', '..', '.env'))) process.loadEnvFile(join(__dirname, '..', '..', '.env'));
 
 export { DEMO_COMPANY_ID, DEMO_IG_BUSINESS_ID, DEMO_PAGE_ID };
 
@@ -66,7 +68,9 @@ export async function isolate(core: Core) {
 export async function makeApp(core: Core): Promise<INestApplication> {
   await isolate(core);
   const app = await createApp(core);
-  await app.init();
+  // One real listening socket: otherwise supertest starts and closes the same server for every request,
+  // and parallel requests (AC02, AC10) get ECONNRESET on Linux CI.
+  await app.listen(0, '127.0.0.1');
   return app;
 }
 
