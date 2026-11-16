@@ -17,7 +17,7 @@ const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const localDateTime = z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/, 'Введите местное время, например 2026-10-25T10:30');
 const isoDateTime = z.string().datetime({ offset: true });
 
-export const STAGE = z.enum(['NEW', 'CONTACTED', 'QUALIFIED', 'PREPARING_OFFER', 'OFFER_SENT', 'AWAITING_PAYMENT', 'WON', 'LOST', 'FOLLOW_UP', 'NO_ANSWER']);
+export const STAGE = z.enum(['NEW', 'CONTACTED', 'QUALIFIED', 'PREPARING_OFFER', 'OFFER_SENT', 'AWAITING_PAYMENT', 'WON', 'LOST', 'FOLLOW_UP', 'NO_ANSWER', 'CALLBACK']);
 export const CHANNEL = z.enum(['instagram_lead_ads', 'meta_lead_ads', 'instagram_direct', 'amocrm', 'manual', 'other']);
 export const LeadAdsConnectSchema = z.object({ pageId: z.string().regex(/^\d+$/), formIds: z.array(z.string().regex(/^\d+$/)).min(1).max(100) }).strict();
 export const SERVICE_TYPE = z.enum(['avia', 'tour_package', 'hotel', 'transfer', 'visa', 'other']);
@@ -43,7 +43,7 @@ export const RenameUserSchema = z.object({ fullName: z.string().trim().min(1).ma
 export const BlockUserSchema = z.object({ successorId: id.nullable() }).strict();
 
 export const PaginationQuery = z.object({ cursor: id.optional(), limit: z.coerce.number().int().min(1).max(200).default(50) });
-export const LeadListQuery = PaginationQuery.extend({ stage: STAGE.optional(), status: z.enum(['NEW', 'IN_PROGRESS', 'SOLD', 'CANCELLED', 'NO_ANSWER']).optional(), sourceGroup: z.enum(['DIRECT', 'ADS', 'MANUAL']).optional(), leadType: z.enum(['NEW', 'REFERRAL', 'REPEAT']).optional(), ownerId: id.optional(), source: CHANNEL.optional(), search: z.string().max(100).optional(), fromAd: z.enum(['true']).optional(), deleted: z.enum(['true']).optional() }).strict();
+export const LeadListQuery = PaginationQuery.extend({ stage: STAGE.optional(), status: z.enum(['NEW', 'IN_PROGRESS', 'SOLD', 'CANCELLED', 'NO_ANSWER', 'CALLBACK']).optional(), sourceGroup: z.enum(['DIRECT', 'ADS', 'MANUAL']).optional(), leadType: z.enum(['NEW', 'REFERRAL', 'REPEAT']).optional(), ownerId: id.optional(), source: CHANNEL.optional(), search: z.string().max(100).optional(), fromAd: z.enum(['true']).optional(), deleted: z.enum(['true']).optional() }).strict();
 
 export const RequirementsSchema = z
   .object({
@@ -103,7 +103,7 @@ export const ContactEditSchema = z
   .openapi('ContactEdit');
 
 export const StageChangeSchema = z.object({ version: z.number().int(), stage: STAGE, reason: z.string().max(1000).optional() }).strict().openapi('StageChange');
-export const LEAD_STATUS = z.enum(['NEW', 'IN_PROGRESS', 'SOLD', 'CANCELLED', 'NO_ANSWER']);
+export const LEAD_STATUS = z.enum(['NEW', 'IN_PROGRESS', 'SOLD', 'CANCELLED', 'NO_ANSWER', 'CALLBACK']);
 /** Упрощённый статус лида (Новый / В работе / Продано / Отменён / Нет ответа). */
 export const LeadStatusSchema = z.object({ version: z.number().int(), status: LEAD_STATUS }).strict().openapi('LeadStatusChange');
 /** Основные данные лида: тип и заметка (имя/телефон/Telegram — через /contact). */

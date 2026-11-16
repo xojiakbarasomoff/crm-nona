@@ -13,6 +13,7 @@ export const STAGES = [
   'LOST',
   'FOLLOW_UP',
   'NO_ANSWER',
+  'CALLBACK',
 ] as const;
 export type Stage = (typeof STAGES)[number];
 
@@ -27,25 +28,27 @@ export const STAGE_LABELS_RU: Record<Stage, string> = {
   LOST: 'Отменён',
   FOLLOW_UP: 'Требуется повторный контакт',
   NO_ANSWER: 'Нет ответа',
+  CALLBACK: 'Перезвонить',
 };
 
 /**
  * Упрощённый статус лида (интерфейс). Хранится в том же поле `stage`, поэтому история и продажи не теряются:
  * прежние промежуточные этапы показываются как «В работе».
  */
-export const LEAD_STATUSES = ['NEW', 'IN_PROGRESS', 'SOLD', 'CANCELLED', 'NO_ANSWER'] as const;
+export const LEAD_STATUSES = ['NEW', 'IN_PROGRESS', 'SOLD', 'CANCELLED', 'NO_ANSWER', 'CALLBACK'] as const;
 export type LeadStatus = (typeof LEAD_STATUSES)[number];
-export const LEAD_STATUS_LABELS_RU: Record<LeadStatus, string> = { NEW: 'Новый', IN_PROGRESS: 'В работе', SOLD: 'Продано', CANCELLED: 'Отменён', NO_ANSWER: 'Нет ответа' };
+export const LEAD_STATUS_LABELS_RU: Record<LeadStatus, string> = { NEW: 'Новый', IN_PROGRESS: 'В работе', SOLD: 'Продано', CANCELLED: 'Отменён', NO_ANSWER: 'Нет ответа', CALLBACK: 'Перезвонить' };
 export function statusOfStage(stage: Stage): LeadStatus {
   if (stage === 'NEW') return 'NEW';
   if (stage === 'WON') return 'SOLD';
   if (stage === 'LOST') return 'CANCELLED';
   if (stage === 'NO_ANSWER') return 'NO_ANSWER';
+  if (stage === 'CALLBACK') return 'CALLBACK';
   return 'IN_PROGRESS';
 }
 /** Этап, в который записывается выбранный статус. */
 export function stageOfStatus(status: LeadStatus): Stage {
-  return ({ NEW: 'NEW', IN_PROGRESS: 'CONTACTED', SOLD: 'WON', CANCELLED: 'LOST', NO_ANSWER: 'NO_ANSWER' } as const)[status];
+  return ({ NEW: 'NEW', IN_PROGRESS: 'CONTACTED', SOLD: 'WON', CANCELLED: 'LOST', NO_ANSWER: 'NO_ANSWER', CALLBACK: 'CALLBACK' } as const)[status];
 }
 /** Все этапы, которые показываются как данный статус (для фильтров). */
 export function stagesOfStatus(status: LeadStatus): Stage[] {
