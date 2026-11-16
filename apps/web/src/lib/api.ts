@@ -170,7 +170,7 @@ export const STAGE_LABELS: Record<string, string> = {
 
 /** Упрощённый статус лида (хранится в этапе; промежуточные этапы показываются как «В работе»). */
 export const LEAD_STATUS_LABELS: Record<string, string> = { NEW: 'Новый', IN_PROGRESS: 'В работе', SOLD: 'Продано', CANCELLED: 'Отменён', NO_ANSWER: 'Нет ответа', CALLBACK: 'Перезвонить' };
-export const LEAD_STATUS_TONE: Record<string, 'neutral' | 'ok' | 'warn' | 'bad' | 'info'> = { NEW: 'info', IN_PROGRESS: 'warn', SOLD: 'ok', CANCELLED: 'neutral', NO_ANSWER: 'bad', CALLBACK: 'info' };
+export const LEAD_STATUS_TONE: Record<string, 'neutral' | 'ok' | 'warn' | 'bad' | 'info'> = { NEW: 'ok', IN_PROGRESS: 'warn', SOLD: 'ok', CANCELLED: 'neutral', NO_ANSWER: 'bad', CALLBACK: 'info' };
 export const statusOfStage = (stage: string) => (stage === 'NEW' ? 'NEW' : stage === 'WON' ? 'SOLD' : stage === 'LOST' ? 'CANCELLED' : stage === 'NO_ANSWER' ? 'NO_ANSWER' : stage === 'CALLBACK' ? 'CALLBACK' : 'IN_PROGRESS');
 export const LEAD_TYPE_LABELS: Record<string, string> = { NEW: 'Новый', REFERRAL: 'По рекомендации', REPEAT: 'Повторный' };
 /** Источник лида: Instagram Direct / Реклама / Вручную. */
