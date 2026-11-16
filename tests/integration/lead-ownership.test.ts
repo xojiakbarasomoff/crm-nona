@@ -83,7 +83,7 @@ describe('local lead ownership (no external CRM)', () => {
     const oldOwner = lead.ownerId!;
     const admin = await login(app, 'admin@demo.local');
     const order = await admin.post('/api/v1/orders', { leadId: lead.id, agreedAmount: '500.00', currency: 'USD' });
-    const newOwner = await p().user.findFirstOrThrow({ where: { role: 'MANAGER', id: { not: oldOwner } } });
+    const newOwner = await p().user.findFirstOrThrow({ where: { role: 'MANAGER', status: 'active', id: { not: oldOwner } } });
     const r = await admin.patch(`/api/v1/leads/${lead.id}/assignee`, { userId: newOwner.id, reason: 'Test' });
     expect(r.status).toBe(200);
     expect(r.body.ownerId).toBe(newOwner.id);
