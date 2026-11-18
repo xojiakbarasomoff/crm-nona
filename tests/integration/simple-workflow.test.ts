@@ -63,6 +63,18 @@ describe('статусы лида (Новый / В работе / Продано
     expect((await admin.get('/api/v1/leads?status=CALLBACK&limit=100')).body.items.some((l: { id: string }) => l.id === lead.id)).toBe(false);
   });
 
+  it('«Офис» — отдельный статус: сохраняется, виден в карточке и фильтре, возврат в «В работе»', async () => {
+    const lead = await newLead(app, core);
+    let r = await setStatus(admin, lead.id, 'OFFICE');
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.stage).toBe('OFFICE');
+    expect((await admin.get(`/api/v1/leads/${lead.id}`)).body.status).toBe('OFFICE');
+    const list = (await admin.get('/api/v1/leads?status=OFFICE&limit=100')).body.items as Array<{ id: string; status: string }>;
+    expect(list.find((l) => l.id === lead.id)?.status).toBe('OFFICE');
+    r = await setStatus(admin, lead.id, 'IN_PROGRESS');
+    expect(r.body.stage).toBe('CONTACTED');
+  });
+
   it('«Продано» → один заказ; уход со статуса отменяет его, возврат восстанавливает тот же (без дубликата)', async () => {
     const lead = await newLead(app, core);
     await setStatus(admin, lead.id, 'SOLD');

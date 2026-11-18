@@ -15,6 +15,7 @@ describe('упрощённый статус лида', () => {
       ['FOLLOW_UP', 'IN_PROGRESS'],
       ['NO_ANSWER', 'NO_ANSWER'],
       ['CALLBACK', 'CALLBACK'],
+      ['OFFICE', 'OFFICE'],
     ]);
   });
   it('статус → этап → статус без потерь', () => {

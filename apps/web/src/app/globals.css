@@ -113,6 +113,7 @@ textarea { min-height: 80px; }
 .badge.warn { background: var(--warn-bg); color: var(--warn); }
 .badge.bad { background: var(--bad-bg); color: var(--bad); border-color: var(--bad-line); }
 .badge.info { background: var(--pink-100); color: var(--bordo-700); }
+.badge.blue { background: #e3eefc; color: #1f5fae; }
 .badge.cancel { background: var(--cancel-bg); color: var(--cancel); }
 
 .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }

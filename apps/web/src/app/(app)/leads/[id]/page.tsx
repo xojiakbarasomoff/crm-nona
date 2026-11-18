@@ -79,7 +79,7 @@ interface LeadDetail {
 }
 
 const EVENT_LABELS: Record<string, string> = { created: 'Лид создан', stage_change: 'Смена статуса', reopened: 'Статус изменён', owner_change: 'Смена ответственного', deleted: 'Лид удалён', restored: 'Лид восстановлен' };
-const statusOf = (stage: string) => (stage === 'NEW' ? 'Новый' : stage === 'WON' ? 'Продано' : stage === 'LOST' ? 'Отменён' : stage === 'NO_ANSWER' ? 'Нет ответа' : stage === 'CALLBACK' ? 'Перезвонить' : 'В работе');
+const statusOf = (stage: string) => (stage === 'NEW' ? 'Новый' : stage === 'WON' ? 'Продано' : stage === 'LOST' ? 'Отменён' : stage === 'NO_ANSWER' ? 'Нет ответа' : stage === 'CALLBACK' ? 'Перезвонить' : stage === 'OFFICE' ? 'Офис' : 'В работе');
 
 export default function LeadPage() {
   const { id } = useParams<{ id: string }>();
