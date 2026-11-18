@@ -45,6 +45,7 @@ enum Stage {
   FOLLOW_UP
   NO_ANSWER
   CALLBACK
+  OFFICE
 }
 
 enum Channel {

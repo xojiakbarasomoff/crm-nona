@@ -53,7 +53,7 @@ export function StaleNotice({ error, loadedAt }: { error: ApiError; loadedAt: Da
   );
 }
 
-export function Badge({ tone = 'neutral', children, className }: { tone?: 'neutral' | 'ok' | 'warn' | 'bad' | 'info'; children: ReactNode; className?: string }) {
+export function Badge({ tone = 'neutral', children, className }: { tone?: 'neutral' | 'ok' | 'warn' | 'bad' | 'info' | 'blue'; children: ReactNode; className?: string }) {
   return <span className={`badge ${tone}${className ? ` ${className}` : ''}`}>{children}</span>;
 }
 
